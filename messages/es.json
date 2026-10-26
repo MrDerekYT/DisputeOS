@@ -1,0 +1,16 @@
+{
+  "app": { "name": "DisputeOS", "tagline": "Reparación de crédito que mide resultados, no volumen." },
+  "nav": { "dashboard": "Panel", "clients": "Clientes", "disputes": "Disputas", "signOut": "Cerrar sesión" },
+  "auth": {
+    "title": "Iniciar sesión",
+    "email": "Correo electrónico",
+    "password": "Contraseña",
+    "submit": "Iniciar sesión",
+    "mfaRequired": "Se requiere autenticación multifactor para las cuentas del personal.",
+    "passkey": "Usar una llave de acceso"
+  },
+  "dashboard": { "title": "Panel", "welcome": "Bienvenido de nuevo" },
+  "compliance": {
+    "disclaimer": "DisputeOS es software, no asesoría legal. Nadie puede garantizar la eliminación de información precisa ni un resultado específico de puntaje."
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "app": { "name": "DisputeOS", "tagline": "Credit repair that tracks results, not volume." },
+  "nav": { "dashboard": "Dashboard", "clients": "Clients", "disputes": "Disputes", "signOut": "Sign out" },
+  "auth": {
+    "title": "Sign in",
+    "email": "Email",
+    "password": "Password",
+    "submit": "Sign in",
+    "mfaRequired": "Multi-factor authentication is required for staff accounts.",
+    "passkey": "Use a passkey"
+  },
+  "dashboard": { "title": "Dashboard", "welcome": "Welcome back" },
+  "compliance": {
+    "disclaimer": "DisputeOS is software, not legal advice. No one can guarantee removal of accurate information or a specific score outcome."
+  }
+}
