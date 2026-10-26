@@ -1,5 +1,6 @@
 import { getTranslations, setRequestLocale } from "next-intl/server";
 import { fieldsNeedingReview, last4Of, parseReportText } from "@/lib/reports/parser";
+import { Shell } from "@/components/shell";
 import { SAMPLE_REPORT } from "@/lib/reports/sample";
 import type { Field, ParsedTradeline } from "@/lib/reports/types";
 
@@ -30,8 +31,8 @@ export default async function ReviewPage({
   const report = parseReportText(source);
 
   return (
-    <main className="mx-auto max-w-5xl p-8">
-      <h1 className="text-2xl font-bold">{t("title")}</h1>
+    <Shell locale={locale} active="reports">
+      <h1 className="text-3xl font-extrabold tracking-tight">{t("title")}</h1>
       <p className="mt-1 text-sm text-slate-600">{t("subtitle")}</p>
 
       <form className="mt-4">
@@ -87,6 +88,6 @@ export default async function ReviewPage({
         </section>
       )}
       <p className="mt-8 text-xs text-slate-500">{t("pageNote")}</p>
-    </main>
+    </Shell>
   );
 }

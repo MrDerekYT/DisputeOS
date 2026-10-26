@@ -1,29 +1,74 @@
-{
-  "app": { "name": "DisputeOS", "tagline": "Reparación de crédito que mide resultados, no volumen." },
-  "nav": { "dashboard": "Panel", "clients": "Clientes", "disputes": "Disputas", "signOut": "Cerrar sesión" },
-  "auth": {
-    "title": "Iniciar sesión",
-    "email": "Correo electrónico",
-    "password": "Contraseña",
-    "submit": "Iniciar sesión",
-    "mfaRequired": "Se requiere autenticación multifactor para las cuentas del personal.",
-    "passkey": "Usar una llave de acceso"
-  },
-  "dashboard": { "title": "Panel", "welcome": "Bienvenido de nuevo" },
-  "reports": {
-    "title": "Revisión de reporte",
-    "subtitle": "Pegue el texto del reporte. Cada valor extraído se muestra junto a su línea de origen; los campos de baja confianza se resaltan para que los confirme.",
-    "parse": "Analizar reporte",
-    "bureau": "Buró",
-    "accounts": "Cuentas",
-    "inquiries": "Consultas",
-    "field": "Campo",
-    "extracted": "Extraído",
-    "sourceLine": "Línea de origen",
-    "confidence": "Confianza",
-    "pageNote": "Pantalla de demostración: no se guarda nada. Nunca se muestran los números de cuenta completos."
-  },
-  "compliance": {
-    "disclaimer": "DisputeOS es software, no asesoría legal. Nadie puede garantizar la eliminación de información precisa ni un resultado específico de puntaje."
-  }
+﻿{
+    "app":  {
+                "name":  "DisputeOS",
+                "tagline":  "ReparaciÃ³n de crÃ©dito que mide resultados, no volumen."
+            },
+    "nav":  {
+                "dashboard":  "Panel",
+                "clients":  "Clientes",
+                "disputes":  "Disputas",
+                "signOut":  "Cerrar sesiÃ³n",
+                "reports":  "Reportes",
+                "analysis":  "Análisis"
+            },
+    "auth":  {
+                 "title":  "Iniciar sesiÃ³n",
+                 "email":  "Correo electrÃ³nico",
+                 "password":  "ContraseÃ±a",
+                 "submit":  "Iniciar sesiÃ³n",
+                 "mfaRequired":  "Se requiere autenticaciÃ³n multifactor para las cuentas del personal.",
+                 "passkey":  "Usar una llave de acceso"
+             },
+    "dashboard":  {
+                      "title":  "Panel",
+                      "welcome":  "Bienvenido de nuevo"
+                  },
+    "reports":  {
+                    "title":  "RevisiÃ³n de reporte",
+                    "subtitle":  "Pegue el texto del reporte. Cada valor extraÃ­do se muestra junto a su lÃ­nea de origen; los campos de baja confianza se resaltan para que los confirme.",
+                    "parse":  "Analizar reporte",
+                    "bureau":  "BurÃ³",
+                    "accounts":  "Cuentas",
+                    "inquiries":  "Consultas",
+                    "field":  "Campo",
+                    "extracted":  "ExtraÃ­do",
+                    "sourceLine":  "LÃ­nea de origen",
+                    "confidence":  "Confianza",
+                    "pageNote":  "Pantalla de demostraciÃ³n: no se guarda nada. Nunca se muestran los nÃºmeros de cuenta completos."
+                },
+    "compliance":  {
+                       "disclaimer":  "DisputeOS es software, no asesorÃ­a legal. Nadie puede garantizar la eliminaciÃ³n de informaciÃ³n precisa ni un resultado especÃ­fico de puntaje."
+                   },
+    "home":  {
+                 "eyebrow":  "Reparación de crédito bien hecha",
+                 "headline":  "Dispute con inteligencia. Mida cada resultado.",
+                 "sub":  "Importe sus reportes, vea exactamente qué está mal, apruebe cartas personalizadas y siga los resultados.",
+                 "cta":  "Abrir panel",
+                 "cta2":  "Ver el análisis"
+             },
+    "analysis":  {
+                     "title":  "Hallazgos y cartas",
+                     "subtitle":  "Ordenados por la solidez de su base. Cada carta se construye con los datos de su propio reporte y citas verificadas. Usted aprueba antes de enviar.",
+                     "strength":  "Solidez",
+                     "bureaus":  "Burós",
+                     "evidence":  "Evidencia",
+                     "print":  "Imprimir / guardar como PDF",
+                     "letter":  "Borrador de carta",
+                     "language":  "Idioma",
+                     "strong":  "Fuerte",
+                     "moderate":  "Moderado",
+                     "weak":  "Débil",
+                     "noPromise":  "Las estimaciones y hallazgos no son garantías. Solo dispute información que considere inexacta."
+                 },
+    "dash":  {
+                 "title":  "Panel",
+                 "scoreHistory":  "Historial de puntaje",
+                 "resolution":  "Tasa de resolución",
+                 "open":  "Disputas abiertas",
+                 "wins":  "Cuentas eliminadas",
+                 "spend":  "Gasto en correo",
+                 "perDeletion":  "Costo por eliminación",
+                 "next":  "Próximas acciones",
+                 "demo":  "Datos de demostración"
+             }
 }

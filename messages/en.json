@@ -1,29 +1,74 @@
-{
-  "app": { "name": "DisputeOS", "tagline": "Credit repair that tracks results, not volume." },
-  "nav": { "dashboard": "Dashboard", "clients": "Clients", "disputes": "Disputes", "signOut": "Sign out" },
-  "auth": {
-    "title": "Sign in",
-    "email": "Email",
-    "password": "Password",
-    "submit": "Sign in",
-    "mfaRequired": "Multi-factor authentication is required for staff accounts.",
-    "passkey": "Use a passkey"
-  },
-  "dashboard": { "title": "Dashboard", "welcome": "Welcome back" },
-  "reports": {
-    "title": "Report review",
-    "subtitle": "Paste report text. Each extracted value is shown next to its source line; low-confidence fields are highlighted for you to confirm.",
-    "parse": "Parse report",
-    "bureau": "Bureau",
-    "accounts": "Accounts",
-    "inquiries": "Inquiries",
-    "field": "Field",
-    "extracted": "Extracted",
-    "sourceLine": "Source line",
-    "confidence": "Confidence",
-    "pageNote": "Demo screen: nothing is saved. Full account numbers are never displayed."
-  },
-  "compliance": {
-    "disclaimer": "DisputeOS is software, not legal advice. No one can guarantee removal of accurate information or a specific score outcome."
-  }
+﻿{
+    "app":  {
+                "name":  "DisputeOS",
+                "tagline":  "Credit repair that tracks results, not volume."
+            },
+    "nav":  {
+                "dashboard":  "Dashboard",
+                "clients":  "Clients",
+                "disputes":  "Disputes",
+                "signOut":  "Sign out",
+                "reports":  "Reports",
+                "analysis":  "Analysis"
+            },
+    "auth":  {
+                 "title":  "Sign in",
+                 "email":  "Email",
+                 "password":  "Password",
+                 "submit":  "Sign in",
+                 "mfaRequired":  "Multi-factor authentication is required for staff accounts.",
+                 "passkey":  "Use a passkey"
+             },
+    "dashboard":  {
+                      "title":  "Dashboard",
+                      "welcome":  "Welcome back"
+                  },
+    "reports":  {
+                    "title":  "Report review",
+                    "subtitle":  "Paste report text. Each extracted value is shown next to its source line; low-confidence fields are highlighted for you to confirm.",
+                    "parse":  "Parse report",
+                    "bureau":  "Bureau",
+                    "accounts":  "Accounts",
+                    "inquiries":  "Inquiries",
+                    "field":  "Field",
+                    "extracted":  "Extracted",
+                    "sourceLine":  "Source line",
+                    "confidence":  "Confidence",
+                    "pageNote":  "Demo screen: nothing is saved. Full account numbers are never displayed."
+                },
+    "compliance":  {
+                       "disclaimer":  "DisputeOS is software, not legal advice. No one can guarantee removal of accurate information or a specific score outcome."
+                   },
+    "home":  {
+                 "eyebrow":  "Credit repair, done right",
+                 "headline":  "Dispute smarter. Track every result.",
+                 "sub":  "Import your reports, see exactly what\u0027s wrong, approve personalized letters, and watch results come in.",
+                 "cta":  "Open dashboard",
+                 "cta2":  "See the analysis"
+             },
+    "analysis":  {
+                     "title":  "Findings \u0026 letters",
+                     "subtitle":  "Ranked by strength of basis. Every letter is built from your own report facts and vetted citations. You approve before anything is mailed.",
+                     "strength":  "Strength",
+                     "bureaus":  "Bureaus",
+                     "evidence":  "Evidence",
+                     "print":  "Print / save as PDF",
+                     "letter":  "Draft letter",
+                     "language":  "Language",
+                     "strong":  "Strong",
+                     "moderate":  "Moderate",
+                     "weak":  "Weak",
+                     "noPromise":  "Estimates and findings are not guarantees. Only dispute information you believe is inaccurate."
+                 },
+    "dash":  {
+                 "title":  "Dashboard",
+                 "scoreHistory":  "Score history",
+                 "resolution":  "Resolution rate",
+                 "open":  "Open disputes",
+                 "wins":  "Items removed",
+                 "spend":  "Mail spend",
+                 "perDeletion":  "Cost per deletion",
+                 "next":  "Next actions",
+                 "demo":  "Demo data"
+             }
 }

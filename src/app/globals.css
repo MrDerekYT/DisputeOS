@@ -2,4 +2,32 @@
 @tailwind components;
 @tailwind utilities;
 
-body { @apply bg-slate-50 text-slate-900 antialiased; }
+:root { color-scheme: light; }
+
+body {
+  @apply text-slate-900 antialiased;
+  background:
+    radial-gradient(900px 500px at 85% -10%, rgba(124, 58, 237, 0.14), transparent 60%),
+    radial-gradient(700px 420px at -5% 10%, rgba(79, 70, 229, 0.12), transparent 60%),
+    #f6f7fb;
+  min-height: 100vh;
+}
+
+@layer components {
+  .card { @apply rounded-2xl border border-white/70 bg-white/80 shadow-[0_1px_2px_rgba(15,23,42,.05),0_8px_30px_rgba(79,70,229,.06)] backdrop-blur; }
+  .btn { @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold transition focus:outline-none focus-visible:ring-2 focus-visible:ring-brand/50; }
+  .btn-primary { @apply btn bg-gradient-to-r from-indigo-600 to-violet-600 text-white shadow-lg shadow-indigo-500/25 hover:brightness-110; }
+  .btn-ghost { @apply btn border border-slate-200 bg-white text-slate-700 hover:bg-slate-50; }
+  .chip { @apply inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold; }
+  .gradient-text { @apply bg-gradient-to-r from-indigo-600 via-violet-600 to-fuchsia-500 bg-clip-text text-transparent; }
+}
+
+@keyframes floaty { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
+.floaty { animation: floaty 6s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .floaty { animation: none; } }
+
+@media print {
+  .no-print { display: none !important; }
+  body { background: #fff; }
+  .letter { break-after: page; box-shadow: none; border: 0; }
+}
