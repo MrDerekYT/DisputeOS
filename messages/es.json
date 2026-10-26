@@ -9,7 +9,8 @@
                 "disputes":  "Disputas",
                 "signOut":  "Cerrar sesiÃ³n",
                 "reports":  "Reportes",
-                "analysis":  "Análisis"
+                "analysis":  "Análisis",
+                "mail":  "Correo"
             },
     "auth":  {
                  "title":  "Iniciar sesiÃ³n",
@@ -70,5 +71,13 @@
                  "perDeletion":  "Costo por eliminación",
                  "next":  "Próximas acciones",
                  "demo":  "Datos de demostración"
+             },
+    "mail":  {
+                 "title":  "Cola de correo",
+                 "subtitle":  "Las cartas solo se envían después de que una persona las apruebe. Cada envío es idempotente y rastreado.",
+                 "demo":  "Correo simulado",
+                 "sent":  "Enviada",
+                 "needsApproval":  "Requiere aprobación",
+                 "total":  "Franqueo estimado"
              }
 }

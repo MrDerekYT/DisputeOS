@@ -22,9 +22,15 @@ export default async function Dashboard({ params }: { params: Promise<{ locale: 
   ];
   return (
     <Shell locale={locale} active="dashboard">
-      <div className="flex items-center justify-between">
-        <h1 className="text-3xl font-extrabold tracking-tight">{t("title")}</h1>
-        <span className="chip bg-amber-100 text-amber-800">{t("demo")}</span>
+      <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-indigo-700 via-violet-700 to-fuchsia-600 p-7 text-white shadow-xl shadow-indigo-500/30">
+        <div className="shine absolute inset-0" />
+        <div className="relative flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <h1 className="text-3xl font-extrabold tracking-tight">{t("title")}</h1>
+            <p className="mt-1 text-indigo-100">Score 612 · up 64 points in 6 months</p>
+          </div>
+          <span className="chip bg-white/20 text-white backdrop-blur">{t("demo")}</span>
+        </div>
       </div>
 
       <div className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
