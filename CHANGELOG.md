@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased — Phase 2
+
 - Client profiles (list/create/detail), private document vault (storage RLS by org prefix, magic-byte type check, size limit)
 - Rules-based text/HTML report parser with per-field confidence and masked source snippets
 - Review screen (source next to editable value; low-confidence items unchecked), approve/reject with audit log

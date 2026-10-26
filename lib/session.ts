@@ -28,14 +28,12 @@ export async function audit(
   entityId?: string,
   metadata: Record<string, string | number | boolean> = {},
 ) {
-  await supabase
-    .from('audit_logs')
-    .insert({
-      org_id: p.org_id,
-      actor_id: p.id,
-      action,
-      entity_type: entityType,
-      entity_id: entityId,
-      metadata,
-    });
+  await supabase.from('audit_logs').insert({
+    org_id: p.org_id,
+    actor_id: p.id,
+    action,
+    entity_type: entityType,
+    entity_id: entityId,
+    metadata,
+  });
 }
