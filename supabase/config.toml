@@ -1,0 +1,20 @@
+# Supabase CLI config. Run `supabase start` then `supabase db reset` (applies migrations + seed.sql).
+project_id = "disputeos"
+
+[api]
+port = 54321
+
+[db]
+port = 54322
+major_version = 15
+
+[db.seed]
+enabled = true
+sql_paths = ["./seed.sql"]
+
+[auth]
+site_url = "http://localhost:3000"
+enable_signup = true
+
+[auth.email]
+enable_confirmations = false
