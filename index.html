@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>DisputeOS — Credit Dispute Management</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<aside class="sidebar">
+  <div class="brand"><span class="logo">D</span> DisputeOS</div>
+  <div class="mode-switch" role="group" aria-label="Mode">
+    <button data-mode="personal" class="active">Personal</button>
+    <button data-mode="agency">Agency</button>
+  </div>
+  <nav id="nav"></nav>
+  <div class="sidebar-foot">FCRA &amp; FDCPA aware · CROA safe</div>
+</aside>
+
+<main>
+  <header class="topbar">
+    <h1 id="page-title">Dashboard</h1>
+    <div class="top-actions">
+      <button class="btn" id="btn-theme">Toggle theme</button>
+      <button class="btn primary" id="btn-new-dispute">+ New dispute</button>
+    </div>
+  </header>
+  <section id="view"></section>
+  <footer class="disclaimer">
+    DisputeOS is software, not legal advice. No one can guarantee removal of accurate information or a specific
+    credit score outcome. You have the right to dispute inaccurate items yourself for free under the FCRA (15 U.S.C. §1681i)
+    and the right to cancel a credit repair contract within 3 business days (CROA). Demo data is stored only in your browser.
+  </footer>
+</main>
+
+<div class="modal" id="modal" hidden>
+  <div class="modal-card" id="modal-card"></div>
+</div>
+<div class="toast" id="toast" hidden></div>
+<script src="app.js"></script>
+</body>
+</html>
