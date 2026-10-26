@@ -14,3 +14,13 @@ export const newDisputeSchema = z.object({
 });
 
 export type NewDispute = z.infer<typeof newDisputeSchema>;
+
+export const signUpSchema = z.object({
+  email: z.string().trim().email().max(254),
+  password: z.string().min(10).max(128),
+  fullName: z.string().trim().min(1).max(120),
+  mode: z.enum(['personal', 'agency']),
+  orgName: z.string().trim().max(120).optional(),
+});
+
+export const mfaCodeSchema = z.string().regex(/^\d{6}$/);

@@ -1,0 +1,43 @@
+{
+  "nav": {
+    "dashboard": "Dashboard",
+    "disputes": "Disputes",
+    "import": "Import",
+    "letters": "Letters",
+    "signOut": "Sign out",
+    "language": "Español"
+  },
+  "home": {
+    "title": "DisputeOS",
+    "tagline": "Strategic dispute management with built-in FCRA/FDCPA compliance.",
+    "cta": "Open dashboard",
+    "signUp": "Create account"
+  },
+  "auth": {
+    "signIn": "Sign in",
+    "signUp": "Create account",
+    "email": "Email",
+    "password": "Password",
+    "fullName": "Full name",
+    "mode": "I want to",
+    "modePersonal": "Repair my own credit",
+    "modeAgency": "Run a credit repair business",
+    "orgName": "Business name",
+    "checkEmail": "Check your email to confirm your account.",
+    "errInvalid": "Enter a valid email and a password of 10+ characters.",
+    "errCredentials": "Invalid email or password.",
+    "errSignUp": "Could not create the account.",
+    "pending": "Please wait…"
+  },
+  "mfa": {
+    "title": "Two-factor authentication",
+    "enrollIntro": "Scan this QR code with an authenticator app, then enter the 6-digit code.",
+    "verifyIntro": "Enter the 6-digit code from your authenticator app.",
+    "code": "Code",
+    "verify": "Verify",
+    "invalid": "That code is not valid."
+  },
+  "footer": {
+    "disclaimer": "DisputeOS is software, not legal advice. Results are never guaranteed. Use in compliance with the FCRA, FDCPA and CROA."
+  }
+}

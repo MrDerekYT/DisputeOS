@@ -13,8 +13,19 @@ enabled = true
 sql_paths = ["./seed.sql"]
 
 [auth]
+minimum_password_length = 10
+password_requirements = "lower_upper_letters_digits"
 site_url = "http://localhost:3000"
 enable_signup = true
 
 [auth.email]
-enable_confirmations = false
+enable_confirmations = true
+
+[auth.mfa.totp]
+enroll_enabled = true
+verify_enabled = true
+
+# Session policy (inactivity/timebox need a Pro plan on hosted Supabase; see docs/DECISIONS.md #8).
+[auth.sessions]
+timebox = "24h"
+inactivity_timeout = "8h"
