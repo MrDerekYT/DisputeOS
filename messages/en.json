@@ -79,5 +79,19 @@
                  "sent":  "Sent",
                  "needsApproval":  "Needs approval",
                  "total":  "Estimated postage"
-             }
+             },
+    "clients":  {
+                    "title":  "Import clients",
+                    "subtitle":  "Paste a CSV exported from Credit Repair Cloud, DisputeFox or a spreadsheet. Nothing is saved until you confirm.",
+                    "preview":  "Preview import",
+                    "ready":  "Ready to import",
+                    "duplicates":  "Duplicates skipped",
+                    "errors":  "Rows with errors",
+                    "name":  "Name",
+                    "email":  "Email",
+                    "phone":  "Phone",
+                    "address":  "Address",
+                    "line":  "Line",
+                    "note":  "Phone numbers are masked on screen. Pulling credit reports requires documented client consent."
+                }
 }

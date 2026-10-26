@@ -79,5 +79,19 @@
                  "sent":  "Enviada",
                  "needsApproval":  "Requiere aprobación",
                  "total":  "Franqueo estimado"
-             }
+             },
+    "clients":  {
+                    "title":  "Importar clientes",
+                    "subtitle":  "Pegue un CSV exportado de Credit Repair Cloud, DisputeFox o una hoja de cálculo. No se guarda nada hasta que confirme.",
+                    "preview":  "Vista previa",
+                    "ready":  "Listos para importar",
+                    "duplicates":  "Duplicados omitidos",
+                    "errors":  "Filas con errores",
+                    "name":  "Nombre",
+                    "email":  "Correo",
+                    "phone":  "Teléfono",
+                    "address":  "Dirección",
+                    "line":  "Línea",
+                    "note":  "Los teléfonos se muestran enmascarados. Obtener reportes de crédito requiere consentimiento documentado del cliente."
+                }
 }

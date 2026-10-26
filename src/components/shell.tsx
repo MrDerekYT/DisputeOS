@@ -3,6 +3,7 @@ import { Link } from "@/i18n/routing";
 
 const ITEMS = [
   ["/dashboard", "dashboard", "M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"],
+  ["/clients", "clients", "M16 11a4 4 0 10-8 0 4 4 0 008 0zM4 21c0-4 4-6 8-6s8 2 8 6"],
   ["/reports", "reports", "M6 2h9l5 5v15H6V2zm8 1.5V8h4.5M9 13h8M9 17h8"],
   ["/analysis", "analysis", "M4 20V10m6 10V4m6 16v-7m4 7H2"],
   ["/mail", "mail", "M3 6h18v12H3V6zm0 0l9 7 9-7"],
