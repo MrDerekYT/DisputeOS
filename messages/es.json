@@ -210,5 +210,16 @@
                  "approve":  "Revisar y aprobar",
                  "day":  "días",
                  "updated":  "Actualizado"
-             }
+             },
+    "faq":  {
+                "a1":  "No. Nadie puede garantizar resultados legalmente. DisputeOS detecta errores disputables, redacta cartas conformes y da seguimiento a cada respuesta; los burós deciden el resultado.",
+                "a3":  "Las cartas se redactan automáticamente, pero una persona debe revisar y aprobar cada una antes de enviarla.",
+                "a2":  "Con un enlace de invitación seguro, importando un CSV o conectando un proveedor de reportes con consentimiento. Nada se importa sin el consentimiento del cliente.",
+                "a4":  "Sí. El portal, el formulario de ingreso y las cartas están disponibles en inglés y español.",
+                "q4":  "¿Atiende a clientes de habla hispana?",
+                "q3":  "¿Las cartas se envían automáticamente?",
+                "title":  "Preguntas frecuentes",
+                "q2":  "¿Cómo ingresan sus reportes los clientes?",
+                "q1":  "¿DisputeOS garantiza la eliminación de cuentas?"
+            }
 }

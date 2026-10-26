@@ -210,5 +210,16 @@
                  "approve":  "Review and approve",
                  "day":  "days",
                  "updated":  "Updated"
-             }
+             },
+    "faq":  {
+                "a1":  "No. No one can lawfully guarantee results. DisputeOS finds disputable errors, drafts compliant letters and tracks every response; the bureaus decide the outcome.",
+                "a3":  "Letters are drafted automatically, but a human approver must review each one before it is mailed.",
+                "a2":  "Clients can use a secure invite link, import a CSV, or connect a consent-based report provider. Nothing is imported without the client\u0027s consent.",
+                "a4":  "Yes. The client portal, intake form and dispute letters are available in English and Spanish.",
+                "q4":  "Does it support Spanish-speaking clients?",
+                "q3":  "Are letters sent automatically?",
+                "title":  "Frequently asked questions",
+                "q2":  "How do clients get their reports in?",
+                "q1":  "Can DisputeOS guarantee deleted items?"
+            }
 }

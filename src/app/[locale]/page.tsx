@@ -21,9 +21,14 @@ export default async function Home({ params }: { params: Promise<{ locale: strin
     description: seo.description,
     url: `${SITE_URL}/${locale}`,
   };
+  const faq = (["1", "2", "3", "4"] as const).map((k) => ({ q: t(`faq.q${k}`), a: t(`faq.a${k}`) }));
+  const faqLd = {
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    mainEntity: faq.map((f) => ({ "@type": "Question", name: f.q, acceptedAnswer: { "@type": "Answer", text: f.a } })),
+  };
   return (
     <main className="mx-auto max-w-6xl px-6 py-10">
-      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }} />
       <header className="flex items-center justify-between">
         <span className="flex items-center gap-2.5 text-lg font-extrabold">
           <span className="grid h-9 w-9 place-items-center rounded-xl bg-gradient-to-br from-indigo-600 to-violet-600 text-white shadow-lg shadow-indigo-500/30">D</span>
@@ -67,6 +72,19 @@ export default async function Home({ params }: { params: Promise<{ locale: strin
           </div>
         ))}
       </section>
+
+      <section className="mt-16" aria-labelledby="faq-h">
+        <h2 id="faq-h" className="text-2xl font-extrabold tracking-tight">{t("faq.title")}</h2>
+        <div className="mt-4 grid gap-3 md:grid-cols-2">
+          {faq.map((f) => (
+            <details key={f.q} className="card group p-5 open:ring-2 open:ring-indigo-200">
+              <summary className="cursor-pointer list-none text-base font-bold">{f.q}</summary>
+              <p className="mt-2 text-sm text-slate-600">{f.a}</p>
+            </details>
+          ))}
+        </div>
+      </section>
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(faqLd) }} />
       <p className="mt-16 text-xs text-slate-500">{t("compliance.disclaimer")}</p>
     </main>
   );
