@@ -27,7 +27,8 @@ export default async function Home({ params }: { params: Promise<{ locale: strin
           </h1>
           <p className="mt-4 max-w-lg text-lg text-slate-600">{t("home.sub")}</p>
           <div className="mt-8 flex flex-wrap gap-3">
-            <Link href="/dashboard" className="btn-primary px-6 py-3">{t("home.cta")}</Link>
+            <Link href="/clients" className="btn-primary px-6 py-3">{t("home.cta")}</Link>
+            <Link href="/portal/jordan-rivera" className="btn-ghost px-6 py-3">{t("crm.viewPortal")}</Link>
             <Link href="/analysis" className="btn-ghost px-6 py-3">{t("home.cta2")}</Link>
           </div>
           <div className="mt-8 flex flex-wrap gap-2 text-xs font-semibold text-slate-600">

@@ -4,21 +4,29 @@
 
 :root { color-scheme: light; }
 
+html { font-size: 16.5px; scroll-behavior: smooth; }
+
 body {
   @apply text-slate-900 antialiased;
+  font-family: ui-sans-serif, "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, Roboto, "Helvetica Neue", Arial, sans-serif;
   background:
-    radial-gradient(900px 500px at 85% -10%, rgba(124, 58, 237, 0.14), transparent 60%),
-    radial-gradient(700px 420px at -5% 10%, rgba(79, 70, 229, 0.12), transparent 60%),
-    #f6f7fb;
+    radial-gradient(1100px 520px at 90% -15%, rgba(139, 92, 246, 0.16), transparent 60%),
+    radial-gradient(800px 460px at -10% 0%, rgba(59, 130, 246, 0.13), transparent 60%),
+    #f4f6fb;
   min-height: 100vh;
 }
 
+input:not([type="checkbox"]), textarea, select {
+  @apply rounded-xl border border-slate-200 bg-white text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-indigo-400 focus:ring-4 focus:ring-indigo-500/15;
+}
+:focus-visible { outline: 2px solid #6366f1; outline-offset: 2px; }
+
 @layer components {
-  .card { @apply rounded-2xl border border-white/70 bg-white/80 shadow-[0_1px_2px_rgba(15,23,42,.05),0_8px_30px_rgba(79,70,229,.06)] backdrop-blur; }
-  .btn { @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold transition focus:outline-none focus-visible:ring-2 focus-visible:ring-brand/50; }
-  .btn-primary { @apply btn bg-gradient-to-r from-indigo-600 to-violet-600 text-white shadow-lg shadow-indigo-500/25 hover:brightness-110; }
-  .btn-ghost { @apply btn border border-slate-200 bg-white text-slate-700 hover:bg-slate-50; }
-  .chip { @apply inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold; }
+  .card { @apply rounded-3xl border border-slate-200/70 bg-white shadow-[0_1px_2px_rgba(15,23,42,.04),0_12px_32px_-12px_rgba(79,70,229,.14)]; }
+  .btn { @apply inline-flex min-h-[44px] items-center justify-center gap-2 rounded-2xl px-5 py-2.5 text-sm font-semibold transition active:scale-[.98] focus:outline-none; }
+  .btn-primary { @apply btn bg-gradient-to-br from-indigo-600 to-violet-600 text-white shadow-lg shadow-indigo-500/30 hover:brightness-110; }
+  .btn-ghost { @apply btn border border-slate-200 bg-white text-slate-700 shadow-sm hover:border-indigo-200 hover:bg-indigo-50/60 hover:text-indigo-700; }
+  .chip { @apply inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold; }
   .gradient-text { @apply bg-gradient-to-r from-indigo-600 via-violet-600 to-fuchsia-500 bg-clip-text text-transparent; }
 }
 
