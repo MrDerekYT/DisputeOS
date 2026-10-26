@@ -1,4 +1,4 @@
-﻿{
+{
     "app":  {
                 "name":  "DisputeOS",
                 "tagline":  "ReparaciÃ³n de crÃ©dito que mide resultados, no volumen."
@@ -10,7 +10,8 @@
                 "signOut":  "Cerrar sesiÃ³n",
                 "reports":  "Reportes",
                 "analysis":  "Análisis",
-                "mail":  "Correo"
+                "mail":  "Correo",
+                "responses":  "Respuestas"
             },
     "auth":  {
                  "title":  "Iniciar sesiÃ³n",
@@ -192,5 +193,22 @@
                 "helpTitle":  "¿Preguntas?",
                 "helpBody":  "Responda cualquier mensaje de su especialista o llame a la oficina. Con gusto le explicamos.",
                 "portalDisclaimer":  "Los resultados varían y no están garantizados. Solo podemos ayudar a corregir información inexacta, no verificable u obsoleta."
-            }
+            },
+    "resp":  {
+                 "auto":  "Automático",
+                 "deleted":  "Eliminado",
+                 "draft":  "Borrador de carta",
+                 "verified":  "Verificado",
+                 "title":  "Respuestas de los burós",
+                 "celebrate":  "Estado actualizado automáticamente",
+                 "escalateNoResponse":  "Más de 30 días: carta de escalamiento lista",
+                 "reviewUpdate":  "Revise la actualización antes de responder",
+                 "methodOfVerification":  "Carta de método de verificación lista",
+                 "sub":  "Las respuestas se leen automáticamente, los estados se actualizan y las cartas de seguimiento quedan listas para su aprobación.",
+                 "needsYou":  "Requiere su aprobación",
+                 "noResponse":  "Sin respuesta",
+                 "approve":  "Revisar y aprobar",
+                 "day":  "días",
+                 "updated":  "Actualizado"
+             }
 }

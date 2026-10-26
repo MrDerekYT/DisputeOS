@@ -1,13 +1,29 @@
 import { getTranslations, setRequestLocale } from "next-intl/server";
 import { Link } from "@/i18n/routing";
 import { HeroArt } from "@/components/art";
+import type { Metadata } from "next";
+import { SEO, SITE_URL } from "@/lib/site";
+
+export const metadata: Metadata = { robots: { index: true, follow: true } };
 
 export default async function Home({ params }: { params: Promise<{ locale: string }> }) {
   const { locale } = await params;
   setRequestLocale(locale);
   const t = await getTranslations();
+  const seo = SEO[locale === "es" ? "es" : "en"];
+  const jsonLd = {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    name: "DisputeOS",
+    applicationCategory: "BusinessApplication",
+    operatingSystem: "Web",
+    inLanguage: ["en", "es"],
+    description: seo.description,
+    url: `${SITE_URL}/${locale}`,
+  };
   return (
     <main className="mx-auto max-w-6xl px-6 py-10">
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }} />
       <header className="flex items-center justify-between">
         <span className="flex items-center gap-2.5 text-lg font-extrabold">
           <span className="grid h-9 w-9 place-items-center rounded-xl bg-gradient-to-br from-indigo-600 to-violet-600 text-white shadow-lg shadow-indigo-500/30">D</span>

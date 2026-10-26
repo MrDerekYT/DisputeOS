@@ -6,6 +6,7 @@ const ITEMS = [
   ["/clients", "clients", "M16 11a4 4 0 10-8 0 4 4 0 008 0zM4 21c0-4 4-6 8-6s8 2 8 6"],
   ["/reports", "reports", "M6 2h9l5 5v15H6V2zm8 1.5V8h4.5M9 13h8M9 17h8"],
   ["/analysis", "analysis", "M4 20V10m6 10V4m6 16v-7m4 7H2"],
+  ["/responses", "responses", "M4 4h16v12H8l-4 4V4zm4 5h8M8 12h5"],
   ["/mail", "mail", "M3 6h18v12H3V6zm0 0l9 7 9-7"],
 ] as const;
 
@@ -34,7 +35,7 @@ export async function Shell({ locale, active, children }: { locale: string; acti
         </div>
       </aside>
       <main className="min-w-0 flex-1 pb-24 md:pb-10">{children}</main>
-      <nav aria-label="Main" className="no-print fixed inset-x-3 bottom-3 z-20 grid grid-cols-5 rounded-3xl bg-slate-900/95 p-1.5 shadow-2xl backdrop-blur md:hidden">
+      <nav aria-label="Main" className="no-print fixed inset-x-3 bottom-3 z-20 grid grid-cols-6 rounded-3xl bg-slate-900/95 p-1.5 shadow-2xl backdrop-blur md:hidden">
         {ITEMS.map(([href, key, d]) => (
           <Link key={key} href={href} aria-current={active === key ? "page" : undefined}
             className={`flex min-h-[52px] flex-col items-center justify-center gap-0.5 rounded-2xl text-[10px] font-semibold ${active === key ? "bg-gradient-to-br from-indigo-500 to-violet-500 text-white" : "text-slate-400"}`}>

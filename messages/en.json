@@ -1,4 +1,4 @@
-﻿{
+{
     "app":  {
                 "name":  "DisputeOS",
                 "tagline":  "Credit repair that tracks results, not volume."
@@ -10,7 +10,8 @@
                 "signOut":  "Sign out",
                 "reports":  "Reports",
                 "analysis":  "Analysis",
-                "mail":  "Mail"
+                "mail":  "Mail",
+                "responses":  "Responses"
             },
     "auth":  {
                  "title":  "Sign in",
@@ -192,5 +193,22 @@
                 "helpTitle":  "Questions?",
                 "helpBody":  "Reply to any message from your specialist or call the office. We\u0027re happy to walk you through it.",
                 "portalDisclaimer":  "Results vary and are not guaranteed. We can only help correct inaccurate, unverifiable or outdated information."
-            }
+            },
+    "resp":  {
+                 "auto":  "Automatic",
+                 "deleted":  "Deleted",
+                 "draft":  "Draft letter",
+                 "verified":  "Verified",
+                 "title":  "Bureau responses",
+                 "celebrate":  "Status updated automatically",
+                 "escalateNoResponse":  "30+ days: escalation letter drafted",
+                 "reviewUpdate":  "Review the update before replying",
+                 "methodOfVerification":  "Method-of-verification letter drafted",
+                 "sub":  "Replies are read automatically, statuses update, and follow-up letters are drafted for your approval.",
+                 "needsYou":  "Needs your approval",
+                 "noResponse":  "No response",
+                 "approve":  "Review and approve",
+                 "day":  "days",
+                 "updated":  "Updated"
+             }
 }
