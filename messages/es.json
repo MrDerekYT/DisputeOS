@@ -10,6 +10,19 @@
     "passkey": "Usar una llave de acceso"
   },
   "dashboard": { "title": "Panel", "welcome": "Bienvenido de nuevo" },
+  "reports": {
+    "title": "Revisión de reporte",
+    "subtitle": "Pegue el texto del reporte. Cada valor extraído se muestra junto a su línea de origen; los campos de baja confianza se resaltan para que los confirme.",
+    "parse": "Analizar reporte",
+    "bureau": "Buró",
+    "accounts": "Cuentas",
+    "inquiries": "Consultas",
+    "field": "Campo",
+    "extracted": "Extraído",
+    "sourceLine": "Línea de origen",
+    "confidence": "Confianza",
+    "pageNote": "Pantalla de demostración: no se guarda nada. Nunca se muestran los números de cuenta completos."
+  },
   "compliance": {
     "disclaimer": "DisputeOS es software, no asesoría legal. Nadie puede garantizar la eliminación de información precisa ni un resultado específico de puntaje."
   }

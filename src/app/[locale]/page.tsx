@@ -13,6 +13,9 @@ export default async function Home({ params }: { params: Promise<{ locale: strin
         <Link href="/login" className="rounded-lg bg-brand px-4 py-2 font-semibold text-white">
           {t("auth.submit")}
         </Link>
+        <Link href="/reports" className="rounded-lg border px-4 py-2">
+          {t("reports.title")}
+        </Link>
         <Link href="/" locale={locale === "en" ? "es" : "en"} className="rounded-lg border px-4 py-2">
           {locale === "en" ? "Español" : "English"}
         </Link>

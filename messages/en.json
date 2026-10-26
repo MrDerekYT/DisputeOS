@@ -10,6 +10,19 @@
     "passkey": "Use a passkey"
   },
   "dashboard": { "title": "Dashboard", "welcome": "Welcome back" },
+  "reports": {
+    "title": "Report review",
+    "subtitle": "Paste report text. Each extracted value is shown next to its source line; low-confidence fields are highlighted for you to confirm.",
+    "parse": "Parse report",
+    "bureau": "Bureau",
+    "accounts": "Accounts",
+    "inquiries": "Inquiries",
+    "field": "Field",
+    "extracted": "Extracted",
+    "sourceLine": "Source line",
+    "confidence": "Confidence",
+    "pageNote": "Demo screen: nothing is saved. Full account numbers are never displayed."
+  },
   "compliance": {
     "disclaimer": "DisputeOS is software, not legal advice. No one can guarantee removal of accurate information or a specific score outcome."
   }
