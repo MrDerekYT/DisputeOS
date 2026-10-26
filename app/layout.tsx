@@ -18,6 +18,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           </Link>
           <Link href="/dashboard">Dashboard</Link>
           <Link href="/dashboard/disputes">Disputes</Link>
+          <Link href="/dashboard/import">Import</Link>
           <Link href="/dashboard/letters">Letters</Link>
           <form action={signOut} className="ml-auto">
             <button className="text-sm underline">Sign out</button>
