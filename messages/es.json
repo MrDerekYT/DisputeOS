@@ -92,6 +92,38 @@
                     "phone":  "Teléfono",
                     "address":  "Dirección",
                     "line":  "Línea",
-                    "note":  "Los teléfonos se muestran enmascarados. Obtener reportes de crédito requiere consentimiento documentado del cliente."
-                }
+                    "note":  "Los teléfonos se muestran enmascarados. Obtener reportes de crédito requiere consentimiento documentado del cliente.",
+                    "inviteName":  "Nombre del cliente (opcional)",
+                    "inviteSub":  "Genere un enlace seguro (válido 14 días) para enviar por mensaje o correo. El cliente ingresa su información y consentimiento.",
+                    "inviteBtn":  "Generar enlace",
+                    "inviteTitle":  "Enlace de registro"
+                },
+    "join":  {
+                 "welcome":  "Comencemos",
+                 "welcomeBody":  "Su especialista de crédito lo invitó a compartir algunos datos de forma segura. Toma unos dos minutos.",
+                 "step1":  "Comparta sus datos de contacto",
+                 "step2":  "Revise y acepte las divulgaciones",
+                 "step3":  "Su especialista revisa sus reportes de crédito con usted",
+                 "secure":  "Cifrado en tránsito. Su información solo se comparte con su especialista de crédito.",
+                 "formTitle":  "Su información",
+                 "formSub":  "La usamos para preparar su expediente. Puede cambiarla después.",
+                 "name":  "Nombre legal completo",
+                 "email":  "Correo electrónico",
+                 "phone":  "Teléfono móvil",
+                 "address":  "Dirección",
+                 "addressHint":  "Calle, ciudad, estado, código postal",
+                 "consentCroa":  "He leído la divulgación de Derechos del Consumidor sobre Expedientes de Crédito y entiendo que puedo cancelar dentro de 3 días hábiles.",
+                 "consentReports":  "Autorizo a mi especialista a obtener y revisar mis reportes de crédito para identificar información inexacta.",
+                 "submit":  "Enviar de forma segura",
+                 "doneTitle":  "¡Todo listo!",
+                 "doneBody":  "Su especialista tiene lo que necesita y se comunicará pronto.",
+                 "preview":  "Modo de vista previa: este envío se validó pero no se guardó.",
+                 "errField":  "Revise este campo.",
+                 "errConsent":  "Ambos acuerdos son necesarios para continuar.",
+                 "errInvite":  "Este enlace no es válido. Pida uno nuevo.",
+                 "errStorage":  "No pudimos guardar su información ahora. Intente más tarde.",
+                 "expiredTitle":  "Este enlace expiró",
+                 "expiredBody":  "Pida a su especialista de crédito que le envíe un nuevo enlace.",
+                 "disclaimer":  "No se garantizan resultados. Los servicios de reparación de crédito no pueden eliminar información precisa, oportuna y verificable."
+             }
 }

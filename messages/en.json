@@ -92,6 +92,38 @@
                     "phone":  "Phone",
                     "address":  "Address",
                     "line":  "Line",
-                    "note":  "Phone numbers are masked on screen. Pulling credit reports requires documented client consent."
-                }
+                    "note":  "Phone numbers are masked on screen. Pulling credit reports requires documented client consent.",
+                    "inviteName":  "Client name (optional)",
+                    "inviteSub":  "Generate a secure link (valid 14 days) to text or email. Clients enter their own info and consent.",
+                    "inviteBtn":  "Generate link",
+                    "inviteTitle":  "Client sign-up link"
+                },
+    "join":  {
+                 "welcome":  "Let\u0027s get you started",
+                 "welcomeBody":  "Your credit specialist invited you to securely share a few details. It takes about two minutes.",
+                 "step1":  "Share your contact details",
+                 "step2":  "Review and agree to the disclosures",
+                 "step3":  "Your specialist reviews your credit reports with you",
+                 "secure":  "Encrypted in transit. Your information is only shared with your credit specialist.",
+                 "formTitle":  "Your information",
+                 "formSub":  "We use this to prepare your file. You can change it later.",
+                 "name":  "Full legal name",
+                 "email":  "Email",
+                 "phone":  "Mobile phone",
+                 "address":  "Home address",
+                 "addressHint":  "Street, city, state, ZIP",
+                 "consentCroa":  "I have read the Consumer Credit File Rights disclosure and understand I may cancel within 3 business days.",
+                 "consentReports":  "I authorize my credit specialist to obtain and review my credit reports to identify inaccurate information.",
+                 "submit":  "Submit securely",
+                 "doneTitle":  "You\u0027re all set!",
+                 "doneBody":  "Your specialist has what they need and will be in touch shortly.",
+                 "preview":  "Preview mode: this submission was validated but not stored.",
+                 "errField":  "Please check this field.",
+                 "errConsent":  "Both agreements are required to continue.",
+                 "errInvite":  "This link is not valid. Please ask for a new one.",
+                 "errStorage":  "We couldn\u0027t save your information right now. Please try again later.",
+                 "expiredTitle":  "This link has expired",
+                 "expiredBody":  "Please ask your credit specialist to send you a new sign-up link.",
+                 "disclaimer":  "Results are not guaranteed. Credit repair services cannot remove accurate, timely, verifiable information."
+             }
 }

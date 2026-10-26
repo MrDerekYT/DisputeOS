@@ -1,4 +1,6 @@
 import { getTranslations, setRequestLocale } from "next-intl/server";
+import { headers } from "next/headers";
+import { inviteFor, signInvite } from "@/lib/invite";
 import { Shell } from "@/components/shell";
 import { importClientsCsv } from "@/lib/import/csv";
 
@@ -8,11 +10,16 @@ Maria Gomez,maria@example.com,512-555-0111,"45 Oak Ave, Dallas, TX 75201"
 Maria Gomez,maria@example.com,512-555-0111,"45 Oak Ave, Dallas, TX 75201"
 Sam Lee,not-an-email,5125550122,"9 Pine Rd, Houston, TX 77001"`;
 
-export default async function Clients({ params, searchParams }: { params: Promise<{ locale: string }>; searchParams: Promise<{ csv?: string }> }) {
+export default async function Clients({ params, searchParams }: { params: Promise<{ locale: string }>; searchParams: Promise<{ csv?: string; invite?: string }> }) {
   const { locale } = await params;
-  const { csv } = await searchParams;
+  const { csv, invite } = await searchParams;
   setRequestLocale(locale);
   const t = await getTranslations("clients");
+  const h = await headers();
+  const origin = `${h.get("x-forwarded-proto") ?? "http"}://${h.get("host") ?? "localhost:3000"}`;
+  const link = invite !== undefined
+    ? `${origin}/${locale}/join/${signInvite(inviteFor("demo-agency", invite.trim().slice(0, 80) || undefined))}`
+    : null;
   const source = csv?.slice(0, 100_000) || SAMPLE;
   const r = importClientsCsv(source);
   const mask = (p: string) => (p.length === 10 ? `(•••) •••-${p.slice(6)}` : "—");
@@ -21,6 +28,22 @@ export default async function Clients({ params, searchParams }: { params: Promis
     <Shell locale={locale} active="clients">
       <h1 className="text-3xl font-extrabold tracking-tight">{t("title")}</h1>
       <p className="mt-1 max-w-2xl text-sm text-slate-600">{t("subtitle")}</p>
+
+      <section className="relative mt-6 overflow-hidden rounded-3xl bg-gradient-to-br from-indigo-700 via-violet-700 to-fuchsia-600 p-6 text-white shadow-xl shadow-indigo-500/30">
+        <div className="shine absolute inset-0" />
+        <div className="relative">
+          <h2 className="text-xl font-extrabold">{t("inviteTitle")}</h2>
+          <p className="mt-1 text-sm text-indigo-100">{t("inviteSub")}</p>
+          <form className="mt-4 flex flex-wrap gap-2">
+            <input name="invite" placeholder={t("inviteName")} className="min-w-0 flex-1 rounded-xl border-0 px-3.5 py-2.5 text-sm text-slate-900" />
+            <button className="btn bg-white text-indigo-700 hover:bg-indigo-50">{t("inviteBtn")}</button>
+          </form>
+          {link && (
+            <input readOnly value={link} aria-label={t("inviteTitle")}
+              className="mt-3 w-full rounded-xl bg-white/15 px-3.5 py-2.5 font-mono text-xs text-white backdrop-blur" />
+          )}
+        </div>
+      </section>
 
       <form className="card mt-6 p-5">
         <textarea name="csv" defaultValue={source} rows={6} className="w-full rounded-xl border border-slate-200 bg-white p-3 font-mono text-xs" />
