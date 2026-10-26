@@ -126,6 +126,31 @@ exception when raise_exception then
   raise notice 'ok: audit_logs immutable even for superuser';
 end $$;
 
+-- 7b. Phase 2: report_imports and vault storage are tenant-isolated.
+select pg_temp.reset();
+insert into public.report_imports (org_id, client_id)
+select org_id, 'a1000000-0000-0000-0000-000000000001' from public.users where id = 'a0000000-0000-0000-0000-000000000001';
+select org_id as org_a from public.users where id = 'a0000000-0000-0000-0000-000000000001' \gset
+select set_config('t.org_a', :'org_a', false);
+insert into storage.objects (bucket_id, name) values
+  ('vault', :'org_a' || '/a1000000-0000-0000-0000-000000000001/id.pdf'),
+  ('vault', :'org_b' || '/b1000000-0000-0000-0000-000000000001/id.pdf');
+select pg_temp.as_user('a0000000-0000-0000-0000-000000000001');
+select pg_temp.assert_eq('A sees own report_imports', (select count(*) from public.report_imports), 1);
+select pg_temp.assert_eq('A sees only own vault objects', (select count(*) from storage.objects where bucket_id = 'vault'), 1);
+select pg_temp.as_user('b0000000-0000-0000-0000-000000000001');
+select pg_temp.assert_eq('B sees no A report_imports', (select count(*) from public.report_imports), 0);
+select pg_temp.assert_eq('B sees only own vault objects', (select count(*) from storage.objects where bucket_id = 'vault' and name like current_setting('t.org_a') || '%'), 0);
+select pg_temp.as_user('a0000000-0000-0000-0000-000000000003');
+select pg_temp.assert_eq('portal client cannot read report_imports', (select count(*) from public.report_imports), 0);
+select pg_temp.assert_eq('portal client cannot read vault', (select count(*) from storage.objects), 0);
+do $$ begin
+  insert into storage.objects (bucket_id, name) values ('vault', current_setting('t.org_a') || '/x/evil.pdf');
+  raise exception 'FAIL: portal client wrote to vault';
+exception when insufficient_privilege then raise notice 'ok: portal client vault write blocked';
+end $$;
+select pg_temp.reset();
+
 -- 8. Every public table has RLS enabled.
 select pg_temp.assert_eq('all public tables have RLS enabled',
   (select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace

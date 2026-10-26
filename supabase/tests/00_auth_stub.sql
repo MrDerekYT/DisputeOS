@@ -15,3 +15,16 @@ create or replace function auth.uid() returns uuid language sql stable as
 grant usage on schema auth to authenticated, anon;
 grant execute on function auth.uid() to authenticated, anon;
 grant usage on schema public to authenticated, anon;
+
+-- storage stub
+create schema if not exists storage;
+create table if not exists storage.buckets (
+  id text primary key, name text, public boolean default false, file_size_limit bigint, allowed_mime_types text[]);
+create table if not exists storage.objects (
+  id uuid primary key default gen_random_uuid(), bucket_id text, name text, owner uuid);
+alter table storage.objects enable row level security;
+create or replace function storage.foldername(name text) returns text[] language sql immutable as
+  $$ select string_to_array(name, '/') $$;
+grant usage on schema storage to authenticated, anon;
+grant select, insert, update, delete on storage.objects to authenticated;
+grant execute on function storage.foldername(text) to authenticated;

@@ -3,6 +3,7 @@
 import { redirect } from 'next/navigation';
 import { z } from 'zod';
 import { createClient } from '@/lib/supabase/server';
+import { fingerprint } from '@/lib/diff';
 import { MAX_IMPORT_BYTES, parseTradelineCsv } from '@/lib/import';
 
 export async function importReport(_: { errors?: string[] } | undefined, formData: FormData) {
@@ -38,6 +39,7 @@ export async function importReport(_: { errors?: string[] } | undefined, formDat
       org_id: profile.org_id,
       client_id: clientId.data,
       report_id: report.id,
+      fingerprint: fingerprint(r),
     })),
   );
   if (rowsErr) {

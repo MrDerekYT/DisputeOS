@@ -24,6 +24,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
               DisputeOS
             </Link>
             <Link href="/dashboard">{t('nav.dashboard')}</Link>
+            <Link href="/dashboard/clients">{t('nav.clients')}</Link>
             <Link href="/dashboard/disputes">{t('nav.disputes')}</Link>
             <Link href="/dashboard/import">{t('nav.import')}</Link>
             <Link href="/dashboard/letters">{t('nav.letters')}</Link>

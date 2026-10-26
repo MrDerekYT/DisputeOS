@@ -24,3 +24,15 @@ export const signUpSchema = z.object({
 });
 
 export const mfaCodeSchema = z.string().regex(/^\d{6}$/);
+
+export const newClientSchema = z.object({
+  fullName: z.string().trim().min(1).max(120),
+  email: z
+    .string()
+    .trim()
+    .email()
+    .max(254)
+    .optional()
+    .or(z.literal('').transform(() => undefined)),
+  phone: z.string().trim().max(30).optional(),
+});
