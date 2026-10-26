@@ -4,6 +4,7 @@ import { Link } from "@/i18n/routing";
 import { Shell } from "@/components/shell";
 import { Ring, ScoreChart } from "@/components/art";
 import { getClient, initials, STATUS_TONE, summarize } from "@/lib/demo";
+import { portalHref } from "@/lib/access";
 
 export default async function CasePage({ params }: { params: Promise<{ locale: string; id: string }> }) {
   const { locale, id } = await params;
@@ -35,7 +36,7 @@ export default async function CasePage({ params }: { params: Promise<{ locale: s
             </div>
           </div>
           <div className="flex gap-2">
-            <Link href={`/portal/${c.id}`} className="btn bg-white text-indigo-700 hover:bg-indigo-50">{t("viewPortal")}</Link>
+            <Link href={portalHref(c.id)} className="btn bg-white text-indigo-700 hover:bg-indigo-50">{t("viewPortal")}</Link>
             <Link href="/analysis" className="btn bg-white/15 text-white backdrop-blur hover:bg-white/25">{t("openAnalysis")}</Link>
           </div>
         </div>

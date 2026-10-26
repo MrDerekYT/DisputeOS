@@ -3,11 +3,13 @@ import { getTranslations, setRequestLocale } from "next-intl/server";
 import { Link } from "@/i18n/routing";
 import { Ring, ScoreChart } from "@/components/art";
 import { getClient, STATUS_TONE, summarize } from "@/lib/demo";
+import { verifyPortal, signPortal } from "@/lib/access";
 
-export default async function Portal({ params }: { params: Promise<{ locale: string; id: string }> }) {
-  const { locale, id } = await params;
+export default async function Portal({ params }: { params: Promise<{ locale: string; token: string }> }) {
+  const { locale, token } = await params;
   setRequestLocale(locale);
-  const c = getClient(id);
+  const id = verifyPortal(decodeURIComponent(token));
+  const c = id ? getClient(id) : undefined;
   if (!c) notFound();
   const t = await getTranslations("crm");
   const s = summarize(c);
@@ -24,8 +26,7 @@ export default async function Portal({ params }: { params: Promise<{ locale: str
           DisputeOS
         </span>
         <div className="flex gap-2">
-          <Link href={`/portal/${c.id}`} locale={locale === "en" ? "es" : "en"} className="btn-ghost">{locale === "en" ? "Español" : "English"}</Link>
-          <Link href={`/clients/${c.id}`} className="btn-ghost">{t("adminView")}</Link>
+          <Link href={`/portal/${signPortal(c.id)}`} locale={locale === "en" ? "es" : "en"} className="btn-ghost">{locale === "en" ? "Español" : "English"}</Link>
         </div>
       </header>
 

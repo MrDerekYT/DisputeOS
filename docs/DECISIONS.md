@@ -14,3 +14,12 @@
 | 10 | Mail layer (`src/lib/mail`) uses an adapter: Mock by default, Lob when `LOB_API_KEY` is set. Letters require a named human approver and an idempotency key. | Prevents unreviewed or duplicate mailings. Rates are estimates only. |
 | 11 | Import layer (`src/lib/import`): report-provider adapter (Mock default, Array when `ARRAY_APP_KEY`+`ARRAY_BASE_URL` set) and client CSV import. Pulls require documented client consent. | SmartCredit/IdentityIQ/MFSN have no public API (partner-only); no credential scraping. Array endpoint must be confirmed after partner access; FCRA permissible purpose needs attorney review. |
 | 12 | Client sign-up links are HMAC-signed, expiring (14 days) tokens (`src/lib/invite.ts`, needs `INVITE_SECRET` in prod). The public `/join/[token]` form validates and requires CROA-disclosure and report-pull consent. **Submissions are not stored yet** (needs Supabase); production refuses to accept them unless `INTAKE_PREVIEW=1`. | Never silently drop client data. Next: persist to `clients` with consent record, then notify the agency. |
+
+## 13. Admin preview auth
+Env-configured staff login with an HMAC-signed, 8h cookie; falls back to Supabase + MFA when unset. Every Shell page requires admin.
+
+## 14. Signed portal tokens
+Client portal URLs are /portal/<id>.<hmac>; plain ids 404 and the portal shows no admin links.
+
+## 15. Case Copilot
+Heuristic bilingual reply classifier plus template update writer. Optional LLM polish strips the client name and PII first and falls back to the template on failure.

@@ -11,7 +11,8 @@
                 "reports":  "Reports",
                 "analysis":  "Analysis",
                 "mail":  "Mail",
-                "responses":  "Responses"
+                "responses":  "Responses",
+                "copilot":  "Copilot"
             },
     "auth":  {
                  "title":  "Sign in",
@@ -19,7 +20,9 @@
                  "password":  "Password",
                  "submit":  "Sign in",
                  "mfaRequired":  "Multi-factor authentication is required for staff accounts.",
-                 "passkey":  "Use a passkey"
+                 "passkey":  "Use a passkey",
+                 "invalid":  "Email or password is incorrect.",
+                 "staffOnly":  "Staff sign-in. Clients use their private portal link."
              },
     "dashboard":  {
                       "title":  "Dashboard",
@@ -221,5 +224,30 @@
                 "title":  "Frequently asked questions",
                 "q2":  "How do clients get their reports in?",
                 "q1":  "Can DisputeOS guarantee deleted items?"
-            }
+            },
+    "copilot":  {
+                    "confirm":  "This is an automated reading. Confirm it before acting.",
+                    "replyPh":  "Paste the bureau\u0027s reply here…",
+                    "toolAnalyze":  "Analyze a report",
+                    "replyTitle":  "Bureau reply reader",
+                    "analyze":  "Analyze reply",
+                    "updateSub":  "Write a plain-language progress note in the client\u0027s own language.",
+                    "auto":  "automatic",
+                    "creditor":  "Creditor",
+                    "needsYou":  "needs your approval",
+                    "replySub":  "Paste a reply. It is classified, the dispute status is updated and a follow-up letter is drafted when one is needed.",
+                    "sub":  "Smart tools that read replies, draft updates and keep every letter in front of a human approver.",
+                    "title":  "Case Copilot",
+                    "badge":  "Admin only",
+                    "unclear":  "Couldn\u0027t tell the outcome. Review the reply manually.",
+                    "toolInvite":  "Send a client sign-up link",
+                    "bureau":  "Bureau",
+                    "detected":  "Detected",
+                    "write":  "Write update",
+                    "updateTitle":  "Client update writer",
+                    "aiOff":  "Template text. Set AI_BASE_URL, AI_API_KEY and AI_MODEL to enable AI polish.",
+                    "aiOn":  "Polished by AI. Names were removed before sending.",
+                    "days":  "Days since sent",
+                    "toolImport":  "Import clients"
+                }
 }

@@ -11,7 +11,8 @@
                 "reports":  "Reportes",
                 "analysis":  "Análisis",
                 "mail":  "Correo",
-                "responses":  "Respuestas"
+                "responses":  "Respuestas",
+                "copilot":  "Copilot"
             },
     "auth":  {
                  "title":  "Iniciar sesiÃ³n",
@@ -19,7 +20,9 @@
                  "password":  "ContraseÃ±a",
                  "submit":  "Iniciar sesiÃ³n",
                  "mfaRequired":  "Se requiere autenticaciÃ³n multifactor para las cuentas del personal.",
-                 "passkey":  "Usar una llave de acceso"
+                 "passkey":  "Usar una llave de acceso",
+                 "invalid":  "Correo o contraseña incorrectos.",
+                 "staffOnly":  "Acceso del personal. Los clientes usan su enlace privado del portal."
              },
     "dashboard":  {
                       "title":  "Panel",
@@ -221,5 +224,30 @@
                 "title":  "Preguntas frecuentes",
                 "q2":  "¿Cómo ingresan sus reportes los clientes?",
                 "q1":  "¿DisputeOS garantiza la eliminación de cuentas?"
-            }
+            },
+    "copilot":  {
+                    "confirm":  "Es una lectura automática. Confírmela antes de actuar.",
+                    "replyPh":  "Pegue aquí la respuesta del buró…",
+                    "toolAnalyze":  "Analizar un reporte",
+                    "replyTitle":  "Lector de respuestas del buró",
+                    "analyze":  "Analizar respuesta",
+                    "updateSub":  "Escriba una nota de avance en lenguaje sencillo, en el idioma del cliente.",
+                    "auto":  "automático",
+                    "creditor":  "Acreedor",
+                    "needsYou":  "requiere su aprobación",
+                    "replySub":  "Pegue una respuesta. Se clasifica, se actualiza el estado de la disputa y se redacta una carta de seguimiento si hace falta.",
+                    "sub":  "Herramientas inteligentes que leen respuestas, redactan avisos y dejan cada carta frente a una persona que la apruebe.",
+                    "title":  "Copiloto de casos",
+                    "badge":  "Solo administrador",
+                    "unclear":  "No se pudo determinar el resultado. Revise la respuesta manualmente.",
+                    "toolInvite":  "Enviar enlace de registro",
+                    "bureau":  "Buró",
+                    "detected":  "Detectado",
+                    "write":  "Redactar aviso",
+                    "updateTitle":  "Redactor de avisos al cliente",
+                    "aiOff":  "Texto de plantilla. Configure AI_BASE_URL, AI_API_KEY y AI_MODEL para activar la IA.",
+                    "aiOn":  "Mejorado con IA. Los nombres se quitaron antes de enviar.",
+                    "days":  "Días desde el envío",
+                    "toolImport":  "Importar clientes"
+                }
 }

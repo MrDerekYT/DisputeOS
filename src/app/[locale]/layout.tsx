@@ -23,9 +23,10 @@ export async function generateMetadata({ params }: { params: Promise<{ locale: s
     twitter: { card: "summary_large_image", title: s.title, description: s.description },
     // App pages hold client data; only the home page opts back in.
     robots: { index: false, follow: false },
-    themeColor: "#4f46e5",
   };
 }
+
+export const viewport = { themeColor: "#4f46e5" };
 
 export default async function LocaleLayout({
   children,

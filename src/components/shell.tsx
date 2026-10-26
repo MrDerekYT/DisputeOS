@@ -1,5 +1,6 @@
 import { getTranslations } from "next-intl/server";
-import { Link } from "@/i18n/routing";
+import { Link, redirect } from "@/i18n/routing";
+import { endAdminSession, requireAdmin } from "@/lib/access";
 
 const ITEMS = [
   ["/dashboard", "dashboard", "M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"],
@@ -7,11 +8,18 @@ const ITEMS = [
   ["/reports", "reports", "M6 2h9l5 5v15H6V2zm8 1.5V8h4.5M9 13h8M9 17h8"],
   ["/analysis", "analysis", "M4 20V10m6 10V4m6 16v-7m4 7H2"],
   ["/responses", "responses", "M4 4h16v12H8l-4 4V4zm4 5h8M8 12h5"],
+  ["/copilot", "copilot", "M12 3l2.2 5.6L20 11l-5.8 2.4L12 19l-2.2-5.6L4 11l5.8-2.4L12 3z"],
   ["/mail", "mail", "M3 6h18v12H3V6zm0 0l9 7 9-7"],
 ] as const;
 
 export async function Shell({ locale, active, children }: { locale: string; active: string; children: React.ReactNode }) {
+  await requireAdmin(locale);
   const t = await getTranslations("nav");
+  async function signOut() {
+    "use server";
+    await endAdminSession();
+    redirect({ href: "/login", locale });
+  }
   return (
     <div className="mx-auto flex min-h-screen max-w-[88rem] gap-6 p-3 md:p-5">
       <aside className="no-print sticky top-5 hidden h-[calc(100vh-2.5rem)] w-64 shrink-0 flex-col rounded-3xl bg-slate-900 p-4 text-slate-300 shadow-2xl shadow-slate-900/20 md:flex">
@@ -33,9 +41,12 @@ export async function Shell({ locale, active, children }: { locale: string; acti
           <Link href="/" locale="en" className={`flex-1 rounded-xl py-2 text-center ${locale === "en" ? "bg-white text-slate-900" : "hover:bg-white/10"}`}>EN</Link>
           <Link href="/" locale="es" className={`flex-1 rounded-xl py-2 text-center ${locale === "es" ? "bg-white text-slate-900" : "hover:bg-white/10"}`}>ES</Link>
         </div>
+        <form action={signOut} className="mt-2">
+          <button className="w-full rounded-2xl py-2.5 text-xs font-semibold text-slate-400 hover:bg-white/10 hover:text-white">{t("signOut")}</button>
+        </form>
       </aside>
       <main className="min-w-0 flex-1 pb-24 md:pb-10">{children}</main>
-      <nav aria-label="Main" className="no-print fixed inset-x-3 bottom-3 z-20 grid grid-cols-6 rounded-3xl bg-slate-900/95 p-1.5 shadow-2xl backdrop-blur md:hidden">
+      <nav aria-label="Main" className="no-print fixed inset-x-3 bottom-3 z-20 grid grid-cols-7 rounded-3xl bg-slate-900/95 p-1.5 shadow-2xl backdrop-blur md:hidden">
         {ITEMS.map(([href, key, d]) => (
           <Link key={key} href={href} aria-current={active === key ? "page" : undefined}
             className={`flex min-h-[52px] flex-col items-center justify-center gap-0.5 rounded-2xl text-[10px] font-semibold ${active === key ? "bg-gradient-to-br from-indigo-500 to-violet-500 text-white" : "text-slate-400"}`}>
