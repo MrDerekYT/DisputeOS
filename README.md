@@ -5,7 +5,7 @@ Not legal advice. Nothing here guarantees deletion of accurate items or any scor
 ## Status
 **Phase 1 (foundation)**: Next.js 15 + TypeScript strict + Tailwind, next-intl (EN/ES), Supabase SSR auth with
 MFA gating, multi-tenant schema with RLS, field encryption, PII scrubbing, security headers, CI.
-Phases 2–8 are the roadmap; open decisions are logged in `docs/DECISIONS.md`.
+Phases 2–3 add the report parser/review (`/reports`), the dispute analyzer with bilingual letters (`/analysis`, sample data) and a demo `/dashboard`. Phase 4 starts with the mail adapter (`src/lib/mail`, mock by default). Remaining phases are the roadmap; open decisions are logged in `docs/DECISIONS.md`.
 
 ## Setup
 ```

@@ -1,6 +1,7 @@
 import { getTranslations, setRequestLocale } from "next-intl/server";
 import { Link } from "@/i18n/routing";
 import { Shell } from "@/components/shell";
+import { PrintButton } from "@/components/print-button";
 import { analyze, strengthLabel } from "@/lib/analysis/analyzer";
 import { writeLetter } from "@/lib/analysis/letters";
 import { SAMPLE_REPORTS } from "@/lib/analysis/sample";
@@ -25,6 +26,7 @@ export default async function Analysis({ params, searchParams }: { params: Promi
           <p className="mt-1 max-w-2xl text-sm text-slate-600">{t("subtitle")}</p>
         </div>
         <div className="flex items-center gap-2 text-sm">
+          <PrintButton label={t("print")} />
           <span className="text-slate-500">{t("language")}</span>
           <Link href="/analysis?lang=en" className={letterLang === "en" ? "btn-primary" : "btn-ghost"}>EN</Link>
           <Link href="/analysis?lang=es" className={letterLang === "es" ? "btn-primary" : "btn-ghost"}>ES</Link>

@@ -9,3 +9,6 @@
 | 5 | Original static demo kept in `/prototype` for reference only. | It was the first preview; not part of the product. |
 | 6 | shadcn/ui is deferred to Phase 2 when real screens need components; Tailwind tokens are set up now. | Avoids shipping unused components. |
 | 7 | Florida credit services organization registration and surety bond requirements **must be verified with an attorney** before taking paying clients. | Not legal advice; state rules engine is Phase 6. |
+| 8 | No image-generation tool or API key was available, so UI art is inline SVG/CSS. | Provide `OPENAI_API_KEY` and ask for the CLI fallback to add bitmap art. |
+| 9 | Phase 3 ships analyzer + bilingual letters + print-to-PDF; LLM strategist, template versioning and enclosure builder are deferred. | Letters use only vetted citations and the report's own facts. |
+| 10 | Mail layer (`src/lib/mail`) uses an adapter: Mock by default, Lob when `LOB_API_KEY` is set. Letters require a named human approver and an idempotency key. | Prevents unreviewed or duplicate mailings. Rates are estimates only. |
