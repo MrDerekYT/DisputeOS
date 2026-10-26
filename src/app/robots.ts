@@ -1,10 +1,10 @@
 import type { MetadataRoute } from "next";
 import { SITE_URL } from "@/lib/site";
 
-// Only the public marketing page is indexable; client data pages never are.
+// App pages are kept out of search results by their noindex meta tag, which crawlers must be able to fetch.
 export default function robots(): MetadataRoute.Robots {
   return {
-    rules: [{ userAgent: "*", allow: ["/en$", "/es$"], disallow: ["/en/", "/es/", "/api/"] }],
+    rules: [{ userAgent: "*", allow: "/", disallow: ["/api/"] }],
     sitemap: `${SITE_URL}/sitemap.xml`,
   };
 }

@@ -13,9 +13,9 @@ describe("response automation", () => {
     expect(decide(r).next).toBe("methodOfVerification");
     expect(followUpLetter(r, from)).toContain("1681i(a)(7)");
   });
-  it("only escalates silence after 30 days", () => {
-    expect(decide({ ...base, outcome: "noResponse" }).next).toBe("celebrate");
-    expect(decide({ ...base, outcome: "noResponse", daysSinceSent: 31 }).next).toBe("escalateNoResponse");
+  it("only escalates silence after the 45-day extended window", () => {
+    expect(decide({ ...base, outcome: "noResponse", daysSinceSent: 40 }).next).toBe("celebrate");
+    expect(decide({ ...base, outcome: "noResponse", daysSinceSent: 46 }).next).toBe("escalateNoResponse");
   });
   it("writes Spanish letters", () => {
     expect(followUpLetter({ ...base, outcome: "verified" }, from, "es")).toContain("Solicitud");
