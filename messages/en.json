@@ -1,0 +1,80 @@
+{
+  "nav": {
+    "dashboard": "Dashboard",
+    "disputes": "Disputes",
+    "import": "Import",
+    "letters": "Letters",
+    "signOut": "Sign out",
+    "language": "Español",
+    "clients": "Clients"
+  },
+  "home": {
+    "title": "DisputeOS",
+    "tagline": "Strategic dispute management with built-in FCRA/FDCPA compliance.",
+    "cta": "Open dashboard",
+    "signUp": "Create account"
+  },
+  "auth": {
+    "signIn": "Sign in",
+    "signUp": "Create account",
+    "email": "Email",
+    "password": "Password",
+    "fullName": "Full name",
+    "mode": "I want to",
+    "modePersonal": "Repair my own credit",
+    "modeAgency": "Run a credit repair business",
+    "orgName": "Business name",
+    "checkEmail": "Check your email to confirm your account.",
+    "errInvalid": "Enter a valid email and a password of 10+ characters.",
+    "errCredentials": "Invalid email or password.",
+    "errSignUp": "Could not create the account.",
+    "pending": "Please wait…"
+  },
+  "mfa": {
+    "title": "Two-factor authentication",
+    "enrollIntro": "Scan this QR code with an authenticator app, then enter the 6-digit code.",
+    "verifyIntro": "Enter the 6-digit code from your authenticator app.",
+    "code": "Code",
+    "verify": "Verify",
+    "invalid": "That code is not valid."
+  },
+  "footer": {
+    "disclaimer": "DisputeOS is software, not legal advice. Results are never guaranteed. Use in compliance with the FCRA, FDCPA and CROA."
+  },
+  "clients": {
+    "title": "Clients",
+    "new": "New client",
+    "fullName": "Full name",
+    "email": "Email",
+    "phone": "Phone",
+    "create": "Create client",
+    "empty": "No clients yet.",
+    "error": "Could not save the client.",
+    "uploadTitle": "Upload credit report",
+    "uploadHelp": "PDF, image, text or HTML (max 10 MB). Text/HTML reports are parsed for review; PDFs are stored securely.",
+    "upload": "Upload",
+    "stored": "File stored in the private vault. Automatic PDF parsing is not available yet; upload a text/HTML report to parse it.",
+    "noItems": "No items were recognized in that file.",
+    "changes": "Changes since previous report",
+    "removed": "Removed",
+    "updated": "Updated",
+    "added": "New",
+    "err_invalid": "Invalid request.",
+    "err_noFile": "Choose a file.",
+    "err_tooLarge": "File is too large (max 10 MB).",
+    "err_badType": "Unsupported file type.",
+    "err_unauthorized": "Not authorized.",
+    "err_failed": "Upload failed."
+  },
+  "review": {
+    "title": "Review parsed report",
+    "intro": "Check each extracted value against its source line. Items needing review are unchecked by default. Nothing is saved until you approve.",
+    "bureauMissing": "bureau missing",
+    "needsReview": "Needs review: {fields}",
+    "creditor": "Creditor",
+    "last4": "Account last 4",
+    "balance": "Balance ($)",
+    "approve": "Approve selected",
+    "reject": "Reject"
+  }
+}

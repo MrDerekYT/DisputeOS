@@ -1,0 +1,80 @@
+{
+  "nav": {
+    "dashboard": "Panel",
+    "disputes": "Disputas",
+    "import": "Importar",
+    "letters": "Cartas",
+    "signOut": "Cerrar sesión",
+    "language": "English",
+    "clients": "Clientes"
+  },
+  "home": {
+    "title": "DisputeOS",
+    "tagline": "Gestión estratégica de disputas con cumplimiento FCRA/FDCPA integrado.",
+    "cta": "Abrir panel",
+    "signUp": "Crear cuenta"
+  },
+  "auth": {
+    "signIn": "Iniciar sesión",
+    "signUp": "Crear cuenta",
+    "email": "Correo electrónico",
+    "password": "Contraseña",
+    "fullName": "Nombre completo",
+    "mode": "Quiero",
+    "modePersonal": "Reparar mi propio crédito",
+    "modeAgency": "Operar un negocio de reparación de crédito",
+    "orgName": "Nombre del negocio",
+    "checkEmail": "Revise su correo para confirmar su cuenta.",
+    "errInvalid": "Ingrese un correo válido y una contraseña de 10+ caracteres.",
+    "errCredentials": "Correo o contraseña incorrectos.",
+    "errSignUp": "No se pudo crear la cuenta.",
+    "pending": "Espere…"
+  },
+  "mfa": {
+    "title": "Autenticación de dos factores",
+    "enrollIntro": "Escanee este código QR con una app de autenticación e ingrese el código de 6 dígitos.",
+    "verifyIntro": "Ingrese el código de 6 dígitos de su app de autenticación.",
+    "code": "Código",
+    "verify": "Verificar",
+    "invalid": "Ese código no es válido."
+  },
+  "footer": {
+    "disclaimer": "DisputeOS es software, no asesoría legal. Nunca se garantizan resultados. Úselo conforme a FCRA, FDCPA y CROA."
+  },
+  "clients": {
+    "title": "Clientes",
+    "new": "Nuevo cliente",
+    "fullName": "Nombre completo",
+    "email": "Correo electrónico",
+    "phone": "Teléfono",
+    "create": "Crear cliente",
+    "empty": "Aún no hay clientes.",
+    "error": "No se pudo guardar el cliente.",
+    "uploadTitle": "Subir informe de crédito",
+    "uploadHelp": "PDF, imagen, texto o HTML (máx. 10 MB). Los informes de texto/HTML se analizan para revisión; los PDF se guardan de forma segura.",
+    "upload": "Subir",
+    "stored": "Archivo guardado en la bóveda privada. El análisis automático de PDF aún no está disponible; suba un informe de texto/HTML para analizarlo.",
+    "noItems": "No se reconocieron elementos en ese archivo.",
+    "changes": "Cambios desde el informe anterior",
+    "removed": "Eliminado",
+    "updated": "Actualizado",
+    "added": "Nuevo",
+    "err_invalid": "Solicitud no válida.",
+    "err_noFile": "Elija un archivo.",
+    "err_tooLarge": "El archivo es demasiado grande (máx. 10 MB).",
+    "err_badType": "Tipo de archivo no admitido.",
+    "err_unauthorized": "No autorizado.",
+    "err_failed": "Error al subir."
+  },
+  "review": {
+    "title": "Revisar informe analizado",
+    "intro": "Compare cada valor extraído con su línea de origen. Los elementos que requieren revisión aparecen sin marcar. Nada se guarda hasta que apruebe.",
+    "bureauMissing": "falta la agencia",
+    "needsReview": "Requiere revisión: {fields}",
+    "creditor": "Acreedor",
+    "last4": "Últimos 4 de la cuenta",
+    "balance": "Saldo ($)",
+    "approve": "Aprobar seleccionados",
+    "reject": "Rechazar"
+  }
+}
