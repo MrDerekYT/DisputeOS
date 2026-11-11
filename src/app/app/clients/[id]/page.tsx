@@ -224,6 +224,7 @@ async function ReportsTab({ id, ctx }: { id: string; ctx: Ctx }) {
               <tr key={r.id} className="row-link"><td><Link href={`/app/reports/${r.id}`} className="font-medium hover:underline">{BUREAU_LABEL[r.bureau]}</Link></td><td>{fmtDate(r.report_date)}</td><td className="tabular-nums">{r.n}</td><td><StatusBadge status={r.status} /></td><td className="text-muted">{relTime(r.created_at)} · {r.source}</td></tr>))}</tbody></table></div>
         )}
         {reports.some((r) => r.status === 'approved') && <Link href={`/app/clients/${id}/compare`} className="btn-primary"><ScanSearch size={16} /> Open the three-bureau comparison</Link>}
+        {reports.some((r) => r.status === 'approved') && <Link href={`/app/clients/${id}/what-if`} className="btn-secondary ml-2">What-if calculator</Link>}
       </div>
       <div className="space-y-6">
       <Section title="Pull automatically" hint="Credit Connect">

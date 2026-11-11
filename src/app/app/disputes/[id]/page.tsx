@@ -11,6 +11,7 @@ import { staffMembers, memberLabel, DOC_KIND_LABEL } from '@/lib/crm';
 import { BUREAU_LABEL, cn, fmtDate, isUuid, relTime, type Bureau } from '@/lib/util';
 import { addEvidenceAction, addFollowUpTaskAction, analyzeReplyAction, assignDisputeAction, nextRoundAction, recordResponseAction, transitionAction } from '../actions';
 import { PRODUCT } from '@/lib/product';
+import { loadRecheck } from '@/lib/disputes/recheck-load';
 
 export const metadata: Metadata = { title: 'Dispute' };
 
@@ -51,10 +52,11 @@ export default async function DisputePage({ params }: { params: Promise<{ id: st
       db.rows<{ id: string; round: number; status: string }>('select id, round, status from public.disputes where parent_dispute_id = $1', [id]),
       staffMembers(db),
     ]);
-    return { d, events, evidence, letters, docs, consents, tasks, children, team };
+    const check = ['submitted', 'under_investigation', 'response_received'].includes(d.status) ? await loadRecheck(db, id) : null;
+    return { d, events, evidence, letters, docs, consents, tasks, children, team, check };
   });
   if (!data) notFound();
-  const { d, events, evidence, letters, docs, consents, tasks, children, team } = data;
+  const { d, events, evidence, letters, docs, consents, tasks, children, team, check } = data;
   const cs = consentStatus(consents);
   const hasApproved = letters.some((l) => l.status === 'approved' || l.status === 'sent');
   const steps = nextSteps({ status: d.status, round: d.round, due_at: d.due_at, outcome: d.outcome, hasApprovedLetter: hasApproved, evidenceCount: evidence.length });
@@ -93,6 +95,19 @@ export default async function DisputePage({ params }: { params: Promise<{ id: st
 
       <div className="grid gap-6 lg:grid-cols-[1fr_22rem]">
         <div className="space-y-6">
+          {check && check.kind !== 'no_newer_report' && (
+            <Section title="What the newer report shows" hint={`Compared with the ${d.bureau ? BUREAU_LABEL[d.bureau as Bureau] : 'bureau'} report${check.reportDate ? ` dated ${fmtDate(check.reportDate)}` : ''} imported after this dispute’s report.`}>
+              {check.kind === 'not_on_newer_report' && <Notice tone="info" title="This account does not appear on the newer report">That can mean it was removed, or that it is reported under a different name or number. Check the report and any letter received before recording the outcome.</Notice>}
+              {check.kind === 'unchanged' && <Notice tone="info" title="No change on the newer report">The balance, statuses and delinquency date are reported the same as before.</Notice>}
+              {check.kind === 'changed' && (
+                <>
+                  <div className="table-wrap !shadow-none"><table className="table"><thead><tr><th>Reported value</th><th>Before</th><th>Now</th></tr></thead>
+                    <tbody>{check.changes.map((c) => <tr key={c.field}><td>{c.field}</td><td>{c.before}</td><td className="font-semibold">{c.after}</td></tr>)}</tbody></table></div>
+                </>
+              )}
+              <p className="mt-3 text-xs text-muted">This is a comparison only. Nothing is recorded until a person enters the response below.</p>
+            </Section>
+          )}
           {/* What to do now */}
           <Section title="What happens next" hint="The system suggests; people decide.">
             <ul className="space-y-2">{steps.map((s) => <li key={s} className="flex gap-2 text-sm"><Lightbulb size={16} className="mt-0.5 shrink-0 text-brand" />{s}</li>)}</ul>
