@@ -12,6 +12,7 @@ import {
 import { findBlockedClaims } from '../compliance/claims';
 import type { Evidence } from '../reports/analysis';
 import { draftReason } from './reasons';
+import { checkSentOn } from '../letters/service';
 
 export interface DActor { orgId: string; userId: string; role: Role; meta?: { ip?: string | null } }
 export class DisputeError extends UserError {}
@@ -77,7 +78,7 @@ interface DisputeRow {
  */
 export async function transitionDispute(
   db: Db, actor: DActor, id: string, to: DisputeStatus,
-  opts: { receivedOn?: string | null; extended?: boolean; note?: string; sentMethod?: 'certified_mail' | 'first_class_mail' | 'portal' | 'manual'; tracking?: string | null } = {},
+  opts: { receivedOn?: string | null; extended?: boolean; note?: string; sentMethod?: 'certified_mail' | 'first_class_mail' | 'portal' | 'manual'; tracking?: string | null; sentOn?: string | null } = {},
 ): Promise<void> {
   const d = await db.row<DisputeRow>('select id, client_id, status, round, workflow, due_at, submitted_at, approved_by, deadline_extended, item_label, created_by from public.disputes where id = $1 for update', [id]);
   if (!d) throw new DisputeError('Dispute not found.');
@@ -104,11 +105,16 @@ export async function transitionDispute(
     const cs = consentStatus(consents);
     if (cs.missing.length) throw new DisputeError(`Required consents are missing for this client: ${cs.missing.join(', ').replace(/_/g, ' ')}. Record them before submitting.`);
     const received = opts.receivedOn ? new Date(`${opts.receivedOn}T12:00:00Z`) : new Date();
-    const submitted = new Date();
+    // When no sent date is given it defaults to today — or to the received date, if that is earlier (it cannot have arrived before it was sent).
+    const receivedDay = received.toISOString().slice(0, 10);
+    const sentOn = checkSentOn(opts.sentOn ?? (opts.receivedOn && receivedDay < new Date().toISOString().slice(0, 10) ? receivedDay : null));
+    // submitted_at is the day the letter was actually sent (as recorded by staff), not the moment someone clicked.
+    const submitted = sentOn === new Date().toISOString().slice(0, 10) ? new Date() : new Date(`${sentOn}T12:00:00Z`);
+    if (received.getTime() < new Date(`${sentOn}T00:00:00Z`).getTime()) throw new DisputeError('The received date cannot be before the sent date.');
     set('submitted_at', submitted);
     set('deadline_extended', !!opts.extended);
     set('due_at', responseDueDate(received, !!opts.extended));
-    await db.run("update public.letters set status = 'sent', sent_at = now(), sent_method = $2, tracking_number = $3 where id = $1 and status = 'approved'", [letter.id, opts.sentMethod ?? 'certified_mail', opts.tracking ?? null]);
+    await db.run("update public.letters set status = 'sent', sent_at = now(), sent_on = $4, sent_method = $2, tracking_number = $3, delivery_source = 'staff_recorded', sent_recorded_by = $5 where id = $1 and status = 'approved'", [letter.id, opts.sentMethod ?? 'certified_mail', opts.tracking?.trim().slice(0, 80) || null, sentOn, actor.userId]);
     await db.run("update public.clients set stage = 'disputing', status = case when status in ('lead','onboarding') then 'active' else status end where id = $1", [d.client_id]);
   }
   await db.run(`update public.disputes set ${sets.join(', ')} where id = $1`, p);

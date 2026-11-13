@@ -1,11 +1,12 @@
 import Link from 'next/link';
 import type { Metadata } from 'next';
-import { ArrowRight, CheckCircle2, Circle, FileUp, HeartHandshake, MessageCircle, MessageSquareDashed, UserPlus } from 'lucide-react';
+import { ArrowRight, CheckCircle2, Circle, FileUp, HeartHandshake, MessageSquareDashed, UserPlus } from 'lucide-react';
 import { BarSeries, SplitBar } from '@/components/charts';
 import { Badge, Notice, PageHeader, Section, Stat } from '@/components/ui';
 import { getAnalytics } from '@/lib/analytics';
 import { requireStaff } from '@/lib/auth/context';
 import { clientCare } from '@/lib/client-care';
+import type { Db } from '@/lib/db';
 import { daysRemaining } from '@/lib/disputes/workflow';
 import { BUREAU_LABEL, fmtDate, relTime, type Bureau } from '@/lib/util';
 
@@ -14,7 +15,7 @@ export const metadata: Metadata = { title: 'Dashboard' };
 export default async function Dashboard({ searchParams }: { searchParams: Promise<{ denied?: string }> }) {
   const sp = await searchParams;
   const ctx = await requireStaff();
-  const { a, mine, setup, care } = await ctx.tx(async (db) => ({
+  const { a, mine, setup, care, first3 } = await ctx.tx(async (db) => ({
     a: await getAnalytics(db, { rangeDays: 90, withTeam: false, withRevenue: false }),
     mine: await db.rows<{ id: string; title: string; due_at: string | null; client_id: string | null; client_name: string | null }>(
       `select t.id, t.title, t.due_at, t.client_id, c.full_name as client_name from public.tasks t left join public.clients c on c.id = t.client_id
@@ -24,6 +25,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
               (select count(*)::int from public.credit_reports where status = 'approved') as approved, (select count(*)::int from public.disputes) as disputes,
               (select count(*)::int from public.memberships where role <> 'client') as team, (select count(*)::int from public.letters where status in ('approved','sent')) as letters`),
     care: await clientCare(db),
+    first3: await workFirst(db),
   }));
   const first = ctx.session.fullName.split(' ')[0] || 'there';
   const d = a.disputes;
@@ -39,10 +41,21 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
 
   return (
     <>
-      <PageHeader title={`Welcome back, ${first}`} subtitle={`${ctx.session.orgName} · everything below is live data from your workspace.`}
-        actions={<Link href="/app/clients/new" className="btn-primary">New client</Link>} />
+      <PageHeader title={`Welcome back, ${first}`} subtitle={`${ctx.session.orgName} · everything below is live data from your workspace.`} />
       {sp.denied && <div className="mb-4"><Notice tone="warn" title="Not available for your role">Ask an admin if you need access to that area.</Notice></div>}
       {trialDays && <div className="mb-4"><Notice tone="info" title={`Trial: ${trialDays.d} day${trialDays.d === 1 ? '' : 's'} left`}>You are on the free trial. Billing is not connected in this build, so nothing is charged.</Notice></div>}
+
+      <section aria-labelledby="do-first" className="mb-6">
+        <h2 id="do-first" className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted">Do these first</h2>
+        <div className="grid gap-4 lg:grid-cols-3">
+          <WorkList title="Overdue deadlines" count={first3.counts.overdue} tone="bad" empty="No investigation deadline has passed." allHref="/app/disputes?view=table" allLabel="All disputes"
+            items={first3.overdue.map((d) => ({ key: d.id, href: `/app/disputes/${d.id}`, title: d.item_label, sub: d.client_name, right: `${d.days}d overdue` }))} />
+          <WorkList title="Letters awaiting approval" count={first3.counts.letters} tone="warn" empty="No letter is waiting for approval." allHref="/app/letters?status=pending_approval" allLabel="All letters"
+            items={first3.letters.map((l) => ({ key: l.id, href: `/app/letters/${l.id}`, title: l.title, sub: l.client_name, right: relTime(l.created_at) }))} />
+          <WorkList title="Unanswered messages" count={care.counts.messages} tone="warn" empty="No client is waiting for a reply." allHref="/app/inbox" allLabel="Inbox"
+            items={care.messages.map((m) => ({ key: m.id, href: `/app/clients/${m.client_id}?tab=messages`, title: m.client_name, sub: m.body, right: relTime(m.created_at) }))} />
+        </div>
+      </section>
 
       {brandNew || steps.some(([, done]) => !done) ? (
         <Section title="Get set up" hint="A few steps to your first reviewed dispute." className="mb-6">
@@ -61,13 +74,11 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
         <Stat label="Open tasks" value={a.tasks.open} tone={a.tasks.overdue ? 'warn' : undefined} sub={a.tasks.overdue ? `${a.tasks.overdue} overdue` : 'all on time'} href="/app/tasks" />
       </div>
 
-      <Section className="mt-6" title="Client care" hint="Clients who are waiting on your team. Reply, review, or send an update — it’s what keeps clients confident."
-        actions={<span className="flex items-center gap-1.5 text-xs text-muted"><HeartHandshake size={14} aria-hidden /> {care.total === 0 ? 'Everyone is up to date' : `${care.total} waiting`}</span>}>
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <Section className="mt-6" title="Client care" hint="New leads, uploads to review, and clients who have not heard from you lately."
+        actions={<span className="flex items-center gap-1.5 text-xs text-muted"><HeartHandshake size={14} aria-hidden /> {care.total - care.counts.messages === 0 ? 'Everyone is up to date' : `${care.total - care.counts.messages} waiting`}</span>}>
+        <div className="grid gap-4 md:grid-cols-3">
           <CareList icon={UserPlus} title="New leads to contact" count={care.counts.leads} empty="No new leads waiting."
             items={care.leads.map((l) => ({ key: l.id, href: `/app/clients/${l.id}`, name: l.full_name, detail: l.source ?? 'Added by your team', when: relTime(l.created_at), urgent: l.hours >= 24 }))} />
-          <CareList icon={MessageCircle} title="Waiting for a reply" count={care.counts.messages} empty="No unanswered client messages."
-            items={care.messages.map((m) => ({ key: m.id, href: `/app/clients/${m.client_id}?tab=messages`, name: m.client_name, detail: m.body, when: relTime(m.created_at), urgent: m.hours >= 24 }))} />
           <CareList icon={FileUp} title="Uploads to review" count={care.counts.uploads} empty="No client uploads waiting."
             items={care.uploads.map((u) => ({ key: u.id, href: `/app/clients/${u.client_id}?tab=documents`, name: u.client_name, detail: u.file_name, when: relTime(u.created_at), urgent: u.hours >= 48 }))} />
           <CareList icon={MessageSquareDashed} title="No update in 14+ days" count={care.counts.quiet} empty="Every active client has heard from you recently."
@@ -107,7 +118,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
 
 type CareItem = { key: string; href: string; name: string; detail: string; when: string; urgent: boolean };
 
-function CareList({ icon: Icon, title, items, count, empty }: { icon: typeof MessageCircle; title: string; items: CareItem[]; count: number; empty: string }) {
+function CareList({ icon: Icon, title, items, count, empty }: { icon: typeof FileUp; title: string; items: CareItem[]; count: number; empty: string }) {
   return (
     <div className="rounded-xl border border-line p-4">
       <h3 className="mb-3 flex items-center justify-between gap-2 text-sm font-semibold"><span className="flex items-center gap-2"><Icon size={15} className="text-brand" aria-hidden />{title}</span>{count > 0 && <Badge tone={items.some((i) => i.urgent) ? 'warn' : 'neutral'}>{count}</Badge>}</h3>
@@ -120,4 +131,41 @@ function CareList({ icon: Icon, title, items, count, empty }: { icon: typeof Mes
       )}
     </div>
   );
+}
+
+type WorkItem = { key: string; href: string; title: string; sub: string; right: string };
+
+/** One of the three "do these first" queues. The count is the real total; the list shows the oldest five. */
+function WorkList({ title, count, tone, items, empty, allHref, allLabel }: { title: string; count: number; tone: 'bad' | 'warn'; items: WorkItem[]; empty: string; allHref: string; allLabel: string }) {
+  return (
+    <div className={`card p-4 ${count > 0 ? (tone === 'bad' ? 'border-bad/40' : 'border-warn/40') : ''}`}>
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <h3 className="text-base font-semibold">{title}</h3>
+        <Badge tone={count === 0 ? 'ok' : tone}>{count}</Badge>
+      </div>
+      {items.length === 0 ? <p className="text-sm text-muted">{empty}</p> : (
+        <ul className="space-y-2.5">{items.map((i) => (
+          <li key={i.key}><Link href={i.href} className="group block text-sm">
+            <div className="flex items-center justify-between gap-2"><span className="truncate font-medium group-hover:underline">{i.title}</span><span className={`shrink-0 text-xs font-medium ${tone === 'bad' ? 'text-bad' : 'text-muted'}`}>{i.right}</span></div>
+            <p className="truncate text-xs text-muted">{i.sub}</p>
+          </Link></li>))}</ul>
+      )}
+      {count > items.length && <p className="mt-3 text-xs text-muted">Showing the oldest {items.length} of {count}.</p>}
+      <Link href={allHref} className="mt-3 inline-block text-xs font-medium text-brand-strong hover:underline">{allLabel}</Link>
+    </div>
+  );
+}
+
+/** Overdue investigation deadlines and letters waiting for approval, oldest first, under the viewer's row-level security. */
+async function workFirst(db: Db) {
+  const [overdue, letters] = await Promise.all([
+    db.rows<{ id: string; item_label: string; client_name: string; days: number; n: number }>(
+      `select d.id, d.item_label, c.full_name as client_name, greatest(1, ceil(extract(epoch from now() - d.due_at) / 86400))::int as days, count(*) over ()::int as n
+         from public.disputes d join public.clients c on c.id = d.client_id
+        where d.status in ('submitted', 'under_investigation') and d.due_at < now() order by d.due_at limit 5`),
+    db.rows<{ id: string; title: string; client_name: string; created_at: string; n: number }>(
+      `select l.id, l.title, c.full_name as client_name, l.created_at, count(*) over ()::int as n
+         from public.letters l join public.clients c on c.id = l.client_id where l.status = 'pending_approval' order by l.created_at limit 5`),
+  ]);
+  return { overdue, letters, counts: { overdue: overdue[0]?.n ?? 0, letters: letters[0]?.n ?? 0 } };
 }

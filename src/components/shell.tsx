@@ -8,22 +8,26 @@ import { MobileDrawer, NavLinks, ThemeToggle, type NavItem } from './shell-clien
 import type { Ctx } from '@/lib/auth/context';
 import { titleCase } from '@/lib/util';
 
+/** Main workflow first; tools and business admin are grouped below so the daily path is easy to scan. */
 export function staffNav(ctx: Ctx, counts: { tasks?: number; inbox?: number } = {}): NavItem[] {
+  const work = 'Daily work';
+  const tools = 'Tools';
+  const admin = 'Business';
   const items: NavItem[] = [
-    { href: '/app', label: 'Dashboard', icon: 'home' },
-    { href: '/app/clients', label: 'Clients', icon: 'users' },
-    { href: '/app/disputes', label: 'Disputes', icon: 'gavel' },
-    { href: '/app/letters', label: 'Letters', icon: 'file' },
-    { href: '/app/tasks', label: 'Tasks', icon: 'tasks', badge: counts.tasks },
-    { href: '/app/inbox', label: 'Inbox', icon: 'inbox', badge: counts.inbox },
-    { href: '/app/assistant', label: 'AI assistant', icon: 'spark' },
+    { href: '/app', label: 'Dashboard', icon: 'home', group: work },
+    { href: '/app/clients', label: 'Clients', icon: 'users', group: work },
+    { href: '/app/disputes', label: 'Disputes', icon: 'gavel', group: work },
+    { href: '/app/letters', label: 'Letters', icon: 'file', group: work },
+    { href: '/app/tasks', label: 'Tasks', icon: 'tasks', badge: counts.tasks, group: work },
+    { href: '/app/inbox', label: 'Inbox', icon: 'inbox', badge: counts.inbox, group: work },
+    { href: '/app/assistant', label: 'AI assistant', icon: 'spark', group: tools },
   ];
-  if (ctx.can('automations:manage')) items.push({ href: '/app/automations', label: 'Automations', icon: 'zap' });
-  if (ctx.can('analytics:read')) items.push({ href: '/app/analytics', label: 'Analytics', icon: 'chart' });
-  if (ctx.can('billing:read')) items.push({ href: '/app/billing', label: 'Billing', icon: 'card' });
-  if (ctx.can('team:manage') || ctx.can('analytics:team')) items.push({ href: '/app/team', label: 'Team', icon: 'team' });
-  if (ctx.can('settings:manage')) items.push({ href: '/app/settings', label: 'Settings', icon: 'settings' });
-  if (ctx.can('audit:read')) items.push({ href: '/app/audit', label: 'Audit log', icon: 'audit' });
+  if (ctx.can('automations:manage')) items.push({ href: '/app/automations', label: 'Automations', icon: 'zap', group: tools });
+  if (ctx.can('analytics:read')) items.push({ href: '/app/analytics', label: 'Analytics', icon: 'chart', group: tools });
+  if (ctx.can('billing:read')) items.push({ href: '/app/billing', label: 'Billing', icon: 'card', group: admin });
+  if (ctx.can('team:manage') || ctx.can('analytics:team')) items.push({ href: '/app/team', label: 'Team', icon: 'team', group: admin });
+  if (ctx.can('settings:manage')) items.push({ href: '/app/settings', label: 'Settings', icon: 'settings', group: admin });
+  if (ctx.can('audit:read')) items.push({ href: '/app/audit', label: 'Audit log', icon: 'audit', group: admin });
   return items;
 }
 
@@ -60,7 +64,7 @@ export function AppShell({ ctx, nav, children, wide }: { ctx: Ctx; nav: NavItem[
           <Link href="/app" className="lg:hidden"><Logo size={24} text={false} /></Link>
           <CommandPalette />
           <div className="ml-auto flex items-center gap-1">
-            <Link href="/app/clients/new" className="btn-primary btn-sm hidden sm:inline-flex">New client</Link>
+            <Link href="/app/clients/new" className="btn-primary btn-sm">New client</Link>
             <ThemeToggle />
           </div>
         </header>

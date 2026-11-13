@@ -3,13 +3,14 @@ import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import { Download, History, Sparkles } from 'lucide-react';
 import { ActionForm, ConfirmButton, Field, Select, SubmitButton } from '@/components/forms';
+import { AiSuggest } from '@/components/ai-suggest';
 import { LetterEditor } from '@/components/letter-editor';
-import { Notice, PageHeader, Section, StatusBadge } from '@/components/ui';
+import { DeliveryRecord, Notice, PageHeader, Section, StatusBadge } from '@/components/ui';
 import { providerStatus } from '@/lib/ai/provider';
 import { requireStaff } from '@/lib/auth/context';
 import { approvalBlockers } from '@/lib/letters/service';
 import { fmtDate, isUuid, relTime } from '@/lib/util';
-import { aiAssistLetterAction, letterStatusAction, markSentAction, restoreVersionAction, saveLetterAction } from '../actions';
+import { aiAcceptLetterAction, aiSuggestLetterAction, letterStatusAction, markSentAction, restoreVersionAction, saveLetterAction } from '../actions';
 import { PRODUCT } from '@/lib/product';
 
 export const metadata: Metadata = { title: 'Letter' };
@@ -19,9 +20,9 @@ export default async function LetterPage({ params }: { params: Promise<{ id: str
   if (!isUuid(id)) notFound();
   const ctx = await requireStaff('clients:read');
   const data = await ctx.tx(async (db) => {
-    const l = await db.row<{ id: string; title: string; status: string; client_id: string; client_name: string; dispute_id: string | null; current_version: number; recipient_name: string; approved_at: string | null; approver: string | null; sent_at: string | null; sent_method: string | null; tracking_number: string | null; language: string }>(
-      `select l.id, l.title, l.status, l.client_id, c.full_name as client_name, l.dispute_id, l.current_version, l.recipient_name, l.approved_at, u.full_name as approver, l.sent_at, l.sent_method, l.tracking_number, l.language
-         from public.letters l join public.clients c on c.id = l.client_id left join public.users u on u.id = l.approved_by where l.id = $1`, [id]);
+    const l = await db.row<{ id: string; title: string; status: string; client_id: string; client_name: string; dispute_id: string | null; current_version: number; recipient_name: string; approved_at: string | null; approver: string | null; sent_at: string | null; sent_on: string | null; sent_method: string | null; tracking_number: string | null; delivery_source: string; carrier_delivered_at: string | null; recorder: string | null; language: string }>(
+      `select l.id, l.title, l.status, l.client_id, c.full_name as client_name, l.dispute_id, l.current_version, l.recipient_name, l.approved_at, u.full_name as approver, l.sent_at, l.sent_on, l.sent_method, l.tracking_number, l.delivery_source, l.carrier_delivered_at, sr.full_name as recorder, l.language
+         from public.letters l join public.clients c on c.id = l.client_id left join public.users u on u.id = l.approved_by left join public.users sr on sr.id = l.sent_recorded_by where l.id = $1`, [id]);
     if (!l) return null;
     const versions = await db.rows<{ version: number; source: string; change_note: string | null; created_at: string; author: string | null; body: string }>(
       `select v.version, v.source, v.change_note, v.created_at, u.full_name as author, v.body from public.letter_versions v left join public.users u on u.id = v.author_id where v.letter_id = $1 order by v.version desc`, [id]);
@@ -33,6 +34,7 @@ export default async function LetterPage({ params }: { params: Promise<{ id: str
   const blockers = approvalBlockers(body);
   const locked = l.status === 'sent' || l.status === 'void';
   const ai = providerStatus();
+  const today = new Date().toISOString().slice(0, 10);
 
   return (
     <>
@@ -42,7 +44,7 @@ export default async function LetterPage({ params }: { params: Promise<{ id: str
 
       {l.status === 'draft' && <div className="mb-4"><Notice tone="warn" title="Draft">Not yet approved. The PDF is watermarked as a draft until a manager approves it.</Notice></div>}
       {l.status === 'approved' && <div className="mb-4"><Notice tone="ok" title="Approved">Approved by {l.approver ?? 'a manager'} on {fmtDate(l.approved_at)}. Mail it, then record that it was sent.</Notice></div>}
-      {l.status === 'sent' && <div className="mb-4"><Notice tone="info" title="Sent">Recorded as sent {fmtDate(l.sent_at)} via {l.sent_method?.replace(/_/g, ' ')}{l.tracking_number ? ` · tracking ${l.tracking_number}` : ''}.</Notice></div>}
+      {l.status === 'sent' && <div className="mb-4"><DeliveryRecord sentOn={l.sent_on ?? l.sent_at} method={l.sent_method} tracking={l.tracking_number} source={l.delivery_source} recordedBy={l.recorder} carrierDeliveredAt={l.carrier_delivered_at} /></div>}
 
       <div className="grid gap-6 2xl:grid-cols-[1fr_20rem]">
         <LetterEditor id={l.id} initial={body} locked={locked} save={saveLetterAction} />
@@ -66,9 +68,10 @@ export default async function LetterPage({ params }: { params: Promise<{ id: str
                 <ActionForm action={markSentAction} className="space-y-3">
                   <input type="hidden" name="id" value={l.id} />
                   <Select label="How was it sent?" name="method" defaultValue="certified_mail" options={[{ value: 'certified_mail', label: 'Certified mail' }, { value: 'first_class_mail', label: 'First-class mail' }, { value: 'portal', label: 'Online portal' }, { value: 'manual', label: 'Other' }]} />
-                  <Field label="Tracking number" name="tracking" />
+                  <Field label="Date sent" name="sentOn" type="date" defaultValue={today} max={today} required />
+                  <Field label="Tracking reference" name="tracking" hint="Optional. For example the certified-mail number." maxLength={80} />
                   <SubmitButton className="w-full">Record as sent</SubmitButton>
-                  <p className="text-xs text-muted">{PRODUCT.name} does not mail anything. This records that a person did.</p>
+                  <p className="text-xs text-muted">{PRODUCT.name} does not mail anything. This records that a person did; it is not a carrier confirmation.</p>
                 </ActionForm>
               )}
               {!locked && (
@@ -82,8 +85,8 @@ export default async function LetterPage({ params }: { params: Promise<{ id: str
           {!locked && (
             <Section title="AI wording help">
               <p className="mb-3 flex items-start gap-2 text-sm text-muted"><Sparkles size={15} className="mt-0.5 shrink-0 text-brand" />{ai.note}</p>
-              <ActionForm action={aiAssistLetterAction}><input type="hidden" name="id" value={l.id} /><SubmitButton variant="secondary" className="w-full" pendingText="Thinking…">Suggest better wording</SubmitButton></ActionForm>
-              <p className="mt-2 text-xs text-muted">Suggestions are discarded automatically if any fact changes or a prohibited claim appears. Saved as a new version for you to review.</p>
+              <AiSuggest id={l.id} suggest={aiSuggestLetterAction} accept={aiAcceptLetterAction} />
+              <p className="mt-2 text-xs text-muted">The AI only sees the connecting wording. Names, amounts, dates, account references, bureau names and dispute statements are hidden from it and put back unchanged. You compare before and after, and nothing is saved until you accept. An accepted suggestion is a new draft that still needs approval.</p>
             </Section>
           )}
 

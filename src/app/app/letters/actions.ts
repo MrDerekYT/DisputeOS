@@ -4,11 +4,13 @@ import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 import type { ActionState } from '@/components/forms';
-import { parseForm, run, UserError, zBool, zOpt, zText, zUuid } from '@/lib/action';
+import { parseForm, run, UserError, zBool, zDate, zOpt, zText, zUuid } from '@/lib/action';
 import { audit } from '@/lib/audit';
 import { rewriteSafely } from '@/lib/ai/provider';
 import { requireStaff, type Ctx } from '@/lib/auth/context';
 import { findBlockedClaims } from '@/lib/compliance/claims';
+import { sameProtectedContent } from '@/lib/ai/protected';
+import type { Db } from '@/lib/db';
 import { createLetter, currentBody, markSent, saveVersion, setLetterStatus, type LActor } from '@/lib/letters/service';
 import { KIND_LABEL } from '@/lib/letters/templates';
 
@@ -57,10 +59,10 @@ export async function letterStatusAction(_: ActionState, fd: FormData): Promise<
 export async function markSentAction(_: ActionState, fd: FormData): Promise<ActionState> {
   const ctx = await requireStaff('letters:write');
   return run(async () => {
-    const d = parseForm(z.object({ id: zUuid, method: z.enum(['certified_mail', 'first_class_mail', 'portal', 'manual']), tracking: zOpt(80) }), fd);
-    await ctx.tx((db) => markSent(db, actorOf(ctx), d.id, d.method, d.tracking));
+    const d = parseForm(z.object({ id: zUuid, method: z.enum(['certified_mail', 'first_class_mail', 'portal', 'manual']), tracking: zOpt(80), sentOn: zDate.optional().or(z.literal('')) }), fd);
+    await ctx.tx((db) => markSent(db, actorOf(ctx), d.id, d.method, d.tracking, d.sentOn || null));
     revalidatePath(`/app/letters/${d.id}`);
-    return { ok: 'Recorded as sent.' };
+    return { ok: 'Recorded as sent. This is a staff record, not a carrier confirmation.' };
   });
 }
 
@@ -75,18 +77,54 @@ export async function restoreVersionAction(fd: FormData) {
   revalidatePath(`/app/letters/${d.id}`);
 }
 
-/** Optional wording polish. Only kept if every fact survives and no prohibited claim appears; otherwise nothing changes. */
-export async function aiAssistLetterAction(_: ActionState, fd: FormData): Promise<ActionState> {
+/** Names that must never be editable by the model for this letter: the client, the recipient and the creditor. */
+async function protectedTermsFor(db: Db, letterId: string): Promise<string[]> {
+  const r = await db.row<{ client: string; recipient: string | null; creditor: string | null; item: string | null }>(
+    `select c.full_name as client, d.recipient_name as recipient, t.creditor_name as creditor, d.item_label as item
+       from public.letters l join public.clients c on c.id = l.client_id
+       left join public.disputes d on d.id = l.dispute_id left join public.tradelines t on t.id = d.tradeline_id
+      where l.id = $1`, [letterId]);
+  if (!r) return [];
+  return [r.client, ...r.client.split(/\s+/).filter((w) => w.length > 2), r.recipient, r.creditor, r.item].filter((x): x is string => !!x);
+}
+
+/**
+ * Step 1 of AI wording help: produce a suggestion and show it next to the current text. NOTHING is saved here.
+ * The model only receives the connective wording; every fact-bearing passage is hidden behind a marker and restored
+ * server-side (src/lib/ai/protected.ts).
+ */
+export async function aiSuggestLetterAction(_: ActionState, fd: FormData): Promise<ActionState> {
   const ctx = await requireStaff('letters:write');
   return run(async () => {
     const d = parseForm(z.object({ id: zUuid }), fd);
-    const cur = await ctx.tx((db) => currentBody(db, d.id));
-    if (!cur) throw new UserError('Letter not found.');
-    const out = await rewriteSafely(cur.body, 'Polish this consumer letter: clear, courteous, concise. Keep the structure, headings and all legal citations exactly.');
-    if (!out.usedAi) return { error: out.provider === 'rules' ? 'No AI provider is configured (AI_PROVIDER). The template wording is unchanged.' : out.note ?? 'The AI suggestion was not safe to use, so nothing changed.' };
-    const v = await ctx.tx((db) => saveVersion(db, actorOf(ctx), d.id, out.text, 'ai_draft', `AI wording suggestion (${out.provider})`));
+    const loaded = await ctx.tx(async (db) => ({ cur: await currentBody(db, d.id), terms: await protectedTermsFor(db, d.id) }));
+    if (!loaded.cur) throw new UserError('Letter not found.');
+    const out = await rewriteSafely(loaded.cur.body, 'Polish the wording of this consumer letter so it is clear, courteous and concise.', undefined, loaded.terms);
+    if (!out.usedAi) return { error: out.provider === 'rules' ? 'No AI provider is configured (AI_PROVIDER). The letter is unchanged.' : out.note ?? 'The AI suggestion was not safe to use, so nothing changed.' };
+    return { ok: 'Suggestion ready. Compare it with the current text below. Nothing has been saved.', data: { before: loaded.cur.body, after: out.text, version: String(loaded.cur.version), provider: out.provider } };
+  });
+}
+
+/**
+ * Step 2: a person accepts the suggestion they just compared. The text is re-checked on the server against the
+ * letter as it is NOW (it may not be the version the suggestion was made from, and the browser is not trusted):
+ * every protected passage must be unchanged. It is saved as a new draft version, which still needs approval.
+ */
+export async function aiAcceptLetterAction(_: ActionState, fd: FormData): Promise<ActionState> {
+  const ctx = await requireStaff('letters:write');
+  return run(async () => {
+    const d = parseForm(z.object({ id: zUuid, version: z.coerce.number().int().min(1), text: z.string().min(20).max(30000), provider: zOpt(80) }), fd);
+    const v = await ctx.tx(async (db) => {
+      const cur = await currentBody(db, d.id);
+      if (!cur) throw new UserError('Letter not found.');
+      if (cur.version !== d.version) throw new UserError('The letter changed after this suggestion was made. Ask for a new suggestion.');
+      if (!sameProtectedContent(cur.body, d.text, await protectedTermsFor(db, d.id))) throw new UserError('This suggestion changes a name, amount, date or dispute statement, so it was not saved.');
+      const claims = findBlockedClaims(d.text);
+      if (claims.length) throw new UserError(`This suggestion contains a prohibited claim (${claims[0]!.why}), so it was not saved.`);
+      return saveVersion(db, actorOf(ctx), d.id, d.text, 'ai_draft', `AI wording suggestion accepted by staff (${d.provider ?? 'ai'})`);
+    });
     revalidatePath(`/app/letters/${d.id}`);
-    return { ok: `AI suggestion saved as version ${v}. Review it carefully — it still needs approval.` };
+    return { ok: `Saved as version ${v}. It is a draft: read it once more, then send it for approval.` };
   });
 }
 

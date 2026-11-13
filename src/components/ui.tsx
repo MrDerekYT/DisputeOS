@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 import { Inbox } from 'lucide-react';
-import { cn, initials } from '@/lib/util';
+import { cn, fmtDate, initials } from '@/lib/util';
 import { PRODUCT, wordmarkParts } from '@/lib/product';
 
 export type Tone = 'neutral' | 'ok' | 'warn' | 'bad' | 'info' | 'brand';
@@ -179,6 +179,32 @@ export function Logo({ size = 28, text = true }: { size?: number; text?: boolean
       </svg>
       {text && <Wordmark />}
     </span>
+  );
+}
+
+const METHOD_LABEL: Record<string, string> = { certified_mail: 'Certified mail', first_class_mail: 'First-class mail', portal: 'Online portal', manual: 'Other' };
+
+/**
+ * How a letter's delivery is known. "Recorded by staff" means a person typed it in; "Confirmed by carrier" is only
+ * ever shown when a mail carrier integration reported it. The two are never merged.
+ */
+export function DeliveryRecord({ sentOn, method, tracking, source, recordedBy, carrierDeliveredAt }: {
+  sentOn: string | null; method: string | null; tracking: string | null; source: string; recordedBy?: string | null; carrierDeliveredAt?: string | null;
+}) {
+  const carrier = source === 'carrier_confirmed';
+  return (
+    <div className="rounded-xl border border-line bg-raised p-3.5 text-sm" data-delivery-source={source}>
+      <div className="mb-1.5 flex flex-wrap items-center gap-2">
+        <Badge tone={carrier ? 'ok' : 'neutral'}>{carrier ? 'Confirmed by carrier' : 'Recorded by staff'}</Badge>
+        <span className="font-medium">Sent {fmtDate(sentOn)}{method ? ` · ${METHOD_LABEL[method] ?? method}` : ''}</span>
+      </div>
+      <dl className="grid gap-x-6 gap-y-1 text-xs text-muted sm:grid-cols-2">
+        <div><dt className="inline">Tracking reference: </dt><dd className="inline text-ink">{tracking || 'none entered'}</dd></div>
+        {recordedBy && <div><dt className="inline">Entered by: </dt><dd className="inline text-ink">{recordedBy}</dd></div>}
+        <div><dt className="inline">Delivery: </dt><dd className="inline text-ink">{carrier && carrierDeliveredAt ? `delivered ${fmtDate(carrierDeliveredAt)} (carrier)` : 'not confirmed by a carrier'}</dd></div>
+      </dl>
+      {!carrier && <p className="mt-2 text-xs text-muted">A person entered these details after mailing the letter. No carrier has confirmed delivery.</p>}
+    </div>
   );
 }
 

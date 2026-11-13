@@ -5,7 +5,7 @@ import { Badge, EmptyState, Notice, PageHeader, Section, StatusBadge } from '@/c
 import { requireStaff } from '@/lib/auth/context';
 import { ACTION_TYPES, TRIGGERS, type ActionDef, type AutomationRow } from '@/lib/automation/engine';
 import { DOC_KIND_LABEL, DOC_KINDS } from '@/lib/crm';
-import { relTime } from '@/lib/util';
+import { fmtDate, relTime } from '@/lib/util';
 import { addStartersAction, deleteAutomationAction, runNowAction, saveAutomationAction, toggleAutomationAction } from './actions';
 
 export const metadata: Metadata = { title: 'Automations' };
@@ -21,7 +21,8 @@ function Describe({ a }: { a: AutomationRow }) {
 
 export default async function AutomationsPage() {
   const ctx = await requireStaff('automations:manage');
-  const { autos, runs } = await ctx.tx(async (db) => ({
+  const { autos, runs, jobs } = await ctx.tx(async (db) => ({
+    jobs: await db.rows<{ id: string; status: string; started_at: string; executed: number; pending: number; skipped: number; error: string | null }>('select id, status, started_at, executed, pending, skipped, error from public.job_runs order by started_at desc limit 5'),
     autos: await db.rows<AutomationRow>('select * from public.automations order by created_at'),
     runs: await db.rows<{ id: string; status: string; created_at: string; name: string; client: string | null }>(
       `select r.id, r.status, r.created_at, a.name, r.result->>'client_name' as client from public.automation_runs r join public.automations a on a.id = r.automation_id order by r.created_at desc limit 15`),
@@ -51,6 +52,19 @@ export default async function AutomationsPage() {
       )}
 
       <details className="mt-6"><summary className="btn-secondary w-fit cursor-pointer list-none">New automation</summary><div className="card card-pad mt-3"><AutomationForm /></div></details>
+
+      <Section title="Scheduled checks" className="mt-8" hint="Reminders and deadline checks run on a schedule set up by whoever hosts the app. Each run is recorded here, including failures.">
+        {jobs.length === 0 ? <p className="text-sm text-muted">No scheduled run has been recorded yet. Until the schedule is set up, use “Run scheduled checks now” above. See docs/INTEGRATIONS.md for the scheduler command.</p> : (
+          <>
+            {jobs[0]!.status === 'failed' && <div className="mb-3"><Notice tone="bad" title="The last scheduled run failed">{jobs[0]!.error ?? 'No details were recorded.'} Nothing was half-done: a failed run is rolled back and retried on the next schedule.</Notice></div>}
+            <ul className="divide-y divide-line text-sm">{jobs.map((j) => (
+              <li key={j.id} className="flex flex-wrap items-center justify-between gap-2 py-2">
+                <span className="flex items-center gap-2"><Badge tone={j.status === 'ok' ? 'ok' : 'bad'}>{j.status === 'ok' ? 'Completed' : 'Failed'}</Badge><span className="text-muted">{fmtDate(j.started_at)} · {relTime(j.started_at)}</span></span>
+                <span className="text-muted">{j.status === 'ok' ? `${j.executed} done · ${j.pending} waiting for approval · ${j.skipped} already handled` : j.error}</span>
+              </li>))}</ul>
+          </>
+        )}
+      </Section>
 
       <Section title="Recent runs" className="mt-8" hint="Every execution is recorded.">
         {runs.length === 0 ? <p className="text-sm text-muted">Nothing has run yet.</p> : (

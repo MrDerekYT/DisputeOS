@@ -3,7 +3,7 @@ import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import { CalendarClock, Check as CheckIcon, FileText, Lightbulb } from 'lucide-react';
 import { ActionForm, Check, ConfirmButton, Field, Select, SubmitButton, TextArea } from '@/components/forms';
-import { Badge, EmptyState, Notice, PageHeader, Section, StatusBadge } from '@/components/ui';
+import { Badge, DeliveryRecord, EmptyState, Notice, PageHeader, Section, StatusBadge } from '@/components/ui';
 import { requireStaff } from '@/lib/auth/context';
 import { consentStatus } from '@/lib/compliance/disclosures';
 import { CATEGORIES, daysRemaining, deadlineState, nextSteps, OUTCOME_LABEL, OUTCOMES, PIPELINE, STATUS_LABEL, type DisputeStatus, type Outcome } from '@/lib/disputes/workflow';
@@ -45,7 +45,7 @@ export default async function DisputePage({ params }: { params: Promise<{ id: st
         `select e.id, e.kind, e.from_status, e.to_status, e.note, e.created_at, u.full_name as actor from public.dispute_events e left join public.users u on u.id = e.actor_id where e.dispute_id = $1 order by e.created_at desc, e.id`, [id]),
       db.rows<{ id: string; label: string; note: string | null; file_name: string | null; document_id: string | null; created_at: string }>(
         `select ev.id, ev.label, ev.note, ev.document_id, ev.created_at, doc.file_name from public.dispute_evidence ev left join public.documents doc on doc.id = ev.document_id where ev.dispute_id = $1 order by ev.created_at`, [id]),
-      db.rows<{ id: string; title: string; status: string; current_version: number; created_at: string }>('select id, title, status, current_version, created_at from public.letters where dispute_id = $1 order by created_at desc', [id]),
+      db.rows<{ id: string; title: string; status: string; current_version: number; created_at: string; sent_at: string | null; sent_on: string | null; sent_method: string | null; tracking_number: string | null; delivery_source: string; carrier_delivered_at: string | null; recorder: string | null }>('select l.id, l.title, l.status, l.current_version, l.created_at, l.sent_at, l.sent_on, l.sent_method, l.tracking_number, l.delivery_source, l.carrier_delivered_at, sr.full_name as recorder from public.letters l left join public.users sr on sr.id = l.sent_recorded_by where l.dispute_id = $1 order by l.created_at desc', [id]),
       db.rows<{ id: string; file_name: string; kind: string }>('select id, file_name, kind from public.documents where client_id = $1 order by created_at desc limit 50', [d.client_id]),
       db.rows<{ kind: string; signed_at: string; revoked_at: string | null }>('select kind, signed_at, revoked_at from public.client_consents where client_id = $1', [d.client_id]),
       db.rows<{ id: string; title: string; status: string; due_at: string | null }>("select id, title, status, due_at from public.tasks where dispute_id = $1 order by status, due_at", [id]),
@@ -58,6 +58,7 @@ export default async function DisputePage({ params }: { params: Promise<{ id: st
   if (!data) notFound();
   const { d, events, evidence, letters, docs, consents, tasks, children, team, check } = data;
   const cs = consentStatus(consents);
+  const today = new Date().toISOString().slice(0, 10);
   const hasApproved = letters.some((l) => l.status === 'approved' || l.status === 'sent');
   const steps = nextSteps({ status: d.status, round: d.round, due_at: d.due_at, outcome: d.outcome, hasApprovedLetter: hasApproved, evidenceCount: evidence.length });
   const canApprove = ctx.can('disputes:approve');
@@ -108,6 +109,11 @@ export default async function DisputePage({ params }: { params: Promise<{ id: st
               <p className="mt-3 text-xs text-muted">This is a comparison only. Nothing is recorded until a person enters the response below.</p>
             </Section>
           )}
+          {letters.filter((l) => l.status === 'sent').slice(0, 1).map((l) => (
+            <Section key={l.id} title="Delivery record" hint="How and when the approved letter was sent.">
+              <DeliveryRecord sentOn={l.sent_on ?? l.sent_at} method={l.sent_method} tracking={l.tracking_number} source={l.delivery_source} recordedBy={l.recorder} carrierDeliveredAt={l.carrier_delivered_at} />
+            </Section>
+          ))}
           {/* What to do now */}
           <Section title="What happens next" hint="The system suggests; people decide.">
             <ul className="space-y-2">{steps.map((s) => <li key={s} className="flex gap-2 text-sm"><Lightbulb size={16} className="mt-0.5 shrink-0 text-brand" />{s}</li>)}</ul>
@@ -126,14 +132,18 @@ export default async function DisputePage({ params }: { params: Promise<{ id: st
                   {cs.missing.length > 0 && <Notice tone="bad" title="Cannot submit yet">Required consents missing: {cs.missing.join(', ').replace(/_/g, ' ')}. <Link className="underline" href={`/app/clients/${d.client_id}?tab=overview`}>Record them on the client profile.</Link></Notice>}
                   {cs.inCancellationWindow && <Notice tone="warn" title="Within the 3-business-day cancellation window">The client signed their agreement recently and may still cancel without penalty. Confirm before mailing.</Notice>}
                   {!hasApproved && <Notice tone="bad" title="No approved letter">Approve a letter for this dispute first.</Notice>}
+                  {/* The delivery form only appears once it can succeed: an approved letter and the required consents. */}
+                  {hasApproved && cs.missing.length === 0 && (<>
                   <div className="grid gap-3 sm:grid-cols-2">
                     <Select label="How was it sent?" name="sentMethod" defaultValue="certified_mail" options={[{ value: 'certified_mail', label: 'Certified mail' }, { value: 'first_class_mail', label: 'First-class mail' }, { value: 'portal', label: 'Online portal' }, { value: 'manual', label: 'Other' }]} />
-                    <Field label="Tracking number" name="tracking" />
+                    <Field label="Date sent" name="sentOn" type="date" defaultValue={today} max={today} required />
+                    <Field label="Tracking reference" name="tracking" hint="Optional. For example the certified-mail number." maxLength={80} />
                     <Field label="Date the recipient received it (if known)" name="receivedOn" type="date" hint="The 30-day clock starts at receipt. Leave blank to count from today." />
                     <div className="self-end pb-2"><Check name="extended">Client sent additional information (45-day window)</Check></div>
                   </div>
                   <p className="text-xs text-muted">Recording a submission means a person has already mailed the approved letter. {PRODUCT.name} never sends correspondence on its own.</p>
                   <SubmitButton>Record submission</SubmitButton>
+                  </>)}
                 </ActionForm>
               )}
               {(d.status === 'submitted') && <Transition id={d.id} to="under_investigation" label="Mark as under investigation" variant="secondary" />}

@@ -44,6 +44,25 @@ into one codebase. Both branches are untouched. See `docs/ENGINEERING_ASSESSMENT
 - **Landing page:** "Client experience" section with a clearly labelled sample-data illustration.
 - 13 more tests (223 total); browser journey extended to 31 steps.
 
+### Pilot-readiness pass
+- **AI letter polishing rebuilt.** The old check compared sets of numbers and accepted a rewrite that swapped the Experian and
+  Equifax balances, and another that renamed the creditor. Fact-bearing sentences (names, amounts, dates, account references,
+  bureau names, citations, dispute statements) are now replaced by opaque markers before anything is sent to the model and
+  restored server-side; a missing, repeated, reordered, altered or moved marker — or any factual wording added by the model —
+  discards the rewrite and keeps the original. Staff see a before/after preview; nothing is saved until they accept, the
+  accepted text is re-validated on the server, and it is saved as a draft that still needs approval.
+- **`npm run jobs:run` works** (it pointed at a missing file). Scheduled jobs share one code path with `/api/jobs/run`, record
+  every run in `job_runs`, roll back and report a failing organization without stopping the others, and are safe to retry.
+- **Delivery records.** Submission captures method, date sent and an optional tracking reference, stored as a staff record and
+  shown as "Recorded by staff"; "Confirmed by carrier" is reserved for a mail integration and cannot be set by hand.
+- **Dashboard and navigation.** Overdue deadlines, letters awaiting approval and unanswered messages come first; one
+  "New client" button; navigation grouped into Daily work / Tools / Business.
+- **Integration status** is labelled by what works in the configured environment, with the manual path and the exact remaining
+  dependency for live credit pulls, certified mail, payments, SMS and external e-signature.
+- **Fixed:** portal clients got "not found" when downloading their own approved/sent letter (missing row-level policy).
+- **Fixed:** the "Record submission" form was offered before a letter was approved or consents were recorded.
+- New browser test `e2e/dispute-workflow.cjs` (11 steps, synthetic data) and 19 more automated tests (248 total).
+
 ### Finishing pass
 - **Enquiry form for new leads:** each agency gets a public, branded form at `/start/<slug>` (link in Settings). A submission becomes
   a lead with a follow-up task and appears under "New leads to contact" on the dashboard. Contact details only; consent to be

@@ -50,6 +50,8 @@ grant disputeos_rls to <your_app_role>;
 4. `npm run db:migrate` (never `db:reset`).
 5. Put `STORAGE_DIR` on a persistent encrypted volume (documents are additionally AES-256-GCM encrypted by the app).
 6. Schedule `POST /api/jobs/run` (every 15 min) with `authorization: Bearer $CRON_SECRET` for automations and deadline tracking.
+   From a machine with the repo and the same environment, `npm run jobs:run` makes that call and exits non-zero if the app is
+   unreachable, the secret is wrong, or any organization's jobs failed. It is safe to retry. See docs/INTEGRATIONS.md.
 7. Review `docs/INTEGRATIONS.md` for what each optional integration needs, and what has and has not been verified.
 
 ## Rotating the encryption key

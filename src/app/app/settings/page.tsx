@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import type { Metadata } from 'next';
-import { AlertTriangle, CheckCircle2, CircleDashed, Wrench } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, CircleDashed, Hand, Wrench } from 'lucide-react';
 import { ActionForm, Field, SubmitButton } from '@/components/forms';
 import { Badge, DefinitionList, Notice, PageHeader, Section } from '@/components/ui';
 import { requireStaff } from '@/lib/auth/context';
@@ -16,8 +16,8 @@ import { changePasswordAction, signOutEverywhereAction, updateOrgAction } from '
 export const metadata: Metadata = { title: 'Settings' };
 
 const STATUS: Record<IntegrationStatus, { label: string; tone: 'ok' | 'warn' | 'neutral' | 'bad'; icon: typeof CheckCircle2 }> = {
-  active: { label: 'Active', tone: 'ok', icon: CheckCircle2 }, dev_only: { label: 'Development mode', tone: 'warn', icon: AlertTriangle },
-  needs_credentials: { label: 'Needs credentials', tone: 'warn', icon: Wrench }, not_built: { label: 'Not built', tone: 'neutral', icon: CircleDashed },
+  active: { label: 'Active', tone: 'ok', icon: CheckCircle2 }, dev_only: { label: 'Test stand-in only', tone: 'warn', icon: AlertTriangle },
+  needs_credentials: { label: 'Needs credentials', tone: 'warn', icon: Wrench }, manual: { label: 'Manual path in use', tone: 'neutral', icon: Hand }, not_built: { label: 'Not built', tone: 'neutral', icon: CircleDashed },
 };
 
 export default async function SettingsPage() {
@@ -82,11 +82,11 @@ export default async function SettingsPage() {
 
       <div className="mt-6"><Link href="/app/settings/developers" className="card flex items-center justify-between gap-3 p-4 transition hover:border-brand/50"><span><strong>Developers &amp; connections</strong><span className="block text-sm text-muted">API keys, automatic credit-report import and provider status</span></span><span className="text-sm text-brand-strong">Open →</span></Link></div>
 
-      <Section title="Integrations — what is actually connected" className="mt-6" hint="Derived from your configuration. “Verified” means exercised against the real service.">
+      <Section title="Integrations — what is actually connected" className="mt-6" hint={`What works in this environment (${env.APP_ENV}), read from its configuration. Where no provider is connected, the manual way to finish the job is shown.`}>
         <ul className="divide-y divide-line">{integrations.map((i) => { const s = STATUS[i.status]; const Icon = s.icon; return (
           <li key={i.key} className="flex flex-col gap-1 py-3 sm:flex-row sm:items-start sm:gap-4">
             <div className="flex shrink-0 items-center gap-2 sm:w-64"><Icon size={16} className={s.tone === 'ok' ? 'text-ok' : s.tone === 'warn' ? 'text-warn' : 'text-faint'} /><span className="font-medium">{i.name}</span></div>
-            <div className="min-w-0 flex-1 text-sm"><div className="flex flex-wrap items-center gap-2"><Badge tone={s.tone}>{s.label}</Badge>{i.verified ? <Badge tone="ok">Verified</Badge> : i.status !== 'not_built' && <Badge>Not verified live</Badge>}</div><p className="mt-1 text-muted">{i.detail}</p>{i.needs && <p className="mt-0.5 text-xs text-faint">Needs: {i.needs}</p>}</div>
+            <div className="min-w-0 flex-1 text-sm"><div className="flex flex-wrap items-center gap-2"><Badge tone={s.tone}>{s.label}</Badge>{i.verified ? <Badge tone="ok">Verified</Badge> : (i.status === 'active' || i.status === 'needs_credentials') && <Badge>Not verified live</Badge>}</div><p className="mt-1 text-muted">{i.detail}</p>{i.manualPath && <p className="mt-1"><span className="font-medium">How to do it today: </span>{i.manualPath}</p>}{i.needs && <p className="mt-1 text-xs text-muted"><span className="font-medium">To connect it: </span>{i.needs}</p>}</div>
           </li>); })}</ul>
       </Section>
 

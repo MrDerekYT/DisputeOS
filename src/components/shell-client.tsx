@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { useEffect, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useState, type ReactNode } from 'react';
 import {
   BarChart3, Bell, CheckSquare, CreditCard, FileText, Gavel, Home, Inbox, Menu, Moon, ScrollText, Settings, Sparkles, Sun, Users, UsersRound, X, Zap,
 } from 'lucide-react';
@@ -10,18 +10,20 @@ import { cn } from '@/lib/util';
 
 const ICONS = { home: Home, users: Users, gavel: Gavel, file: FileText, tasks: CheckSquare, inbox: Inbox, zap: Zap, chart: BarChart3, card: CreditCard, team: UsersRound, settings: Settings, audit: ScrollText, spark: Sparkles, bell: Bell };
 export type IconKey = keyof typeof ICONS;
-export interface NavItem { href: string; label: string; icon: IconKey; badge?: number }
+export interface NavItem { href: string; label: string; icon: IconKey; badge?: number; group?: string }
 
 export function NavLinks({ items, onNavigate }: { items: NavItem[]; onNavigate?: () => void }) {
   const path = usePathname();
   return (
     <nav aria-label="Main" className="flex flex-col gap-0.5">
-      {items.map((it) => {
+      {items.map((it, i) => {
         const Icon = ICONS[it.icon];
+        const heading = it.group && it.group !== items[i - 1]?.group ? it.group : null;
         const active = it.href === '/app' || it.href === '/portal' ? path === it.href : path === it.href || path.startsWith(`${it.href}/`);
         return (
+          <Fragment key={it.href}>
+          {heading && <div className={cn('px-3 pb-1 text-[11px] font-semibold uppercase tracking-wide text-faint', i > 0 && 'mt-4 border-t border-line pt-4')}>{heading}</div>}
           <Link
-            key={it.href}
             href={it.href}
             onClick={onNavigate}
             aria-current={active ? 'page' : undefined}
@@ -34,6 +36,7 @@ export function NavLinks({ items, onNavigate }: { items: NavItem[]; onNavigate?:
             <span className="flex-1">{it.label}</span>
             {it.badge ? <span className="rounded-full bg-brand px-1.5 py-0.5 text-[11px] font-semibold leading-none text-brand-ink">{it.badge}</span> : null}
           </Link>
+          </Fragment>
         );
       })}
     </nav>

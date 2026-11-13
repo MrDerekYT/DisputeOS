@@ -117,12 +117,24 @@ export async function setLetterStatus(db: Db, actor: LActor, letterId: string, t
 }
 
 /** Records that a person mailed/delivered an approved letter. The app never sends correspondence by itself. */
-export async function markSent(db: Db, actor: LActor, letterId: string, method: 'certified_mail' | 'first_class_mail' | 'portal' | 'manual', tracking?: string): Promise<void> {
+/** The date a letter was sent, as typed by staff: a real calendar date, not in the future and not absurdly old. */
+export function checkSentOn(sentOn: string | null | undefined, today = new Date()): string {
+  const t = today.toISOString().slice(0, 10);
+  if (!sentOn) return t;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(sentOn) || Number.isNaN(new Date(`${sentOn}T00:00:00Z`).getTime())) throw new LetterError('Enter the date it was sent as a valid date.');
+  if (sentOn > t) throw new LetterError('The sent date cannot be in the future.');
+  if (new Date(`${t}T00:00:00Z`).getTime() - new Date(`${sentOn}T00:00:00Z`).getTime() > 366 * 86_400_000) throw new LetterError('The sent date is more than a year ago. Check it.');
+  return sentOn;
+}
+
+export async function markSent(db: Db, actor: LActor, letterId: string, method: 'certified_mail' | 'first_class_mail' | 'portal' | 'manual', tracking?: string, sentOn?: string | null): Promise<void> {
   if (!can(actor.role, 'letters:write')) throw new PermissionError('letters:write');
   const l = await db.row<{ status: string; client_id: string }>('select status, client_id from public.letters where id = $1 for update', [letterId]);
   if (!l) throw new LetterError('Letter not found.');
   if (l.status !== 'approved') throw new LetterError('Only an approved letter can be marked as sent.');
-  await db.run("update public.letters set status = 'sent', sent_at = now(), sent_method = $2, tracking_number = $3 where id = $1", [letterId, method, tracking?.slice(0, 80) ?? null]);
+  const on = checkSentOn(sentOn);
+  // Recorded by a person: delivery_source stays 'staff_recorded'. Only a carrier integration may ever set 'carrier_confirmed'.
+  await db.run("update public.letters set status = 'sent', sent_at = now(), sent_on = $4, sent_method = $2, tracking_number = $3, delivery_source = 'staff_recorded', sent_recorded_by = $5 where id = $1", [letterId, method, tracking?.trim().slice(0, 80) || null, on, actor.userId]);
   await logEvent(db, actor, l.client_id, 'letter_sent', `Letter marked as sent (${method.replace(/_/g, ' ')})`, { letter_id: letterId });
   await audit(db, { orgId: actor.orgId, actorId: actor.userId, action: 'letter.sent', entityType: 'letter', entityId: letterId, ip: actor.meta?.ip, meta: { method } });
 }

@@ -48,11 +48,11 @@ export async function transitionAction(_: ActionState, fd: FormData): Promise<Ac
     const d = parseForm(
       z.object({
         id: zUuid, to: z.enum(DISPUTE_STATUSES), receivedOn: zDate.optional().or(z.literal('')), extended: zBool,
-        sentMethod: z.enum(['certified_mail', 'first_class_mail', 'portal', 'manual']).optional(), tracking: zOpt(80), note: zOpt(2000),
+        sentMethod: z.enum(['certified_mail', 'first_class_mail', 'portal', 'manual']).optional(), tracking: zOpt(80), sentOn: zDate.optional().or(z.literal('')), note: zOpt(2000),
       }),
       fd,
     );
-    await ctx.tx((db) => transitionDispute(db, actorOf(ctx), d.id, d.to, { receivedOn: d.receivedOn || null, extended: d.extended, sentMethod: d.sentMethod, tracking: d.tracking, note: d.note }));
+    await ctx.tx((db) => transitionDispute(db, actorOf(ctx), d.id, d.to, { receivedOn: d.receivedOn || null, extended: d.extended, sentMethod: d.sentMethod, tracking: d.tracking, sentOn: d.sentOn || null, note: d.note }));
     revalidatePath(`/app/disputes/${d.id}`);
     revalidatePath('/app/disputes');
     return { ok: 'Status updated.' };

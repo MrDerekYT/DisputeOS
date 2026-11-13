@@ -295,8 +295,9 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
       await staff.goto(BASE + '/app');
       await expectText(staff, 'Client care');
       const care = staff.locator('section', { has: staff.getByRole('heading', { name: 'Client care' }) });
-      await care.getByText('I just uploaded my ID').first().waitFor({ timeout: 8000 });
       await care.getByText('id.png').first().waitFor({ timeout: 8000 });
+      const first = staff.locator('section', { has: staff.getByRole('heading', { name: 'Do these first' }) });
+      await first.getByText('I just uploaded my ID').first().waitFor({ timeout: 8000 }); // unanswered messages are in the top queue
       await staff.screenshot({ path: `${SHOTS}/09-client-care.png`, fullPage: false, caret: 'initial' });
     });
 
