@@ -1,0 +1,120 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+  Design tokens. Palette: warm paper neutrals + deep ink + a single teal-green brand accent.
+  Restrained on purpose — colour carries meaning (status), not decoration.
+  RGB triplets so Tailwind opacity modifiers work (bg-brand/10).
+*/
+:root {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-display: 'Iowan Old Style', 'Palatino Linotype', Palatino, 'Book Antiqua', Georgia, serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --canvas: 247 245 240;
+  --surface: 255 255 255;
+  --raised: 251 250 247;
+  --line: 226 222 213;
+  --ink: 24 28 36;
+  --muted: 92 98 110;
+  --faint: 140 145 155;
+
+  --brand: 15 118 110;
+  --brand-strong: 17 94 89;
+  --brand-soft: 224 242 239;
+  --brand-ink: 255 255 255;
+
+  --ok: 22 128 74;     --ok-soft: 222 244 230;
+  --warn: 161 98 7;    --warn-soft: 253 240 205;
+  --bad: 185 28 28;    --bad-soft: 252 226 226;
+  --info: 37 99 168;   --info-soft: 224 237 252;
+
+  color-scheme: light;
+}
+
+:root[data-theme='dark'] {
+  --canvas: 14 17 22;
+  --surface: 22 26 33;
+  --raised: 27 32 40;
+  --line: 44 50 61;
+  --ink: 235 238 243;
+  --muted: 160 167 180;
+  --faint: 112 119 133;
+
+  --brand: 45 190 172;
+  --brand-strong: 94 214 198;
+  --brand-soft: 17 52 50;
+  --brand-ink: 6 30 28;
+
+  --ok: 74 200 130;   --ok-soft: 18 50 34;
+  --warn: 232 178 66; --warn-soft: 56 43 14;
+  --bad: 244 114 114; --bad-soft: 60 24 24;
+  --info: 110 168 240; --info-soft: 20 38 62;
+
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --canvas: 14 17 22; --surface: 22 26 33; --raised: 27 32 40; --line: 44 50 61;
+    --ink: 235 238 243; --muted: 160 167 180; --faint: 112 119 133;
+    --brand: 45 190 172; --brand-strong: 94 214 198; --brand-soft: 17 52 50; --brand-ink: 6 30 28;
+    --ok: 74 200 130; --ok-soft: 18 50 34; --warn: 232 178 66; --warn-soft: 56 43 14;
+    --bad: 244 114 114; --bad-soft: 60 24 24; --info: 110 168 240; --info-soft: 20 38 62;
+    color-scheme: dark;
+  }
+}
+
+@layer base {
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    @apply bg-canvas font-sans text-ink antialiased;
+    font-feature-settings: 'cv11', 'ss01';
+  }
+  h1, h2, h3 { @apply tracking-tight; }
+  ::selection { background: rgb(var(--brand) / 0.25); }
+  :focus-visible { @apply outline-none ring-2 ring-brand ring-offset-2 ring-offset-canvas; }
+  input, select, textarea { @apply text-base sm:text-sm; }
+}
+
+@layer components {
+  .card { @apply rounded-2xl border border-line bg-surface shadow-card; }
+  .card-pad { @apply p-5 sm:p-6; }
+
+  .btn {
+    @apply inline-flex min-h-[2.5rem] items-center justify-center gap-2 whitespace-nowrap rounded-xl px-4 py-2 text-sm font-semibold
+      transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-primary { @apply btn bg-brand text-brand-ink hover:bg-brand-strong; }
+  .btn-secondary { @apply btn border border-line bg-surface text-ink hover:bg-raised; }
+  .btn-ghost { @apply btn text-muted hover:bg-raised hover:text-ink; }
+  .btn-danger { @apply btn bg-bad text-white hover:opacity-90; }
+  .btn-sm { @apply min-h-[2rem] rounded-lg px-3 py-1 text-xs; }
+
+  .field { @apply block w-full rounded-xl border border-line bg-surface px-3.5 py-2.5 text-ink placeholder:text-faint transition focus:border-brand focus:outline-none focus:ring-4 focus:ring-brand/15; }
+  .label { @apply mb-1.5 block text-sm font-medium text-ink; }
+  .hint { @apply mt-1 text-xs text-muted; }
+
+  .badge { @apply inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-medium; }
+  .eyebrow { @apply text-xs font-semibold uppercase tracking-[0.08em] text-muted; }
+
+  .table-wrap { @apply overflow-x-auto rounded-2xl border border-line bg-surface shadow-card; }
+  .table { @apply w-full min-w-[40rem] text-left text-sm; }
+  .table thead th { @apply border-b border-line bg-raised px-4 py-3 text-xs font-semibold uppercase tracking-wide text-muted; }
+  .table tbody td { @apply border-b border-line/70 px-4 py-3 align-middle; }
+  .table tbody tr:last-child td { @apply border-b-0; }
+  .table tbody tr.row-link:hover { @apply bg-raised; }
+
+  .skeleton { @apply relative overflow-hidden rounded-lg bg-line/60; }
+  .skeleton::after { content: ''; @apply absolute inset-0 -translate-x-full animate-shimmer bg-gradient-to-r from-transparent via-white/40 to-transparent; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+}
+
+@media print {
+  .no-print { display: none !important; }
+  body { background: white; }
+}

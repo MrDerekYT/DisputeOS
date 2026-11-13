@@ -1,0 +1,3 @@
+bureau,item_type,creditor_name,account_number,account_type,account_status,payment_status,balance,credit_limit,high_balance,date_opened,date_reported,dofd,original_creditor,payment_history,remarks
+experian,tradeline,Example Bank,000012341234,Revolving,Open,Current,540.25,5000,1200,2020-03-01,2026-01-15,,,CCCCCCCC,
+equifax,collection,Example Collections,00001234,Collection,Open,Collection,1200,,,2022-03-01,2026-01-15,2021-06-01,Example Bank,,
