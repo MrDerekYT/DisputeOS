@@ -37,6 +37,7 @@ const ITEMS: GuideLink = { label: { en: 'Disputed items', es: 'Cuentas en disput
 const LETTERS: GuideLink = { label: { en: 'Letters', es: 'Cartas' }, href: { portal: '/portal/letters', app: '/app/letters' } };
 const MESSAGES: GuideLink = { label: { en: 'Message your specialist', es: 'Escribir a su especialista' }, href: { portal: '/portal/messages' } };
 const AGREEMENTS: GuideLink = { label: { en: 'Agreements and your rights', es: 'Acuerdos y sus derechos' }, href: { portal: '/portal/profile#agreements' } };
+const PROTECT: GuideLink = { label: { en: 'Protect your file (official links)', es: 'Proteja su expediente (enlaces oficiales)' }, href: { portal: '/portal/protect' } };
 const CLIENTS: GuideLink = { label: { en: 'Clients', es: 'Clientes' }, href: { app: '/app/clients' } };
 
 export const GUIDE_ENTRIES: GuideEntry[] = [
@@ -240,20 +241,40 @@ export const GUIDE_ENTRIES: GuideEntry[] = [
     question: { en: 'What is a credit freeze?', es: '¿Qué es un congelamiento de crédito?' },
     keywords: ['freeze', 'credit freeze', 'security freeze', 'frozen', 'unfreeze', 'thaw', 'lock my credit', 'congelamiento', 'congelar', 'congelar mi credito', 'descongelar', 'bloqueo de credito'],
     answer: {
-      en: 'A credit freeze stops most new lenders from opening your credit file, which makes it harder for someone else to open accounts in your name. It is free, you place it separately with each of the three bureaus, and it stays until you lift it. It does not affect your scores or your existing accounts. You need to lift it, typically for a short window, before applying for new credit.',
-      es: 'Un congelamiento de crédito impide que la mayoría de los nuevos prestamistas abran su expediente, lo que dificulta que otra persona abra cuentas a su nombre. Es gratuito, se solicita por separado en cada una de las tres agencias y permanece hasta que usted lo levante. No afecta sus puntajes ni sus cuentas existentes. Debe levantarlo, normalmente por un periodo corto, antes de solicitar crédito nuevo.',
+      en: 'A security freeze, also called a credit freeze, restricts access to your credit file for new credit, which makes it harder for someone else to open accounts in your name. At Experian, Equifax and TransUnion it is free under federal law. You ask each bureau separately, and you ask yourself: we cannot place it for you. It stays until you lift it, and you generally need to lift it before applying for new credit. A freeze does not remove or correct anything on your report, and companies you already have accounts with can generally still see it. Some specialty agencies, such as ChexSystems, LexisNexis, Innovis and NCTUE, offer their own freezes.',
+      es: 'Un congelamiento de seguridad, también llamado congelamiento de crédito, restringe el acceso a su expediente para crédito nuevo, lo que dificulta que otra persona abra cuentas a su nombre. En Experian, Equifax y TransUnion es gratuito por ley federal. Se pide por separado en cada agencia, y lo pide usted: nosotros no podemos solicitarlo en su nombre. Permanece hasta que usted lo levante, y generalmente debe levantarlo antes de solicitar crédito nuevo. Un congelamiento no elimina ni corrige nada de su informe, y las empresas con las que ya tiene cuentas generalmente pueden seguir viéndolo. Algunas agencias especializadas, como ChexSystems, LexisNexis, Innovis y NCTUE, ofrecen sus propios congelamientos.',
     },
-    links: [IDT],
+    links: [PROTECT, IDT],
   },
   {
     id: 'fraud-alert',
     question: { en: 'What is a fraud alert?', es: '¿Qué es una alerta de fraude?' },
     keywords: ['fraud alert', 'alert', 'initial alert', 'extended alert', 'alerta de fraude', 'alerta'],
     answer: {
-      en: 'A fraud alert is a free note on your credit file asking lenders to take extra steps to confirm your identity before opening credit. An initial alert generally lasts 1 year; an extended alert, for people with an identity theft report, generally lasts 7 years. You only need to ask one bureau — it must tell the other two. Unlike a freeze, an alert does not block access to your file.',
-      es: 'Una alerta de fraude es una nota gratuita en su expediente que pide a los prestamistas tomar medidas adicionales para confirmar su identidad antes de abrir crédito. Una alerta inicial generalmente dura 1 año; una alerta extendida, para personas con un informe de robo de identidad, generalmente dura 7 años. Solo necesita pedirla a una agencia: esta debe avisar a las otras dos. A diferencia del congelamiento, la alerta no bloquea el acceso a su expediente.',
+      en: 'A fraud alert is a free note on your credit file that asks businesses to confirm it is really you before opening new credit. It is for people who are, or suspect they may be, affected by identity theft. An initial alert generally lasts 1 year; an extended alert, for people with an identity theft report, generally lasts 7 years. You ask one of the three bureaus yourself, and it must tell the other two. Unlike a freeze, an alert does not block access to your file, and it does not remove or correct anything on it.',
+      es: 'Una alerta de fraude es una nota gratuita en su expediente que pide a las empresas confirmar que realmente es usted antes de abrir crédito nuevo. Es para personas que son, o sospechan que pueden ser, afectadas por el robo de identidad. Una alerta inicial generalmente dura 1 año; una alerta extendida, para personas con un informe de robo de identidad, generalmente dura 7 años. Usted mismo la pide a una de las tres agencias, y esta debe avisar a las otras dos. A diferencia del congelamiento, la alerta no bloquea el acceso a su expediente, ni elimina o corrige nada de lo que contiene.',
     },
-    links: [IDT],
+    links: [PROTECT, IDT],
+  },
+  {
+    id: 'prescreen-opt-out',
+    question: { en: 'How do I stop preapproved credit offers (opt out)?', es: '¿Cómo dejo de recibir ofertas de crédito preaprobadas (exclusión)?' },
+    keywords: ['opt out', 'opt-out', 'optout', 'optoutprescreen', 'prescreened', 'prescreen', 'preapproved', 'pre-approved offers', 'credit card offers', 'junk mail', 'marketing lists', 'ofertas preaprobadas', 'ofertas preseleccionadas', 'exclusion', 'excluirme', 'correo no deseado'],
+    answer: {
+      en: 'Lenders and insurers can ask the credit bureaus for lists of people who meet their criteria and send them prescreened offers. You have a right to opt out of those lists. At OptOutPrescreen.com, the bureaus’ official site, or by phone, you can generally opt out for five years, or permanently by returning a signed form, and you can opt back in later. It is a request you make yourself. Opting out limits how your file is used for these offers. It does not change or delete anything on your credit reports, and it does not stop offers based on lists from other sources. Some specialty agencies, such as LexisNexis and NCTUE, have separate opt-outs that cover only their own lists.',
+      es: 'Los prestamistas y las aseguradoras pueden pedir a las agencias de crédito listas de personas que cumplen sus criterios y enviarles ofertas preseleccionadas. Usted tiene derecho a excluirse de esas listas. En OptOutPrescreen.com, el sitio oficial de las agencias, o por teléfono, generalmente puede excluirse por cinco años, o de forma permanente devolviendo un formulario firmado, y puede volver a incluirse después. Es una solicitud que hace usted mismo. Excluirse limita cómo se usa su expediente para estas ofertas. No cambia ni borra nada de sus informes de crédito, y no detiene las ofertas basadas en listas de otras fuentes. Algunas agencias especializadas, como LexisNexis y NCTUE, tienen exclusiones aparte que cubren solo sus propias listas.',
+    },
+    links: [PROTECT, { label: { en: 'OptOutPrescreen.com (official)', es: 'OptOutPrescreen.com (oficial)' }, href: 'https://www.optoutprescreen.com/' }],
+  },
+  {
+    id: 'freeze-alert-optout-dispute',
+    question: { en: 'Freeze, fraud alert, opt-out or dispute: what is the difference?', es: 'Congelamiento, alerta de fraude, exclusión o disputa: ¿cuál es la diferencia?' },
+    keywords: ['difference between', 'freeze or fraud alert', 'freeze vs', 'freeze versus', 'alert or freeze', 'which one', 'protect my file', 'protect my credit', 'protect your file', 'does a freeze remove', 'freeze or dispute', 'diferencia entre', 'congelamiento o alerta', 'cual me conviene', 'proteger mi expediente', 'proteger mi credito'],
+    answer: {
+      en: 'They do four different jobs. A security freeze restricts who can get your file for new credit. A fraud alert leaves the file open but asks businesses to confirm your identity first; it is for people who are, or suspect they may be, affected by identity theft. An opt-out takes you off lists used for prescreened offers or marketing. None of those three changes what a report says. A dispute is the only one about the content: it asks the agency to investigate information you believe is inaccurate, incomplete or unverifiable, and the agency decides. Freezes, alerts and opt-outs are generally free and are requested by you, directly with each agency; we cannot place them for you.',
+      es: 'Cumplen cuatro funciones distintas. Un congelamiento de seguridad restringe quién puede obtener su expediente para crédito nuevo. Una alerta de fraude deja el expediente abierto pero pide a las empresas confirmar primero su identidad; es para personas que son, o sospechan que pueden ser, afectadas por el robo de identidad. Una exclusión lo retira de las listas usadas para ofertas preseleccionadas o mercadeo. Ninguna de esas tres cambia lo que dice un informe. Una disputa es la única que trata del contenido: pide a la agencia investigar información que usted considera inexacta, incompleta o imposible de verificar, y la agencia decide. Los congelamientos, las alertas y las exclusiones generalmente son gratuitos y los solicita usted, directamente con cada agencia; nosotros no podemos solicitarlos en su nombre.',
+    },
+    links: [PROTECT, ITEMS, IDT],
   },
   {
     id: 'goodwill-letter',
@@ -334,6 +355,35 @@ export const GUIDE_ENTRIES: GuideEntry[] = [
   },
 
   // ---- How the client portal works ---------------------------------------------------------------------------------
+  // Specialty agencies. Facts read on each agency's own site on 2026-11-19 (sources in src/lib/credit/agencies.ts);
+  // the five-year figure is ChexSystems' own stated practice, so it is attributed to ChexSystems and not given as a rule.
+  {
+    id: 'bank-reports',
+    question: { en: 'What are ChexSystems and Early Warning, and why would a bank turn me down?', es: '¿Qué son ChexSystems y Early Warning, y por qué un banco me rechazaría?' },
+    keywords: ['chexsystems', 'chex systems', 'chex', 'early warning', 'ews', 'denied a bank account', 'bank account denied', 'open a bank account', 'bank turned me down', 'closed my account', 'bank closed', 'checking account', 'savings account', 'overdraft', 'cuenta bancaria', 'cuenta de cheques', 'cuenta de ahorros', 'me negaron una cuenta', 'abrir una cuenta', 'cuenta cerrada', 'sobregiro'],
+    answer: {
+      en: 'ChexSystems and Early Warning Services are specialty consumer reporting agencies, not credit bureaus. Banks and credit unions report checking and savings account history to them, typically an account the bank closed, and may check them when you apply for a new account. ChexSystems says its current practice is to keep a reported record for five years. Paying what is owed generally updates the record to show it was paid, but an accurate record typically stays on file until then. You can request your free report from each agency directly. If something on it is inaccurate or incomplete, you can dispute it with the agency, which generally has 30 days to look into it. If the record is accurate, there is nothing to dispute.',
+      es: 'ChexSystems y Early Warning Services son agencias especializadas de informes del consumidor, no agencias de crédito. Los bancos y cooperativas de crédito les reportan el historial de cuentas de cheques y de ahorros, normalmente una cuenta que el banco cerró, y pueden consultarlas cuando usted solicita una cuenta nueva. ChexSystems indica que su práctica actual es conservar un registro reportado durante cinco años. Pagar lo que se debe generalmente actualiza el registro para mostrar que se pagó, pero un registro exacto normalmente permanece hasta entonces. Puede pedir su informe gratuito directamente a cada agencia. Si algo es inexacto o está incompleto, puede disputarlo ante la agencia, que generalmente tiene 30 días para revisarlo. Si el registro es exacto, no hay nada que disputar.',
+    },
+    links: [
+      { label: { en: 'ChexSystems: request your free report', es: 'ChexSystems: pida su informe gratuito' }, href: 'https://www.chexsystems.com/request-reports/consumer-disclosure' },
+      { label: { en: 'Early Warning: request your free report', es: 'Early Warning: pida su informe gratuito' }, href: 'https://www.earlywarning.com/consumer-information' },
+      ITEMS,
+    ],
+  },
+  {
+    id: 'lexisnexis',
+    question: { en: 'What is LexisNexis, and what is in my LexisNexis report?', es: '¿Qué es LexisNexis y qué contiene mi informe de LexisNexis?' },
+    keywords: ['lexisnexis', 'lexis nexis', 'lexis', 'background report', 'background screening', 'background check', 'specialty report', 'specialty reports', 'lien', 'liens', 'judgment', 'judgments', 'professional license', 'antecedentes', 'informe especializado', 'informes especializados', 'gravamen', 'gravamenes', 'sentencia', 'sentencias'],
+    answer: {
+      en: 'LexisNexis Risk Solutions is a consumer reporting agency that gathers public records and other data instead of credit accounts. Its Consumer Disclosure Report typically includes property ownership and transactions, liens, judgments and bankruptcies, professional licenses and past addresses. Insurers, financial institutions and others may use that information. You can request your free report online, by mail or by phone. If an entry is inaccurate or incomplete, for example a record that belongs to someone with a similar name, you can dispute it with LexisNexis, which generally has 30 days to look into it. Records that are accurate generally stay on file, and there is nothing to dispute about them.',
+      es: 'LexisNexis Risk Solutions es una agencia de informes del consumidor que reúne registros públicos y otros datos en lugar de cuentas de crédito. Su informe (Consumer Disclosure Report) normalmente incluye propiedad y transacciones de inmuebles, gravámenes, sentencias y bancarrotas, licencias profesionales y direcciones anteriores. Aseguradoras, instituciones financieras y otros pueden usar esa información. Puede pedir su informe gratuito en línea, por correo o por teléfono. Si un dato es inexacto o está incompleto, por ejemplo un registro que pertenece a alguien con un nombre parecido, puede disputarlo ante LexisNexis, que generalmente tiene 30 días para revisarlo. Los registros exactos generalmente permanecen, y no hay nada que disputar sobre ellos.',
+    },
+    links: [
+      { label: { en: 'LexisNexis: request your free report', es: 'LexisNexis: pida su informe gratuito' }, href: 'https://consumer.risk.lexisnexis.com/consumer' },
+      ITEMS,
+    ],
+  },
   {
     id: 'portal-upload', audience: 'portal',
     question: { en: 'How do I upload a document?', es: '¿Cómo subo un documento?' },

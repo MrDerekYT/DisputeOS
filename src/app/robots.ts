@@ -8,6 +8,7 @@ export const dynamic = 'force-dynamic';
 export default function robots(): MetadataRoute.Robots {
   return {
     rules: [{ userAgent: '*', allow: '/', disallow: [...NO_INDEX_PATHS] }],
-    sitemap: `${siteUrl()}/sitemap.xml`,
+    // The product's own pages, and the published agency websites (src/app/a/sitemap.ts).
+    sitemap: [`${siteUrl()}/sitemap.xml`, `${siteUrl()}/a/sitemap.xml`],
   };
 }

@@ -10,6 +10,7 @@ import { requireStaff } from '@/lib/auth/context';
 import { getEnv } from '@/lib/env';
 import { decideLeadStep, DEFAULT_LEAD_SOURCE, LEAD_SOURCE_TAGS, LEAD_STEPS, LEAD_WINDOW_DAYS, type LeadDecision } from '@/lib/lead-emails';
 import { DELIVERED_BY_TEAM_SQL, emailIsLive, LEAD_STATE_SQL, leadState, outreachBlocker, outreachSettings, type LeadStateRow } from '@/lib/lead-outreach';
+import { parseSite, sitePath } from '@/lib/agency-site';
 import { leadFormPath } from '@/lib/leads';
 import { fmtDate, pageParam, relTime } from '@/lib/util';
 import { leadAskedToStopAction, leadRepliedAction, saveLeadFollowUpAction, setLeadStatusAction } from './actions';
@@ -91,6 +92,8 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
   const blocker = outreachBlocker(settings, live);
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const formUrl = `${env.APP_URL}${leadFormPath(org.slug)}`;
+  // The agency's published website (which carries the same enquiry form) is the first link to share when there is one.
+  const siteUrl = parseSite(org.settings).published ? `${env.APP_URL}${sitePath(org.slug)}` : null;
   const href = (p: number) => `/app/leads?${new URLSearchParams({ ...(q ? { q } : {}), ...(p > 1 ? { page: String(p) } : {}) }).toString()}`;
   // A page past the end (the last lead on it was just converted or dismissed) goes to the last page that has leads.
   if (page > pages) redirect(href(pages));
@@ -123,8 +126,14 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
       </div>
 
       <div className="mt-8 grid gap-6 xl:grid-cols-2">
-        <Section title="Share your enquiry form" hint="Put the link in your bio, on your website, in ads or on a flyer. Each enquiry lands here as a lead with a follow-up task.">
-          <ShareLink url={formUrl}><CopyButton value={formUrl} label="Copy link" /><a className="btn-ghost btn-sm" href={leadFormPath(org.slug)} target="_blank" rel="noopener">Preview</a></ShareLink>
+        <Section title={siteUrl ? 'Share your website' : 'Share your enquiry form'} hint={siteUrl ? 'Put the link in your bio, in ads or on a flyer. Enquiries from your site and from the form land here as leads with a follow-up task.' : 'Put the link in your bio, on your website, in ads or on a flyer. Each enquiry lands here as a lead with a follow-up task.'}
+          actions={!siteUrl && ctx.can('settings:manage') ? <Link href="/app/website" className="btn-ghost btn-sm">Set up your website</Link> : undefined}>
+          {siteUrl && (
+            <div className="mb-5 border-b border-line pb-5">
+              <ShareLink url={siteUrl}><CopyButton value={siteUrl} label="Copy website link" /><a className="btn-ghost btn-sm" href={sitePath(org.slug)} target="_blank" rel="noopener">View your site</a></ShareLink>
+            </div>
+          )}
+          <ShareLink title={siteUrl ? 'Enquiry form only' : undefined} url={formUrl}><CopyButton value={formUrl} label="Copy link" /><a className="btn-ghost btn-sm" href={leadFormPath(org.slug)} target="_blank" rel="noopener">Preview</a></ShareLink>
           <div className="mt-5 border-t border-line pt-4">
             <div className="text-sm font-semibold">Tagged links</div>
             <p className="mt-0.5 text-[0.8125rem] text-muted">Use a different link in each place and the lead’s source shows where they found you.</p>

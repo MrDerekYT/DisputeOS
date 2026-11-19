@@ -9,19 +9,26 @@ import { consentStatus } from '@/lib/compliance/disclosures';
 import { CATEGORIES, deadlineState, nextSteps, OUTCOME_LABEL, OUTCOMES, PIPELINE, STATUS_LABEL, type DisputeStatus, type Outcome } from '@/lib/disputes/workflow';
 import { staffMembers, memberLabel, DOC_KIND_LABEL } from '@/lib/crm';
 import { businessToday } from '@/lib/letters/service';
+import { getEnv } from '@/lib/env';
 import { BUREAU_LABEL, cn, fmtDate, isUuid, relTime, type Bureau } from '@/lib/util';
 import { addEvidenceAction, addFollowUpTaskAction, analyzeReplyAction, assignDisputeAction, nextRoundAction, recordResponseAction, transitionAction } from '../actions';
 import { PRODUCT } from '@/lib/product';
 import { dayWindow, windowStart, windowText } from '@/lib/day-meter';
 import { loadRecheck } from '@/lib/disputes/recheck-load';
+import { intakeStateLabel, intakeSummary } from '@/lib/intake';
+import { loadIntake } from '@/lib/intake-load';
+import { agencyIdentityLines, agencyItemLines, parseAgencyItem, specialtyAgency } from '@/lib/credit/agencies';
+import { MailRequirements } from '@/components/mail-requirements';
+import { ClockBlock } from './clock-block';
 
 export const metadata: Metadata = { title: 'Dispute' };
 
 interface D {
   id: string; client_id: string; client_name: string; item_label: string; status: DisputeStatus; round: number; category: string; reason: string; fields: string[];
-  bureau: Bureau | null; recipient_name: string; target_type: string; workflow: string; submitted_at: string | null; due_at: string | null; deadline_extended: boolean;
+  bureau: Bureau | null; recipient_name: string; target_type: string; tradeline_id: string | null; workflow: string; submitted_at: string | null; due_at: string | null; deadline_extended: boolean;
   response_at: string | null; outcome: Outcome | null; outcome_notes: string | null; assigned_to: string | null; approved_by_name: string | null; approved_at: string | null;
-  parent_dispute_id: string | null; created_at: string;
+  parent_dispute_id: string | null; created_at: string; agency: string | null; agency_item: unknown; recipient_address: string | null;
+  more_info_on: string | null; investigation_completed_on: string | null; frivolous_missing: string | null; client_confirmed_accurate: boolean; client_language: string;
 }
 
 function Transition({ id, to, label, variant = 'primary', confirm, children }: { id: string; to: DisputeStatus; label: string; variant?: 'primary' | 'secondary' | 'danger'; confirm?: string; children?: React.ReactNode }) {
@@ -40,14 +47,14 @@ export default async function DisputePage({ params }: { params: Promise<{ id: st
   const ctx = await requireStaff('clients:read');
   const data = await ctx.tx(async (db) => {
     const d = await db.row<D>(
-      `select d.*, c.full_name as client_name, ab.full_name as approved_by_name from public.disputes d join public.clients c on c.id = d.client_id left join public.users ab on ab.id = d.approved_by where d.id = $1`, [id]);
+      `select d.*, c.full_name as client_name, c.preferred_language as client_language, ab.full_name as approved_by_name from public.disputes d join public.clients c on c.id = d.client_id left join public.users ab on ab.id = d.approved_by where d.id = $1`, [id]);
     if (!d) return null;
     const [events, evidence, letters, docs, consents, tasks, children, team] = await Promise.all([
       db.rows<{ id: string; kind: string; from_status: string | null; to_status: string | null; note: string | null; created_at: string; actor: string | null }>(
         `select e.id, e.kind, e.from_status, e.to_status, e.note, e.created_at, u.full_name as actor from public.dispute_events e left join public.users u on u.id = e.actor_id where e.dispute_id = $1 order by e.created_at desc, e.id`, [id]),
       db.rows<{ id: string; label: string; note: string | null; file_name: string | null; document_id: string | null; created_at: string }>(
         `select ev.id, ev.label, ev.note, ev.document_id, ev.created_at, doc.file_name from public.dispute_evidence ev left join public.documents doc on doc.id = ev.document_id where ev.dispute_id = $1 order by ev.created_at`, [id]),
-      db.rows<{ id: string; title: string; status: string; current_version: number; created_at: string; sent_at: string | null; sent_on: string | null; sent_method: string | null; tracking_number: string | null; delivery_source: string; carrier_delivered_at: string | null; recorder: string | null }>('select l.id, l.title, l.status, l.current_version, l.created_at, l.sent_at, l.sent_on, l.sent_method, l.tracking_number, l.delivery_source, l.carrier_delivered_at, sr.full_name as recorder from public.letters l left join public.users sr on sr.id = l.sent_recorded_by where l.dispute_id = $1 order by l.created_at desc', [id]),
+      db.rows<{ id: string; title: string; status: string; current_version: number; created_at: string; sent_at: string | null; sent_on: string | null; sent_method: string | null; tracking_number: string | null; delivery_source: string; carrier_delivered_at: string | null; recorder: string | null; kind: string; received_on: string | null; reply_due_on: string | null; reply_received_on: string | null }>('select l.id, l.title, l.status, l.current_version, l.created_at, l.sent_at, l.sent_on, l.sent_method, l.tracking_number, l.delivery_source, l.carrier_delivered_at, sr.full_name as recorder, l.kind, l.received_on, l.reply_due_on, l.reply_received_on from public.letters l left join public.users sr on sr.id = l.sent_recorded_by where l.dispute_id = $1 order by l.created_at desc', [id]),
       db.rows<{ id: string; file_name: string; kind: string }>('select id, file_name, kind from public.documents where client_id = $1 order by created_at desc limit 50', [d.client_id]),
       db.rows<{ kind: string; signed_at: string; revoked_at: string | null }>('select kind, signed_at, revoked_at from public.client_consents where client_id = $1', [d.client_id]),
       db.rows<{ id: string; title: string; status: string; due_at: string | null }>("select id, title, status, due_at from public.tasks where dispute_id = $1 order by status, due_at", [id]),
@@ -55,14 +62,18 @@ export default async function DisputePage({ params }: { params: Promise<{ id: st
       staffMembers(db),
     ]);
     const check = ['submitted', 'under_investigation', 'response_received'].includes(d.status) ? await loadRecheck(db, id) : null;
-    return { d, events, evidence, letters, docs, consents, tasks, children, team, check };
+    // Only looked at when a bureau or specialty agency dispute is about to be recorded as sent.
+    const idDocs = d.status === 'approved' && (d.target_type === 'bureau' || d.target_type === 'agency') ? intakeSummary(await loadIntake(db, d.client_id)).notAccepted : [];
+    return { d, events, evidence, letters, docs, consents, tasks, children, team, check, idDocs };
   });
   if (!data) notFound();
-  const { d, events, evidence, letters, docs, consents, tasks, children, team, check } = data;
+  const { d, events, evidence, letters, docs, consents, tasks, children, team, check, idDocs } = data;
+  const agency = specialtyAgency(d.agency);
+  const item = parseAgencyItem(d.agency_item);
   const cs = consentStatus(consents);
   const today = businessToday(); // the agency's calendar day (APP_TIMEZONE), not the UTC date
-  const hasApproved = letters.some((l) => l.status === 'approved' || l.status === 'sent');
-  const steps = nextSteps({ status: d.status, round: d.round, due_at: d.due_at, outcome: d.outcome, hasApprovedLetter: hasApproved, evidenceCount: evidence.length });
+  const hasApproved = letters.some((l) => (l.status === 'approved' || l.status === 'sent') && l.kind !== 'method_of_verification');
+  const steps = nextSteps({ status: d.status, round: d.round, due_at: d.due_at, outcome: d.outcome, hasApprovedLetter: hasApproved, evidenceCount: evidence.length, confirmedAccurate: d.client_confirmed_accurate });
   const canApprove = ctx.can('disputes:approve');
   const state = deadlineState(d.due_at);
   const idx = PIPELINE.indexOf(d.status);
@@ -141,7 +152,7 @@ export default async function DisputePage({ params }: { params: Promise<{ id: st
               <p className="mt-3 text-[0.8125rem] text-muted">This is a comparison only. Nothing is recorded until a person enters the response below.</p>
             </Section>
           )}
-          {letters.filter((l) => l.status === 'sent').slice(0, 1).map((l) => (
+          {letters.filter((l) => l.status === 'sent' && l.kind !== 'method_of_verification').slice(0, 1).map((l) => (
             <Section key={l.id} title="Delivery record" hint="How and when the approved letter was sent.">
               <DeliveryRecord sentOn={l.sent_on ?? l.sent_at} method={l.sent_method} tracking={l.tracking_number} source={l.delivery_source} recordedBy={l.recorder} carrierDeliveredAt={l.carrier_delivered_at} />
             </Section>
@@ -171,8 +182,17 @@ export default async function DisputePage({ params }: { params: Promise<{ id: st
                     <Field label="Date sent" name="sentOn" type="date" defaultValue={today} max={today} required />
                     <Field label="Tracking reference" name="tracking" hint="Optional. For example the certified-mail number." maxLength={80} />
                     <Field label="Date the recipient received it (if known)" name="receivedOn" type="date" hint="The 30-day clock starts at receipt. Leave blank to count from today." />
-                    <div className="self-end pb-2"><Check name="extended">Client sent additional information (45-day window)</Check></div>
+                    <div className="self-end pb-2"><Check name="extended">45-day window (for example, this dispute follows a free annual report)</Check></div>
                   </div>
+                  {idDocs.length > 0 && (
+                    <div className="space-y-3">
+                      <Notice tone="warn" title="Identity documents are not on file">
+                        {idDocs.map((x) => `${x.item.label.en} (${intakeStateLabel(x).toLowerCase()})`).join(', ')}. A dispute can be sent without them, but the {agency ? 'agency' : 'bureau'} may ask for them before it investigates.{' '}
+                        <Link className="link" href={`/app/clients/${d.client_id}?tab=documents#intake`}>Open intake documents</Link>
+                      </Notice>
+                      <Check name="sendAnyway" required>Send without the identity documents</Check>
+                    </div>
+                  )}
                   <p className="text-[0.8125rem] text-muted">Recording a submission means a person has already mailed the approved letter. {PRODUCT.name} never sends correspondence on its own.</p>
                   <SubmitButton>Record submission</SubmitButton>
                   </>)}
@@ -192,8 +212,9 @@ export default async function DisputePage({ params }: { params: Promise<{ id: st
                     <h3 className="mb-2 text-sm font-semibold">2 · Record the outcome</h3>
                     <ActionForm action={recordResponseAction} className="space-y-3">
                       <input type="hidden" name="id" value={d.id} />
-                      <Select label="Outcome" name="outcome" required defaultValue={d.outcome ?? ''} placeholder="Choose…" options={OUTCOMES.map((o) => ({ value: o, label: OUTCOME_LABEL[o] }))} />
+                      <Select label="Outcome" name="outcome" required defaultValue={d.outcome ?? ''} placeholder="Choose…" options={OUTCOMES.filter((o) => o !== 'frivolous').map((o) => ({ value: o, label: OUTCOME_LABEL[o] }))} />
                       <Field label="Date response received" name="receivedOn" type="date" />
+                      <Field label="Date the agency completed its reinvestigation" name="completedOn" type="date" defaultValue={d.investigation_completed_on ?? ''} hint="Optional. Only if the response states it." />
                       <TextArea label="Notes" name="notes" rows={2} defaultValue={d.outcome_notes} />
                       <SubmitButton>Record response</SubmitButton>
                     </ActionForm>
@@ -202,7 +223,7 @@ export default async function DisputePage({ params }: { params: Promise<{ id: st
               )}
               {d.status === 'response_received' && <Transition id={d.id} to="resolved" label="Mark resolved" />}
               {d.status === 'on_hold' && <Transition id={d.id} to={d.submitted_at ? 'under_investigation' : 'draft'} label="Resume" />}
-              {d.status === 'resolved' && ['verified', 'unresolved', 'no_response'].includes(d.outcome ?? '') && !children.length && (
+              {d.status === 'resolved' && ['verified', 'unresolved', 'no_response', 'frivolous'].includes(d.outcome ?? '') && !children.length && !d.client_confirmed_accurate && (
                 <details className="rounded-xl border border-line-strong/60 p-4">
                   <summary className="cursor-pointer text-sm font-semibold">Start round {d.round + 1}</summary>
                   <ActionForm action={nextRoundAction} className="mt-4 space-y-3">
@@ -218,6 +239,29 @@ export default async function DisputePage({ params }: { params: Promise<{ id: st
               {open && <Transition id={d.id} to="cancelled" label="Cancel dispute" variant="danger" confirm="Cancel this dispute? It stays in the record but will not proceed." />}
             </div>
           </Section>
+
+          <ClockBlock d={d} letters={letters} lang={d.client_language === 'es' ? 'es' : 'en'} today={today} tz={getEnv().APP_TIMEZONE} canLetter={ctx.can('letters:write')} />
+
+          {agency && (
+            <Section plain title={`Item on the ${agency.shortName} disclosure`} hint="Typed in by a person. These reports are not read by the system.">
+              {item && <p className="whitespace-pre-line text-sm leading-relaxed">{[...agencyItemLines(item, 'en').map((l) => l.trim()), ...(item.consumerId ? agencyIdentityLines(agency, item, 'en').slice(0, 1) : [])].join('\n')}</p>}
+              <div className="mt-4 text-sm">
+                <p className="text-muted">Mail to</p>
+                {agency.disputeAddress ? (
+                  <>
+                    <p className="mt-1 whitespace-pre-line font-medium">{[agency.name, ...agency.disputeAddress.lines].join('\n')}</p>
+                    <p className="mt-1 text-[0.8125rem] text-muted">Read on <a className="link" href={agency.disputeAddress.sourceUrl} target="_blank" rel="noreferrer">{new URL(agency.disputeAddress.sourceUrl).hostname}</a> on {fmtDate(agency.disputeAddress.verifiedOn)}.</p>
+                  </>
+                ) : (
+                  <>
+                    <p className="mt-1 whitespace-pre-line font-medium">{[agency.name, d.recipient_address].filter(Boolean).join('\n')}</p>
+                    <p className="mt-1 text-[0.8125rem] text-muted">Address entered by your team. No verified address is on file for this agency.</p>
+                  </>
+                )}
+                <MailRequirements agency={agency} className="mt-3" />
+              </div>
+            </Section>
+          )}
 
           <Section plain title="Reason">
             <p className="whitespace-pre-wrap text-sm leading-relaxed">{d.reason}</p>
@@ -271,7 +315,7 @@ export default async function DisputePage({ params }: { params: Promise<{ id: st
             {d.due_at && <p className="mt-3 text-[0.8125rem] text-muted">{d.deadline_extended ? '45' : '30'}-day investigation window counted from receipt.</p>}
           </Section>
 
-          <Section plain title="Letters" actions={open ? <Link href={`/app/letters/new?clientId=${d.client_id}&disputeId=${d.id}`} className="btn-secondary btn-sm">New</Link> : undefined}>
+          <Section plain title="Letters" actions={open && !d.client_confirmed_accurate ? <Link href={`/app/letters/new?clientId=${d.client_id}&disputeId=${d.id}`} className="btn-secondary btn-sm">New</Link> : undefined}>
             {letters.length === 0 ? <p className="text-sm text-muted">No letter yet.</p> : (
               <ul className="space-y-2">{letters.map((l) => (
                 <li key={l.id}><Link href={`/app/letters/${l.id}`} className="flex items-center justify-between gap-2 rounded-xl bg-raised p-3 text-sm transition-colors hover:bg-line">

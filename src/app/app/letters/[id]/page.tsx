@@ -12,7 +12,11 @@ import { providerStatus } from '@/lib/ai/provider';
 import { storedSuggestion } from '@/lib/letters/suggest';
 import { refusalMessage } from '@/lib/refusals';
 import { requireStaff } from '@/lib/auth/context';
-import { approvalBlockers, businessToday } from '@/lib/letters/service';
+import { businessToday, letterBlockers } from '@/lib/letters/service';
+import { INTAKE_ITEMS, INTAKE_REQUIRED, intakeStatus } from '@/lib/intake';
+import { loadIntakeDocs } from '@/lib/intake-load';
+import { MailRequirements } from '@/components/mail-requirements';
+import { specialtyAgency } from '@/lib/credit/agencies';
 import { BUREAU_LABEL, fmtDate, isUuid, relTime, type Bureau } from '@/lib/util';
 import { aiAcceptLetterAction, aiSuggestLetterAction, letterStatusAction, markSentAction, restoreVersionAction, saveLetterAction } from '../actions';
 import { PRODUCT } from '@/lib/product';
@@ -27,18 +31,25 @@ export default async function LetterPage({ params, searchParams }: { params: Pro
   if (!isUuid(id)) notFound();
   const ctx = await requireStaff('clients:read');
   const data = await ctx.tx(async (db) => {
-    const l = await db.row<{ id: string; title: string; status: string; client_id: string; client_name: string; dispute_id: string | null; current_version: number; recipient_name: string; approved_at: string | null; approver: string | null; sent_at: string | null; sent_on: string | null; sent_method: string | null; tracking_number: string | null; delivery_source: string; carrier_delivered_at: string | null; recorder: string | null; language: string; dispute_status: string | null; dispute_submitted_at: string | null }>(
-      `select l.id, l.title, l.status, l.client_id, c.full_name as client_name, l.dispute_id, l.current_version, l.recipient_name, l.approved_at, u.full_name as approver, l.sent_at, l.sent_on, l.sent_method, l.tracking_number, l.delivery_source, l.carrier_delivered_at, sr.full_name as recorder, l.language, d.status as dispute_status, d.submitted_at as dispute_submitted_at
+    const l = await db.row<{ id: string; title: string; status: string; client_id: string; client_name: string; dispute_id: string | null; current_version: number; recipient_name: string; approved_at: string | null; approver: string | null; sent_at: string | null; sent_on: string | null; sent_method: string | null; tracking_number: string | null; delivery_source: string; carrier_delivered_at: string | null; recorder: string | null; language: string; dispute_status: string | null; dispute_submitted_at: string | null; dispute_target: string | null; dispute_agency: string | null }>(
+      `select l.id, l.title, l.status, l.client_id, c.full_name as client_name, l.dispute_id, l.current_version, l.recipient_name, l.approved_at, u.full_name as approver, l.sent_at, l.sent_on, l.sent_method, l.tracking_number, l.delivery_source, l.carrier_delivered_at, sr.full_name as recorder, l.language, d.status as dispute_status, d.submitted_at as dispute_submitted_at, d.target_type as dispute_target, d.agency as dispute_agency
          from public.letters l join public.clients c on c.id = l.client_id left join public.users u on u.id = l.approved_by left join public.users sr on sr.id = l.sent_recorded_by left join public.disputes d on d.id = l.dispute_id where l.id = $1`, [id]);
     if (!l) return null;
     const versions = await db.rows<{ version: number; source: string; change_note: string | null; created_at: string; author: string | null; body: string }>(
       `select v.version, v.source, v.change_note, v.created_at, u.full_name as author, v.body from public.letter_versions v left join public.users u on u.id = v.author_id where v.letter_id = $1 order by v.version desc`, [id]);
-    return { l, versions, credits: await getBalance(ctx.orgId, db), kept: await storedSuggestion(db, id, versions[0]?.version ?? 0) };
+    // What to put in the envelope with an approved letter to a bureau or a specialty agency. Nothing is attached to the PDF: this is a list for the person mailing it.
+    const toBureau = l.dispute_target === 'bureau' || l.dispute_target === 'agency' || l.recipient_name.toLowerCase() in BUREAU_LABEL;
+    const enclose = l.status === 'approved' && toBureau ? intakeStatus(await loadIntakeDocs(db, l.client_id), businessToday(), INTAKE_ITEMS) : null;
+    // Unfilled fields, prohibited claims and, for a bureau or specialty dispute letter, what the specificity check finds missing.
+    const blockers = l.status === 'sent' || l.status === 'void' ? [] : await letterBlockers(db, id, versions[0]?.body ?? '');
+    return { l, versions, credits: await getBalance(ctx.orgId, db), kept: await storedSuggestion(db, id, versions[0]?.version ?? 0), enclose, blockers };
   });
   if (!data) notFound();
-  const { l, versions, credits, kept } = data;
+  const { l, versions, credits, kept, enclose, blockers } = data;
+  const agency = specialtyAgency(l.dispute_agency);
+  const enclosures = enclose?.filter((e) => e.state === 'accepted') ?? [];
+  const notOnFile = enclose?.filter((e) => e.state !== 'accepted' && INTAKE_REQUIRED.includes(e.item)) ?? [];
   const body = versions[0]!.body;
-  const blockers = approvalBlockers(body);
   const locked = l.status === 'sent' || l.status === 'void';
   // A letter for a dispute that has not been submitted yet is recorded as sent from the dispute, which also starts the response deadline.
   const viaDispute = !!l.dispute_id && !l.dispute_submitted_at && l.dispute_status !== 'cancelled';
@@ -101,6 +112,23 @@ export default async function LetterPage({ params, searchParams }: { params: Pro
             </div>
             <p className="mt-3 text-xs text-muted">Editing an approved letter returns it to draft: what is mailed must be exactly what was approved.</p>
           </Section>
+
+          {agency && l.status !== 'sent' && l.status !== 'void' && (
+            <Section plain title={`Mailing to ${agency.shortName}`}><MailRequirements agency={agency} /></Section>
+          )}
+
+          {enclose && (
+            <Section plain title="Enclose with this letter" hint="Copies of the client’s accepted identity documents. They are not added to the PDF.">
+              {enclosures.length === 0 ? <p className="text-sm text-muted">No accepted identity documents on file.</p> : (
+                <ul className="space-y-2.5 text-sm">{enclosures.map((e) => (
+                  <li key={e.item.key}>
+                    <a href={`/api/documents/${e.doc!.id}`} className="flex min-w-0 items-center gap-2 font-medium hover:underline"><Download size={14} aria-hidden className="shrink-0 text-muted" /><span className="min-w-0 [overflow-wrap:anywhere]">{e.item.label.en}</span></a>
+                    <div className="pl-[1.375rem] text-xs text-muted [overflow-wrap:anywhere]">{e.doc!.file_name}{e.item.staffNote && <> · {e.item.staffNote}</>}</div>
+                  </li>))}</ul>
+              )}
+              {notOnFile.length > 0 && <p className="mt-3 text-sm text-muted">Not on file: {notOnFile.map((e) => e.item.label.en).join(', ')}. <Link className="link" href={`/app/clients/${l.client_id}?tab=documents#intake`}>Open intake documents</Link></p>}
+            </Section>
+          )}
 
           {!locked && (
             <Section plain title="AI wording help" actions={<AiTag />}>

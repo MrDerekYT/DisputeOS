@@ -27,6 +27,8 @@ export function staffNav(ctx: Ctx, counts: { tasks?: number; inbox?: number } = 
   if (ctx.can('analytics:read')) items.push({ href: '/app/analytics', label: 'Analytics', icon: 'chart', group: tools });
   if (ctx.can('billing:read')) items.push({ href: '/app/billing', label: 'Billing', icon: 'card', group: admin });
   if (ctx.can('team:manage') || ctx.can('analytics:team')) items.push({ href: '/app/team', label: 'Team', icon: 'team', group: admin });
+  // An agency's public website, hosted by this app (personal workspaces have none).
+  if (ctx.can('settings:manage') && ctx.session.orgMode === 'agency') items.push({ href: '/app/website', label: 'Website', icon: 'globe', group: admin });
   // Every staff member has a Settings page (their own password and security); workspace settings on it stay admin-only.
   items.push({ href: '/app/settings', label: 'Settings', icon: 'settings', group: admin });
   if (ctx.can('audit:read')) items.push({ href: '/app/audit', label: 'Audit log', icon: 'audit', group: admin });

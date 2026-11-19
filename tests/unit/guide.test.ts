@@ -16,7 +16,7 @@ const fake = (reply: string | ((system: string, user: string) => string)): AiPro
 describe('guide knowledge base', () => {
   it('has a sensible number of entries with unique ids and both languages filled in', () => {
     expect(GUIDE_ENTRIES.length).toBeGreaterThanOrEqual(25);
-    expect(entriesFor('portal').length).toBeLessThanOrEqual(36);
+    expect(entriesFor('portal').length).toBeLessThanOrEqual(40);
     expect(new Set(GUIDE_ENTRIES.map((e) => e.id)).size).toBe(GUIDE_ENTRIES.length);
     for (const e of GUIDE_ENTRIES) {
       expect(e.keywords.length, e.id).toBeGreaterThan(2);

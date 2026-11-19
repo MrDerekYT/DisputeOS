@@ -73,7 +73,7 @@ describe('sitemap and robots', () => {
     const r = robots();
     const rule = Array.isArray(r.rules) ? r.rules[0]! : r.rules;
     expect(rule.disallow).toEqual(expect.arrayContaining(['/app', '/portal', '/api/']));
-    expect(r.sitemap).toBe('https://example.test/sitemap.xml');
+    expect(r.sitemap).toEqual(['https://example.test/sitemap.xml', 'https://example.test/a/sitemap.xml']);
     for (const p of SITE_PAGES) for (const blocked of NO_INDEX_PATHS) expect(p.path.startsWith(blocked), `${p.path} vs ${blocked}`).toBe(false);
   });
 });

@@ -1,6 +1,7 @@
 import { getEnv } from './env';
 import { providerStatus } from './ai/provider';
 import { PRODUCT } from './product';
+import { smsStatus } from './sms';
 
 /**
  * What is actually connected, derived from configuration — not from marketing. `verified` means the integration has
@@ -23,6 +24,7 @@ export function integrationStatus(): Integration[] {
   const ai = providerStatus();
   const emailLive = env.EMAIL_DRIVER === 'resend' && !!env.RESEND_API_KEY;
   const sandbox = env.APP_ENV === 'development' || env.APP_ENV === 'test';
+  const sms = smsStatus();
   return [
     { key: 'db', name: 'PostgreSQL database', status: 'active', verified: true, detail: 'Row-level security enforces tenant isolation. Verified by the automated test suite against PostgreSQL 16.' },
     { key: 'storage', name: 'Document storage', status: 'active', verified: true, detail: env.STORAGE_DRIVER === 'db'
@@ -56,14 +58,22 @@ export function integrationStatus(): Integration[] {
       detail: 'No payment processor is connected. No card or bank account is ever charged by the app.',
       manualPath: 'Collect payment outside the app and record it on the client’s Billing tab. Each record requires confirming the service was already performed (the CROA rule against advance fees).',
       needs: 'A Stripe (or similar) account with API keys and a webhook secret, plus a Checkout and webhook integration' },
-    { key: 'sms', name: 'SMS', status: 'manual', verified: false,
-      detail: 'No SMS provider is connected. No text message is ever sent by the app.',
+    { key: 'sms', name: 'Text messages (Twilio)', verified: false,
+      status: sms.state === 'connected' ? 'active' : sms.state === 'test_only' ? 'dev_only' : sms.state === 'needs_credentials' ? 'needs_credentials' : 'manual',
+      detail: sms.state === 'connected' ? 'Configured. Short updates go only to clients who agreed to texts, for the events switched on under Client updates. Implemented to the documented API; not yet exercised against the live service from this codebase.'
+        : sms.state === 'test_only' ? 'Texts are written to a local log (SMS_DRIVER=log). Nothing is delivered.'
+        : sms.state === 'needs_credentials' ? `Switched on (SMS_DRIVER=twilio) but not connected: ${sms.missing.join(', ')} still to set. No text message is sent.`
+        : 'Not connected (SMS_DRIVER=disabled). No text message is ever sent by the app.',
       manualPath: 'Text or call the client from your own phone, then log it on their Messages tab as a call or text. It is saved as a record of a conversation, not as a sent message.',
-      needs: 'An SMS provider account (for example Twilio) with a registered sending number, TCPA-compliant opt-in from each client, and the integration' },
+      needs: 'A Twilio account with a sending number registered for US messaging (A2P 10DLC, or a verified toll-free number), then SMS_DRIVER=twilio, TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN and TWILIO_MESSAGING_SERVICE_SID or TWILIO_FROM_NUMBER. Each client must agree to texts first. Steps: docs/INTEGRATIONS.md' },
     { key: 'esign', name: 'External e-signature', status: 'manual', verified: false,
       detail: 'No external e-signature provider (DocuSign, Dropbox Sign) is connected.',
       manualPath: 'Clients sign in the portal by typing their full legal name; the app stores the name, time, IP address and a hash of the exact text shown. Staff can also record a consent signed on paper.',
       needs: 'Only if your attorney requires a third-party signing service: an account with that provider and the integration' },
+    { key: 'custom_domain', name: 'Custom domains for agency websites', status: 'manual', verified: false,
+      detail: 'Each agency website is hosted at an address on this app (/a/<workspace>). Connecting an agency’s own domain is not automated and cannot be done from the app.',
+      manualPath: 'Share the address shown on the Website page. For an agency’s own domain, the platform operator adds the domain at the hosting provider and routes it to that agency’s site address.',
+      needs: 'Domain verification, certificates and per-domain routing built into the app (for example through the hosting provider’s domains API)' },
     { key: 'crm', name: 'External CRM sync', status: 'manual', verified: false, detail: 'No CRM sync is connected.', manualPath: 'Export a client’s full record as JSON from their profile, or read clients and disputes through the API.', needs: 'A specific CRM to sync with, and the integration' },
   ];
 }

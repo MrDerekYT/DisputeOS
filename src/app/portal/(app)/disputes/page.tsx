@@ -6,14 +6,15 @@ import { Badge, DayMeter, EmptyState } from '@/components/ui';
 import { portalContext } from '@/lib/portal';
 import { fill } from '@/lib/portal-i18n';
 import { BUREAU_LABEL, fmtDate, type Bureau } from '@/lib/util';
+import { specialtyAgency } from '@/lib/credit/agencies';
 
 export const metadata: Metadata = { title: 'My items' };
 
 export default async function PortalDisputes() {
   const { ctx, t, lang } = await portalContext();
   const { rows, events } = await ctx.tx(async (db) => ({
-    rows: await db.rows<{ id: string; item_label: string; status: string; round: number; bureau: Bureau | null; recipient_name: string; reason: string; submitted_at: string | null; due_at: string | null; deadline_extended: boolean; outcome: string | null }>(
-      'select id, item_label, status, round, bureau, recipient_name, reason, submitted_at, due_at, deadline_extended, outcome from public.disputes order by coalesce(submitted_at, created_at) desc'),
+    rows: await db.rows<{ id: string; item_label: string; status: string; round: number; bureau: Bureau | null; recipient_name: string; reason: string; submitted_at: string | null; due_at: string | null; deadline_extended: boolean; outcome: string | null; agency: string | null }>(
+      'select id, item_label, status, round, bureau, recipient_name, reason, submitted_at, due_at, deadline_extended, outcome, agency from public.disputes order by coalesce(submitted_at, created_at) desc'),
     events: await db.rows<{ dispute_id: string; to_status: string | null; note: string | null; kind: string; created_at: string }>('select dispute_id, to_status, note, kind, created_at from public.dispute_events order by created_at'),
   }));
   const tone = (s: string) => (s === 'resolved' ? 'ok' : s === 'response_received' ? 'brand' : s === 'on_hold' || s === 'approved' ? 'neutral' : 'info') as 'ok' | 'brand' | 'info' | 'neutral';
@@ -25,6 +26,7 @@ export default async function PortalDisputes() {
       {rows.length === 0 ? <EmptyState title={t('noDisputes')} action={<Link href="/portal/messages" className="btn-primary">{t('messageTeam')}</Link>} /> : rows.map((d) => {
         const open = Boolean(d.due_at) && (d.status === 'submitted' || d.status === 'under_investigation');
         const history = events.filter((e) => e.dispute_id === d.id);
+        const agency = specialtyAgency(d.agency);
         return (
           <article key={d.id} className="card card-pad">
             <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
@@ -47,6 +49,13 @@ export default async function PortalDisputes() {
               <dl className="mt-4 text-sm"><div><dt className="text-[0.8125rem] text-muted">{t('sentOn')}</dt><dd>{fmtDate(d.submitted_at, lang)}</dd></div></dl>
             )}
 
+            {agency && (
+              // What this agency is, in one sentence, and where the client can ask for their own free copy.
+              <details className="group/about mt-5 border-t border-line pt-4">
+                <summary className="flex cursor-pointer list-none items-center gap-1.5 rounded-md text-sm font-semibold text-brand-strong [&::-webkit-details-marker]:hidden">{fill(t('sp_about'), { name: agency.shortName })} <ChevronDown size={16} aria-hidden className="transition-transform group-open/about:rotate-180" /></summary>
+                <p className="mt-2.5 text-sm text-muted">{agency.reports[lang]} <a className="link" href={agency.disclosure.url} target="_blank" rel="noreferrer">{t('sp_request')}</a></p>
+              </details>
+            )}
             <details className="group mt-5 border-t border-line pt-4">
               <summary className="flex cursor-pointer list-none items-center gap-1.5 rounded-md text-sm font-semibold text-brand-strong [&::-webkit-details-marker]:hidden">{t('reason')} <ChevronDown size={16} aria-hidden className="transition-transform group-open:rotate-180" /></summary>
               <p className="mt-2.5 whitespace-pre-wrap rounded-xl bg-raised p-3.5 text-sm text-muted [overflow-wrap:anywhere]">{d.reason}</p>

@@ -5,6 +5,7 @@ import { redirect } from 'next/navigation';
 import { z } from 'zod';
 import type { ActionState } from '@/components/forms';
 import { parseForm, run, UserError, zOpt, zText } from '@/lib/action';
+import { orgNameIssue } from '@/lib/agency-site';
 import { audit } from '@/lib/audit';
 import { clearSessionCookie, currentSession, requireStaff } from '@/lib/auth/context';
 import { changePassword, revokeAllSessions } from '@/lib/auth/service';
@@ -21,6 +22,10 @@ export async function updateOrgAction(_: ActionState, fd: FormData): Promise<Act
     const labelIssue = d.monitoringLabel ? monitoringLabelIssue(d.monitoringLabel) : null;
     if (labelIssue) throw new UserError(`Service name: ${labelIssue}`);
     await ctx.tx(async (db) => {
+      // The name is the title of the agency's hosted site, so while that site is published the name gets the same claims check as its text.
+      const site = await db.row<{ published: boolean }>("select coalesce(settings->'website'->>'published', '') = 'true' as published from public.organizations where id = $1", [ctx.orgId]);
+      const nameIssue = site?.published ? orgNameIssue(d.name) : null;
+      if (nameIssue) throw new UserError(nameIssue.replace(' Change the name in Settings.', ' Choose another name, or unpublish your website first.'));
       await db.run("update public.organizations set name = $2, state_code = $3, settings = (settings || jsonb_build_object('retention_days', $4::int)) - 'brand_color' - 'monitoring_url' - 'monitoring_label' - 'monitoring_paid' || case when $5::text <> '' then jsonb_build_object('brand_color', $5::text) else '{}'::jsonb end || case when $6::text <> '' then jsonb_strip_nulls(jsonb_build_object('monitoring_url', $6::text, 'monitoring_label', nullif($7::text, ''), 'monitoring_paid', $8::boolean)) else '{}'::jsonb end where id = $1", [ctx.orgId, d.name, d.stateCode || null, d.retentionDays, d.brandColor ?? '', monitoringUrl, d.monitoringLabel ?? '', d.monitoringPaid != null]);
       await audit(db, { orgId: ctx.orgId, actorId: ctx.userId, action: 'org.updated', entityType: 'organization', entityId: ctx.orgId, ip: ctx.meta.ip, meta: { retention_days: d.retentionDays, monitoring_link: monitoringUrl !== '' } });
     });

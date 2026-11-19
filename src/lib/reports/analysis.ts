@@ -1,4 +1,5 @@
 import { BUREAU_LABEL, BUREAUS, money, type Bureau } from '../util';
+import { FALL_OFF_RULE_TEXT, isNegative, tradelineFallOff } from '../credit/reporting-period';
 
 /**
  * Cross-bureau comparison and discrepancy detection.
@@ -19,7 +20,8 @@ export interface AnalysisInquiry { id: string; bureau: Bureau; name: string; inq
 export interface AnalysisPublicRecord { id: string; bureau: Bureau; kind: string; filed_date: string | null; status: string | null }
 export interface AnalysisIdentity { bureau: Bureau; kind: 'name' | 'address' | 'employer'; value: string }
 
-export interface Evidence { bureau?: Bureau; field: string; value: string; source: 'reported' | 'client' | 'derived'; tradeline_id?: string }
+/** `record` is something written in the case file by staff (for example a recorded dispute outcome), as opposed to what a bureau reports. */
+export interface Evidence { bureau?: Bureau; field: string; value: string; source: 'reported' | 'client' | 'derived' | 'record'; tradeline_id?: string }
 export interface Finding {
   dedupe_key: string; category: FindingCategory; severity: 'info' | 'review' | 'strong'; title: string; explanation: string;
   evidence: Evidence[]; basis: 'verified_fact' | 'user_provided' | 'potential_discrepancy'; tradeline_ids: string[];
@@ -37,6 +39,7 @@ export const FINDING_CATEGORIES = {
   collection_validation: 'Collection account',
   old_inquiry: 'Older inquiry',
   client_statement: 'Client statement conflicts with report',
+  possible_reinsertion: 'Possible reinsertion',
 } as const;
 export type FindingCategory = keyof typeof FINDING_CATEGORIES;
 
@@ -89,9 +92,9 @@ export function diffGroup(g: AccountGroup): FieldDiff[] {
 }
 
 const yearsSince = (iso: string, now: Date) => (now.getTime() - new Date(`${iso}T00:00:00Z`).getTime()) / (365.25 * 86_400_000);
-const LATE = /\b(30|60|90|120|150|180)\b|late|delinq|charge.?off|collection|repo|foreclos|derog|past due/i;
-const isNegative = (t: AnalysisTradeline) => t.item_type === 'collection' || LATE.test(`${t.payment_status ?? ''} ${t.account_status ?? ''}`) || /[3-9]0|CO|\bC\.O\./.test(t.payment_history?.replace(/C/g, '') ?? '');
 const NOTE = 'This is a difference to investigate, not a conclusion that anything is inaccurate.';
+/** Why a date-of-first-delinquency difference matters, without saying which date (if either) is wrong. 15 U.S.C. § 1681c. */
+const DOFD_NOTE = 'This date generally controls how long the item may be reported (15 U.S.C. § 1681c), and it generally stays the same when a debt is sold or placed for collection. The dates differ and should be checked against the client’s records.';
 const rep = (t: AnalysisTradeline, field: string, value: string): Evidence => ({ bureau: t.bureau, field, value, source: 'reported', tradeline_id: t.id });
 const label = (g: { creditor: string }, last4: string | null | undefined) => `${g.creditor}${last4 ? ` (ending ${last4})` : ''}`;
 
@@ -100,6 +103,7 @@ export function analyze(input: {
   clientName?: string; clientAddress?: string; now?: Date;
 }): Finding[] {
   const now = input.now ?? new Date();
+  const today = now.toISOString().slice(0, 10);
   const findings: Finding[] = [];
   const add = (f: Finding) => findings.push(f);
   const groups = groupAccounts(input.tradelines);
@@ -115,11 +119,13 @@ export function analyze(input: {
       const cat: FindingCategory | null = d.field === 'balance_cents' ? 'balance_mismatch' : d.field === 'account_status' || d.field === 'payment_status' ? 'status_mismatch'
         : d.field === 'date_opened' ? 'date_mismatch' : d.field === 'date_of_first_delinquency' ? 'dofd_mismatch' : null;
       if (!cat) continue;
+      // Re-aging check: only when the account is identified by its number (the exact match key), never by the creditor-and-open-date fallback.
+      if (cat === 'dofd_mismatch' && !any.account_last4) continue;
       const reportedOn = present.map((b) => `${BUREAU_LABEL[b]}: ${g.byBureau[b]!.date_reported ?? 'date not shown'}`).join('; ');
       add({
         dedupe_key: `${cat}:${g.key}:${d.field}`, category: cat, severity: cat === 'balance_mismatch' ? 'info' : 'review',
         title: `${d.label} differs for ${name}`,
-        explanation: `${(Object.entries(d.values) as [Bureau, string][]).map(([b, v]) => `${BUREAU_LABEL[b]} shows ${v}`).join(', ')}. ${d.field === 'balance_cents' ? `Balances can legitimately differ when bureaus received data on different dates (${reportedOn}). ` : ''}${NOTE}`,
+        explanation: `${(Object.entries(d.values) as [Bureau, string][]).map(([b, v]) => `${BUREAU_LABEL[b]} shows ${v}`).join(', ')}. ${d.field === 'balance_cents' ? `Balances can legitimately differ when bureaus received data on different dates (${reportedOn}). ` : ''}${cat === 'dofd_mismatch' ? `${DOFD_NOTE} ` : ''}${NOTE}`,
         evidence: (Object.entries(d.values) as [Bureau, string][]).map(([b, v]) => rep(g.byBureau[b]!, d.label, v)),
         basis: 'potential_discrepancy', tradeline_ids: ids,
       });
@@ -138,13 +144,16 @@ export function analyze(input: {
     for (const b of present) {
       const t = g.byBureau[b]!;
       if (isNegative(t)) {
+        // Past the reporting period only once the computed date has passed: 7 years, counted from 180 days after the
+        // date of first delinquency for a collection or charge-off (15 U.S.C. § 1681c(a)(4), (c)(1)).
+        const off = tradelineFallOff(t);
         const age = t.date_of_first_delinquency ? yearsSince(t.date_of_first_delinquency, now) : null;
-        if (age != null && age > 7) {
+        if (off?.kind === 'date' && age != null && off.date < today) {
           add({
             dedupe_key: `obsolete:${t.id}`, category: 'obsolete_item', severity: 'strong',
             title: `${name} on ${BUREAU_LABEL[b]} has a first-delinquency date over 7 years ago`,
-            explanation: `${BUREAU_LABEL[b]} reports a date of first delinquency of ${t.date_of_first_delinquency} (${age.toFixed(1)} years ago). Negative information generally stops being reportable 7 years after the date of first delinquency (FCRA § 605). Confirm the date is correct before disputing — if it is accurate, the item may be past the reporting period; if it was re-aged, the date itself may be the issue.`,
-            evidence: [rep(t, 'Date of first delinquency', t.date_of_first_delinquency!), { field: 'Age at report review', value: `${age.toFixed(1)} years`, source: 'derived' }],
+            explanation: `${BUREAU_LABEL[b]} reports a date of first delinquency of ${t.date_of_first_delinquency} (${age.toFixed(1)} years ago). The reporting period for negative information of this kind is generally ${FALL_OFF_RULE_TEXT[off.rule]} (15 U.S.C. § 1681c), which works out to ${off.date}. Confirm the date is correct before disputing — if it is accurate, the item may be past the reporting period; if it was re-aged, the date itself may be the issue.`,
+            evidence: [rep(t, 'Date of first delinquency', t.date_of_first_delinquency!), { field: 'Age at report review', value: `${age.toFixed(1)} years`, source: 'derived' }, { field: 'Reporting period generally ends', value: off.date, source: 'derived' }],
             basis: 'potential_discrepancy', tradeline_ids: [t.id],
           });
         } else if (t.item_type === 'collection' && !t.date_of_first_delinquency) {
@@ -197,6 +206,21 @@ export function analyze(input: {
           basis: 'potential_discrepancy', tradeline_ids: [c.id, twin.id],
         });
       }
+    }
+    // Re-aging check: a collection whose date of first delinquency is LATER than the one on the original creditor's
+    // account. Only when both dates are reported and exactly one account from that creditor could be the original.
+    for (const c of own.filter((t) => t.item_type === 'collection' && t.original_creditor && t.date_of_first_delinquency)) {
+      const oc = normCreditor(c.original_creditor!);
+      const originals = oc ? own.filter((t) => t.id !== c.id && t.item_type === 'tradeline' && normCreditor(t.creditor_name) === oc) : [];
+      const orig = originals.length === 1 ? originals[0]! : null;
+      if (!orig?.date_of_first_delinquency || c.date_of_first_delinquency! <= orig.date_of_first_delinquency) continue;
+      add({
+        dedupe_key: `reage-oc:${b}:${normCreditor(c.creditor_name)}|${c.account_last4 ?? ''}:${oc}|${orig.account_last4 ?? ''}`, category: 'dofd_mismatch', severity: 'review',
+        title: `${BUREAU_LABEL[b]}: ${c.creditor_name} shows a later date of first delinquency than ${orig.creditor_name}`,
+        explanation: `The collection account reports a date of first delinquency of ${c.date_of_first_delinquency}. ${orig.creditor_name}, which it names as the original creditor, reports ${orig.date_of_first_delinquency}. ${DOFD_NOTE} ${NOTE}`,
+        evidence: [rep(c, 'Date of first delinquency (collection)', c.date_of_first_delinquency!), rep(orig, 'Date of first delinquency (original creditor)', orig.date_of_first_delinquency), rep(c, 'Original creditor named', c.original_creditor!)],
+        basis: 'potential_discrepancy', tradeline_ids: [c.id, orig.id],
+      });
     }
     const seen = new Map<string, AnalysisTradeline>();
     for (const t of own) {

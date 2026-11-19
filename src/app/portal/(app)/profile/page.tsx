@@ -9,6 +9,7 @@ import { portalContext } from '@/lib/portal';
 import type { PortalKey } from '@/lib/portal-i18n';
 import { fmtDate } from '@/lib/util';
 import { portalChangePasswordAction, portalSignConsentAction, portalUpdateProfileAction } from '../../actions';
+import { SmsConsentCard } from './sms-consent';
 
 export const metadata: Metadata = { title: 'Profile' };
 
@@ -40,6 +41,7 @@ export default async function PortalProfile() {
             </ActionForm>
             <p className="mt-4 text-sm">{ctx.session.totpEnabled ? <Badge tone="ok"><CheckCircle2 size={12} aria-hidden /> {t('twoStepOn')}</Badge> : <Link href="/mfa/setup" className="link">{t('twoStep')}</Link>}</p>
           </Section>
+          <SmsConsentCard ctx={ctx} clientId={client.id} phone={client.phone} lang={lang} t={t} />
         </div>
       </div>
 

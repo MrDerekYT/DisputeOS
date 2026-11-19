@@ -1,4 +1,5 @@
 import type { Permission } from '../rbac';
+import { reinvestigationDays } from './clock';
 
 export const DISPUTE_STATUSES = ['draft', 'ready_for_review', 'approved', 'submitted', 'under_investigation', 'response_received', 'resolved', 'on_hold', 'cancelled'] as const;
 export type DisputeStatus = (typeof DISPUTE_STATUSES)[number];
@@ -28,11 +29,12 @@ export const canTransition = (from: DisputeStatus, to: DisputeStatus) => TRANSIT
 /** Approving is a manager-level decision; everything else is ordinary case work. */
 export const permissionFor = (to: DisputeStatus): Permission => (to === 'approved' ? 'disputes:approve' : 'disputes:write');
 
-export const OUTCOMES = ['deleted', 'updated', 'verified', 'unresolved', 'no_response'] as const;
+/** 'frivolous' = the agency sent notice that it will not investigate without more information (15 U.S.C. § 1681i(a)(3)); recorded with recordFrivolousNotice. */
+export const OUTCOMES = ['deleted', 'updated', 'verified', 'unresolved', 'no_response', 'frivolous'] as const;
 export type Outcome = (typeof OUTCOMES)[number];
-export const OUTCOME_LABEL: Record<Outcome, string> = { deleted: 'Deleted', updated: 'Updated / corrected', verified: 'Verified as reported', unresolved: 'Unresolved', no_response: 'No response' };
+export const OUTCOME_LABEL: Record<Outcome, string> = { deleted: 'Deleted', updated: 'Updated / corrected', verified: 'Verified as reported', unresolved: 'Unresolved', no_response: 'No response', frivolous: 'More information requested' };
 
-export interface CategoryDef { label: string; workflow: 'standard' | 'furnisher_direct' | 'validation' | 'personal_info' | 'goodwill'; target: 'bureau' | 'furnisher' | 'collector'; hint: string }
+export interface CategoryDef { label: string; workflow: 'standard' | 'furnisher_direct' | 'validation' | 'personal_info' | 'goodwill' | 'specialty'; target: 'bureau' | 'furnisher' | 'collector' | 'agency'; hint: string }
 export const CATEGORIES: Record<string, CategoryDef> = {
   incorrect_balance: { label: 'Balance may be incorrect', workflow: 'standard', target: 'bureau', hint: 'Compare against a recent statement or payoff letter and attach it.' },
   incorrect_status: { label: 'Account or payment status', workflow: 'standard', target: 'bureau', hint: 'Attach a statement or closure letter that shows the actual status.' },
@@ -47,7 +49,11 @@ export const CATEGORIES: Record<string, CategoryDef> = {
   personal_info: { label: 'Personal information', workflow: 'personal_info', target: 'bureau', hint: 'Names, addresses and employers that do not belong to the client.' },
   goodwill: { label: 'Goodwill adjustment request', workflow: 'goodwill', target: 'furnisher', hint: 'This is a courtesy request, not a dispute of accuracy.' },
   other: { label: 'Other', workflow: 'standard', target: 'bureau', hint: 'Explain the specific issue and what you would like verified.' },
+  // An item on a specialty agency's disclosure (ChexSystems, LexisNexis, ...), entered by hand. Created with createSpecialtyDispute, never from a report finding.
+  specialty_item: { label: 'Specialty agency item', workflow: 'specialty', target: 'agency', hint: 'State what is inaccurate, incomplete or unverifiable, using only what the disclosure and the client’s records show.' },
 };
+/** The category every specialty agency dispute uses. */
+export const SPECIALTY_CATEGORY = 'specialty_item';
 
 export const FINDING_TO_CATEGORY: Record<string, string> = {
   balance_mismatch: 'incorrect_balance', status_mismatch: 'incorrect_status', date_mismatch: 'incorrect_dates', dofd_mismatch: 'incorrect_dates',
@@ -59,10 +65,11 @@ export const FINDING_TO_CATEGORY: Record<string, string> = {
  * FCRA § 611(a)(1): a bureau has 30 days from RECEIPT of a dispute to investigate (45 if the consumer sends
  * additional relevant information during that window). We count from the received date when known, otherwise the
  * date it was submitted — the UI says so. Other workflow types use 30 days as a follow-up checkpoint.
+ * The day counts, and every other deadline on a dispute, live in ./clock.ts.
  */
 export function responseDueDate(start: Date, extended = false): Date {
   const d = new Date(start);
-  d.setUTCDate(d.getUTCDate() + (extended ? 45 : 30));
+  d.setUTCDate(d.getUTCDate() + reinvestigationDays(extended));
   return d;
 }
 
@@ -86,7 +93,7 @@ export const BUREAU_ADDRESSES: Record<string, { name: string; address: string }>
   transunion: { name: 'TransUnion Consumer Solutions', address: 'P.O. Box 2000, Chester, PA 19016' },
 };
 
-export interface NextStepInput { status: DisputeStatus; round: number; due_at: string | null; outcome: Outcome | null; hasApprovedLetter: boolean; evidenceCount: number }
+export interface NextStepInput { status: DisputeStatus; round: number; due_at: string | null; outcome: Outcome | null; hasApprovedLetter: boolean; evidenceCount: number; confirmedAccurate?: boolean }
 /** Plain, rule-based suggestions. They advise; they never act. */
 export function nextSteps(d: NextStepInput, now = new Date()): string[] {
   const out: string[] = [];
@@ -103,8 +110,11 @@ export function nextSteps(d: NextStepInput, now = new Date()): string[] {
     }
     case 'response_received': out.push('Read the response, record the outcome, and update the client.'); break;
     case 'resolved':
-      if (d.outcome === 'verified' || d.outcome === 'unresolved' || d.outcome === 'no_response')
+      // 15 U.S.C. § 1679b(a)(1): nothing may be offered that would have the client dispute information they say is accurate.
+      if (d.confirmedAccurate) out.push('The client confirmed this item is reported accurately. No further letter or round is offered for it.');
+      else if (d.outcome === 'verified' || d.outcome === 'unresolved' || d.outcome === 'no_response')
         out.push('Only start another round if you have NEW information or evidence — repeating the same dispute without it can be treated as frivolous. Consider requesting the method of verification.');
+      else if (d.outcome === 'frivolous') out.push('The agency asked for more information. When the client has provided it, start another round that includes it.');
       else out.push('Confirm the change on the next report pull and tell the client.');
       break;
     case 'on_hold': out.push('Resume when the blocking issue (e.g. a missing document) is resolved.'); break;

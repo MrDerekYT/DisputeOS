@@ -7,15 +7,18 @@ import { logEvent } from '../crm';
 import { can, PermissionError, type Role } from '../rbac';
 import { BUREAU_LABEL, type Bureau } from '../util';
 import {
-  BUREAU_ADDRESSES, CATEGORIES, canTransition, FINDING_TO_CATEGORY, permissionFor, responseDueDate, STATUS_LABEL, type DisputeStatus, type Outcome,
+  BUREAU_ADDRESSES, CATEGORIES, canTransition, FINDING_TO_CATEGORY, permissionFor, responseDueDate, SPECIALTY_CATEGORY, STATUS_LABEL, type DisputeStatus, type Outcome,
 } from './workflow';
+import { parseAgencyItem, specialtyAgency, type AgencyItem } from '../credit/agencies';
 import { findBlockedClaims } from '../compliance/claims';
 import type { Evidence } from '../reports/analysis';
 import { draftReason } from './reasons';
 import { businessToday, checkSentOn } from '../letters/service';
+import { queueClientUpdate } from '../client-updates/service';
 
 export interface DActor { orgId: string; userId: string; role: Role; meta?: { ip?: string | null } }
 export class DisputeError extends UserError {}
+export const CONFIRMED_ACCURATE_STOP = 'The client confirmed this item is reported accurately, so no further letter or round is offered for it.';
 
 export interface NewDispute {
   clientId: string; tradelineId?: string | null; findingId?: string | null; category: string; reason: string; fields?: string[];
@@ -26,6 +29,7 @@ export async function createDispute(db: Db, actor: DActor, d: NewDispute): Promi
   if (!can(actor.role, 'disputes:write')) throw new PermissionError('disputes:write');
   const cat = CATEGORIES[d.category];
   if (!cat) throw new DisputeError('Choose a dispute category.');
+  if (cat.target === 'agency') throw new DisputeError('A specialty agency item is entered on its own form.');
   const reason = d.reason.trim();
   if (reason.length < 10) throw new DisputeError('Explain the reason in at least a sentence (10+ characters).');
 
@@ -65,6 +69,45 @@ export async function createDispute(db: Db, actor: DActor, d: NewDispute): Promi
   return row!.id;
 }
 
+export interface NewSpecialtyDispute {
+  clientId: string; agency: string; item: AgencyItem; reason: string;
+  /** Typed by staff from the agency's current instructions. Used, and required, only when the registry holds no verified address. */
+  recipientAddress?: string | null; assignedTo?: string | null; parentId?: string | null; round?: number;
+}
+
+/**
+ * A dispute about an item on a specialty agency's disclosure (ChexSystems, LexisNexis, ...). Nothing is read from a
+ * report: a person typed the item as it appears on the consumer's disclosure and wrote why it is inaccurate, incomplete
+ * or unverifiable. From here it is an ordinary dispute: the same review, approval, letter, submission and 30-day window.
+ */
+export async function createSpecialtyDispute(db: Db, actor: DActor, d: NewSpecialtyDispute): Promise<string> {
+  if (!can(actor.role, 'disputes:write')) throw new PermissionError('disputes:write');
+  const agency = specialtyAgency(d.agency);
+  if (!agency) throw new DisputeError('Choose the reporting agency.');
+  const clean = (v: string | null | undefined, max: number) => (v ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
+  const item: AgencyItem = { name: clean(d.item.name, 160), reference: clean(d.item.reference, 60) || null, date: clean(d.item.date, 40) || null, amount: clean(d.item.amount, 40) || null, consumerId: clean(d.item.consumerId, 60) || null };
+  if (item.name.length < 2) throw new DisputeError('Enter the company or account name as it appears on the disclosure.');
+  const reason = d.reason.trim();
+  if (reason.length < 10) throw new DisputeError('Explain what is inaccurate, incomplete or unverifiable, and why (10+ characters).');
+  // The registry's verified address always wins; a typed one is kept only where the registry has none.
+  const typed = (d.recipientAddress ?? '').replace(/\r\n?/g, '\n').split('\n').map((l) => l.trim()).filter(Boolean).join('\n').slice(0, 400);
+  if (!agency.disputeAddress && typed.length < 10) throw new DisputeError(`Enter the dispute mailing address from ${agency.shortName}’s current instructions. There is no verified address on file for it.`);
+
+  const client = await db.row<{ id: string; assigned_to: string | null }>('select id, assigned_to from public.clients where id = $1', [d.clientId]);
+  if (!client) throw new DisputeError('Client not found.');
+  const label = `${item.name}${item.reference ? ` · ${item.reference}` : ''} (${agency.shortName})`.slice(0, 300);
+  const row = await db.row<{ id: string }>(
+    `insert into public.disputes (org_id, client_id, parent_dispute_id, item_label, target_type, bureau, agency, agency_item, recipient_name, recipient_address, category, reason,
+       workflow, round, assigned_to, created_by)
+     values ($1,$2,$3,$4,'agency',null,$5,$6,$7,$8,$9,$10,'specialty',$11,$12,$13) returning id`,
+    [actor.orgId, d.clientId, d.parentId ?? null, label, agency.key, JSON.stringify(item), agency.name, agency.disputeAddress ? null : typed, SPECIALTY_CATEGORY, reason,
+      d.round ?? 1, d.assignedTo ?? client.assigned_to ?? actor.userId, actor.userId],
+  );
+  await logEvent(db, actor, d.clientId, 'dispute_created', `Dispute drafted: ${label}`, { dispute_id: row!.id });
+  await audit(db, { orgId: actor.orgId, actorId: actor.userId, action: 'dispute.created', entityType: 'dispute', entityId: row!.id, ip: actor.meta?.ip, meta: { category: SPECIALTY_CATEGORY, agency: agency.key, round: d.round ?? 1 } });
+  return row!.id;
+}
+
 interface DisputeRow {
   id: string; client_id: string; status: DisputeStatus; round: number; workflow: string; due_at: string | null; submitted_at: string | null; approved_by: string | null;
   deadline_extended: boolean; item_label: string; created_by: string | null;
@@ -99,7 +142,7 @@ export async function transitionDispute(
     if (!letter) throw new DisputeError('Create a letter for this dispute before sending it for review.');
   }
   if (to === 'submitted') {
-    const letter = await db.row<{ id: string }>("select id from public.letters where dispute_id = $1 and status in ('approved', 'sent') order by created_at desc limit 1", [id]);
+    const letter = await db.row<{ id: string }>("select id from public.letters where dispute_id = $1 and status in ('approved', 'sent') and kind <> 'method_of_verification' order by created_at desc limit 1", [id]);
     if (!letter) throw new DisputeError('This dispute has no approved letter. A person must approve the letter before it can be submitted.');
     const consents = await db.rows<{ kind: string; signed_at: string; revoked_at: string | null }>('select kind, signed_at, revoked_at from public.client_consents where client_id = $1', [d.client_id]);
     const cs = consentStatus(consents);
@@ -124,21 +167,25 @@ export async function transitionDispute(
   await logEvent(db, actor, d.client_id, 'dispute_status', `Dispute “${d.item_label}” → ${STATUS_LABEL[to]}`, { dispute_id: id });
   await audit(db, { orgId: actor.orgId, actorId: actor.userId, action: `dispute.${to}`, entityType: 'dispute', entityId: id, ip: actor.meta?.ip, meta: { from: d.status, to } });
   await fireTrigger(db, actor, 'dispute_status_changed', { type: 'dispute', id }, { toStatus: to });
+  if (to === 'submitted') await queueClientUpdate(db, { orgId: actor.orgId, clientId: d.client_id, event: 'dispute_sent', subjectId: id });
 }
 
-export async function recordResponse(db: Db, actor: DActor, id: string, r: { outcome: Outcome; notes?: string; receivedOn?: string }): Promise<void> {
+export async function recordResponse(db: Db, actor: DActor, id: string, r: { outcome: Outcome; notes?: string; receivedOn?: string; completedOn?: string }): Promise<void> {
   if (!can(actor.role, 'disputes:write')) throw new PermissionError('disputes:write');
   const d = await db.row<{ status: DisputeStatus; client_id: string }>('select status, client_id from public.disputes where id = $1 for update', [id]);
   if (!d) throw new DisputeError('Dispute not found.');
   if (!['submitted', 'under_investigation', 'response_received'].includes(d.status)) throw new DisputeError('Only a submitted dispute can have a response recorded.');
+  // The day the agency says it completed its reinvestigation: written results are due 5 business days later (15 U.S.C. § 1681i(a)(6)(A), see ./clock.ts).
+  if (r.completedOn && r.completedOn > (r.receivedOn ?? businessToday())) throw new DisputeError('The reinvestigation cannot have been completed after the response was received.');
   await db.run(
-    `update public.disputes set outcome = $2, outcome_notes = $3, response_at = $4, status = 'response_received' where id = $1`,
-    [id, r.outcome, r.notes?.slice(0, 4000) ?? null, r.receivedOn ? `${r.receivedOn}T12:00:00Z` : new Date()],
+    `update public.disputes set outcome = $2, outcome_notes = $3, response_at = $4, investigation_completed_on = coalesce($5::date, investigation_completed_on), status = 'response_received' where id = $1`,
+    [id, r.outcome, r.notes?.slice(0, 4000) ?? null, r.receivedOn ? `${r.receivedOn}T12:00:00Z` : new Date(), r.completedOn ?? null],
   );
   await db.run('insert into public.dispute_events (org_id, dispute_id, actor_id, kind, note, client_visible) values ($1, $2, $3, $4, $5, true)', [actor.orgId, id, actor.userId, 'outcome', `Outcome recorded: ${r.outcome.replace(/_/g, ' ')}`]);
   await logEvent(db, actor, d.client_id, 'dispute_outcome', `Dispute outcome recorded: ${r.outcome.replace(/_/g, ' ')}`, { dispute_id: id });
   await audit(db, { orgId: actor.orgId, actorId: actor.userId, action: 'dispute.outcome', entityType: 'dispute', entityId: id, ip: actor.meta?.ip, meta: { outcome: r.outcome } });
   await fireTrigger(db, actor, 'dispute_status_changed', { type: 'dispute', id }, { toStatus: 'response_received' });
+  await queueClientUpdate(db, { orgId: actor.orgId, clientId: d.client_id, event: 'response_recorded', subjectId: id });
 }
 
 /**
@@ -147,16 +194,22 @@ export async function recordResponse(db: Db, actor: DActor, id: string, r: { out
  */
 export async function startNextRound(db: Db, actor: DActor, id: string, input: { reason: string; newInformation: string }): Promise<string> {
   if (!can(actor.role, 'disputes:write')) throw new PermissionError('disputes:write');
-  const prev = await db.row<{ client_id: string; tradeline_id: string | null; category: string; reason: string; bureau: Bureau | null; fields: string[]; round: number; status: DisputeStatus; recipient_name: string; assigned_to: string | null }>(
-    'select client_id, tradeline_id, category, reason, bureau, fields, round, status, recipient_name, assigned_to from public.disputes where id = $1', [id]);
+  const prev = await db.row<{ client_id: string; tradeline_id: string | null; category: string; reason: string; bureau: Bureau | null; fields: string[]; round: number; status: DisputeStatus; recipient_name: string; assigned_to: string | null; agency: string | null; agency_item: unknown; recipient_address: string | null; client_confirmed_accurate: boolean }>(
+    'select client_id, tradeline_id, category, reason, bureau, fields, round, status, recipient_name, assigned_to, agency, agency_item, recipient_address, client_confirmed_accurate from public.disputes where id = $1', [id]);
   if (!prev) throw new DisputeError('Dispute not found.');
   if (prev.status !== 'resolved') throw new DisputeError('Resolve the current round before starting the next one.');
+  // 15 U.S.C. § 1679b(a)(1): once the client has confirmed the item is reported accurately, it is not disputed again.
+  if (prev.client_confirmed_accurate) throw new DisputeError(CONFIRMED_ACCURATE_STOP);
   if (input.newInformation.trim().length < 15) throw new DisputeError('Describe the new information or evidence that justifies another round.');
   if (input.reason.trim().toLowerCase() === prev.reason.trim().toLowerCase()) throw new DisputeError('The reason is identical to the previous round. Explain what is different this time.');
-  const newId = await createDispute(db, actor, {
-    clientId: prev.client_id, tradelineId: prev.tradeline_id, category: prev.category, bureau: prev.bureau, recipientName: prev.recipient_name, fields: prev.fields,
-    reason: `${input.reason.trim()}\n\nNew information since my previous request: ${input.newInformation.trim()}`, parentId: id, round: prev.round + 1, assignedTo: prev.assigned_to,
-  });
+  const reason = `${input.reason.trim()}\n\nNew information since my previous request: ${input.newInformation.trim()}`;
+  const item = prev.agency ? parseAgencyItem(prev.agency_item) : null;
+  const newId = prev.agency && item
+    ? await createSpecialtyDispute(db, actor, { clientId: prev.client_id, agency: prev.agency, item, reason, recipientAddress: prev.recipient_address, parentId: id, round: prev.round + 1, assignedTo: prev.assigned_to })
+    : await createDispute(db, actor, {
+      clientId: prev.client_id, tradelineId: prev.tradeline_id, category: prev.category, bureau: prev.bureau, recipientName: prev.recipient_name, fields: prev.fields,
+      reason, parentId: id, round: prev.round + 1, assignedTo: prev.assigned_to,
+    });
   await db.run('insert into public.dispute_events (org_id, dispute_id, actor_id, kind, note) values ($1, $2, $3, $4, $5)', [actor.orgId, newId, actor.userId, 'round_started', `Round ${prev.round + 1} started from the previous dispute`]);
   return newId;
 }

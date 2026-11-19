@@ -9,6 +9,8 @@ import { loadAnalysisInput } from '@/lib/reports/service';
 import { BUREAU_LABEL, BUREAUS, cn, fmtDate, isUuid, money, type Bureau } from '@/lib/util';
 import { refreshFindingsAction, setFindingStatusAction } from '../../../reports/actions';
 import { bulkDraftAction } from '../../../disputes/actions';
+import { FallOffNote } from '@/components/fall-off';
+import { tradelineFallOff } from '@/lib/credit/reporting-period';
 
 export const metadata: Metadata = { title: 'Three-bureau comparison' };
 
@@ -109,6 +111,7 @@ export default async function ComparePage({ params, searchParams }: { params: Pr
                                 );
                               })}
                               {t.payment_history && <div className="px-2 pt-1 font-mono text-xs text-muted">History: {t.payment_history}</div>}
+                              <FallOffNote fallOff={tradelineFallOff(t)} className="px-2 pt-1" />
                               {(t.user_provided.not_mine === true || t.user_provided.never_late === true) && (
                                 <div className="flex flex-wrap gap-1 px-2 pt-1">
                                   {t.user_provided.not_mine === true && <Badge tone="info">Client says: not recognised</Badge>}
@@ -165,9 +168,9 @@ export default async function ComparePage({ params, searchParams }: { params: Pr
                             <ul className="mt-2 space-y-1 rounded-xl bg-raised p-3 text-xs">
                               {f.evidence.map((e, i) => (
                                 <li key={i} className="flex flex-wrap gap-x-2">
-                                  <span className="font-semibold">{e.bureau ? BUREAU_LABEL[e.bureau] : e.source === 'client' ? 'Client' : 'Derived'}</span>
+                                  <span className="font-semibold">{e.bureau ? BUREAU_LABEL[e.bureau] : e.source === 'client' ? 'Client' : e.source === 'record' ? 'Case file' : 'Derived'}</span>
                                   <span className="text-muted">{e.field}:</span> <span>{e.value}</span>
-                                  <span className="text-faint">({e.source === 'reported' ? 'as reported' : e.source === 'client' ? 'client statement' : 'computed from reported dates'})</span>
+                                  <span className="text-faint">({e.source === 'reported' ? 'as reported' : e.source === 'client' ? 'client statement' : e.source === 'record' ? 'recorded by staff' : 'computed from reported dates'})</span>
                                 </li>
                               ))}
                             </ul>

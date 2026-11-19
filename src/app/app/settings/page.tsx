@@ -14,6 +14,7 @@ import { ShareLink } from '@/components/staff-kit';
 import { portalLoginPath } from '@/lib/org-brand';
 import { leadFormPath } from '@/lib/leads';
 import { changePasswordAction, signOutEverywhereAction, updateOrgAction } from './actions';
+import { ClientUpdatesSection } from './client-updates';
 
 export const metadata: Metadata = { title: 'Settings' };
 
@@ -59,7 +60,7 @@ export default async function SettingsPage() {
   void sessions;
   const integrations = integrationStatus();
   const agency = org.mode === 'agency';
-  const sections = [['organization', 'Organization'], ...(agency ? [['links', 'Links']] : []), ['security', 'Security'], ['integrations', 'Integrations'], ['records', 'Compliance and data']] as [string, string][];
+  const sections = [['organization', 'Organization'], ...(agency ? [['links', 'Links']] : []), ['security', 'Security'], ...(agency ? [['updates', 'Client updates']] : []), ['integrations', 'Integrations'], ['records', 'Compliance and data']] as [string, string][];
   return (
     <>
       <PageHeader title="Settings" subtitle="Organization, security, compliance and integrations." />
@@ -102,6 +103,8 @@ export default async function SettingsPage() {
           <div id="security" className="scroll-mt-28">{security}</div>
         </div>
       </div>
+
+      {agency && <ClientUpdatesSection ctx={ctx} />}
 
       <Section plain id="integrations" title="Integrations — what is actually connected" className="mt-8" hint={`What works in this environment (${env.APP_ENV}), read from its configuration. Open a row for the detail and the manual way to finish the job.`}>
         <ul className="divide-y divide-line/70">{integrations.map((i) => { const s = STATUS[i.status]; const Icon = s.icon; return (

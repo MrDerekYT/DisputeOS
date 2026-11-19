@@ -11,6 +11,7 @@ the first time it is needed; a bad configuration fails fast with a list of what 
 | `APP_URL` | http allowed | http allowed | **https required** | **https required** |
 | Staff MFA | on (can be turned off locally) | on | **must be on** | **must be on** |
 | Email | `log` driver (nothing sent) | `log` | `resend` or `disabled` | `resend` or `disabled` |
+| Text messages (`SMS_DRIVER`) | `disabled`, or `log` (nothing sent) | `disabled`; the SMS tests switch to `log` | `disabled` or `twilio` | `disabled` or `twilio` |
 | Seed data | `npm run db:seed` (demo agency) | per-test fixtures | never | never |
 | `db:reset` | allowed | allowed | refused | **refused** |
 
