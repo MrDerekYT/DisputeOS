@@ -33,7 +33,7 @@ export function ClientFields({ d = {}, team, canAssign, mode }: { d?: ClientDefa
       </fieldset>
 
       <fieldset className="grid gap-4 sm:grid-cols-2">
-        <legend className="mb-1 text-base font-semibold">Identity <span className="text-xs font-normal text-muted">— encrypted at rest; the full number is never shown again</span></legend>
+        <legend className="mb-1 text-base font-semibold">Identity <span className="text-[0.8125rem] font-normal text-muted">· encrypted at rest; the full number is never shown again</span></legend>
         <Field label="Date of birth" name="dob" type="date" autoComplete="off" hint={mode === 'edit' ? 'Leave blank to keep the stored value.' : undefined} />
         <Field label="Social Security number" name="ssn" inputMode="numeric" autoComplete="off" placeholder={d.ssn_last4 ? `••• •• ${d.ssn_last4}` : '000-00-0000'} hint={mode === 'edit' ? 'Leave blank to keep the stored value.' : 'Optional now; only needed if you will submit it with disputes.'} />
       </fieldset>
@@ -54,15 +54,15 @@ export function ClientFields({ d = {}, team, canAssign, mode }: { d?: ClientDefa
       </fieldset>
 
       {mode === 'create' && (
-        <fieldset className="space-y-3 rounded-2xl border border-line bg-raised p-5">
-          <legend className="px-1 text-base font-semibold">Consents &amp; portal</legend>
+        <div role="group" aria-labelledby="consents-title" className="space-y-3 rounded-2xl bg-raised p-5">
+          <h3 id="consents-title" className="text-base font-semibold">Consents &amp; portal</h3>
           <p className="text-sm text-muted">Record what the client has already received and signed. Disputes cannot be submitted until all three are on file (you can also record them later).</p>
           <Check name="consentDisclosure">Client received the <strong>Consumer Credit File Rights</strong> disclosure</Check>
           <Check name="consentContract">Client signed the <strong>service agreement</strong> (3-business-day cancellation right explained)</Check>
           <Check name="consentAuthorization">Client authorized us to <strong>review their reports and dispute on their behalf</strong></Check>
           <Field label="Name the client signed with" name="signedName" hint="Required if you tick any consent above." />
           <Check name="invite">Email an invitation to the client portal (needs an email address)</Check>
-        </fieldset>
+        </div>
       )}
     </div>
   );

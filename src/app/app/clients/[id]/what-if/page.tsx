@@ -58,9 +58,9 @@ export default async function WhatIfPage({ params, searchParams }: { params: Pro
             <form method="get" className="space-y-4">
               <div><label className="label" htmlFor="bureau">Report</label>
                 <select id="bureau" name="bureau" defaultValue={report.bureau} className="field">{reports.map((r) => <option key={r.id} value={r.bureau}>{BUREAU_LABEL[r.bureau]} · {fmtDate(r.report_date ?? r.created_at)}</option>)}</select></div>
-              <div><label className="label" htmlFor="payDown">Pay down card balances by ($)</label><input id="payDown" name="payDown" inputMode="decimal" className="field" defaultValue={sp.payDown ?? ''} placeholder="0" /><p className="mt-1 text-xs text-muted">Applied to the most heavily used cards first.</p></div>
-              <fieldset className="space-y-3 rounded-xl border border-line p-3">
-                <legend className="px-1 text-sm font-medium">Add an account</legend>
+              <div><label className="label" htmlFor="payDown">Pay down card balances by ($)</label><input id="payDown" name="payDown" inputMode="decimal" className="field" defaultValue={sp.payDown ?? ''} placeholder="0" /><p className="hint">Applied to the most heavily used cards first.</p></div>
+              <fieldset className="space-y-3 border-t border-line pt-4">
+                <legend className="pr-3 text-sm font-semibold">Add an account</legend>
                 <div><label className="label" htmlFor="addLimit">Credit limit ($)</label><input id="addLimit" name="addLimit" inputMode="decimal" className="field" defaultValue={sp.addLimit ?? ''} placeholder="0" /></div>
                 <div><label className="label" htmlFor="addBalance">Balance ($)</label><input id="addBalance" name="addBalance" inputMode="decimal" className="field" defaultValue={sp.addBalance ?? ''} placeholder="0" /></div>
                 <div><label className="label" htmlFor="addOpened">Date opened</label><input id="addOpened" name="addOpened" type="date" className="field" defaultValue={addOpened} max={today} /></div>
@@ -73,12 +73,12 @@ export default async function WhatIfPage({ params, searchParams }: { params: Pro
           <div className="space-y-6">
             <Section title={changed ? 'Before and after' : 'Where the report stands'} hint={`${BUREAU_LABEL[report.bureau]} report dated ${fmtDate(report.report_date ?? report.created_at)}`}>
               <div className="table-wrap !shadow-none"><table className="table"><thead><tr><th>Figure</th><th>Today</th>{changed && <th>After the change</th>}</tr></thead>
-                <tbody>{rowsOut.map(([label, b, a]) => <tr key={label}><td>{label}</td><td className="tabular-nums">{b}</td>{changed && <td className={`tabular-nums ${a !== b ? 'font-semibold text-brand-strong' : ''}`}>{a}</td>}</tr>)}</tbody></table></div>
+                <tbody>{rowsOut.map(([label, b, a]) => <tr key={label}><td>{label}</td><td className="tabular-nums">{b}</td>{changed && <td className={`tabular-nums ${a !== b ? 'font-semibold text-ink' : 'text-muted'}`}>{a}{a !== b && <span className="sr-only"> (changed)</span>}</td>}</tr>)}</tbody></table></div>
               {before.utilizationPct == null && <p className="mt-3 text-sm text-muted">No credit limits are reported on this report’s open cards, so credit usage cannot be calculated.</p>}
             </Section>
             <Section title="Accounts used" hint="Open accounts from this report. Closed, paid and collection accounts are left out of the figures.">
               <div className="table-wrap !shadow-none"><table className="table"><thead><tr><th>Account</th><th>Type</th><th>Balance</th><th>Limit</th><th>Opened</th><th>Counted as</th></tr></thead>
-                <tbody>{accounts.map((a, i) => <tr key={i} className={isOpen(a) ? '' : 'opacity-50'}><td>{a.creditor}</td><td>{a.type ?? '—'}</td><td className="tabular-nums">{a.balanceCents == null ? '—' : money(a.balanceCents)}</td><td className="tabular-nums">{a.limitCents == null ? '—' : money(a.limitCents)}</td><td>{fmtDate(a.opened)}</td><td className="text-muted">{!isOpen(a) ? 'Not counted' : isRevolving(a) ? 'Card (usage + age)' : 'Age only'}</td></tr>)}</tbody></table></div>
+                <tbody>{accounts.map((a, i) => <tr key={i} className={isOpen(a) ? '' : 'text-muted'}><td>{a.creditor}</td><td>{a.type ?? '—'}</td><td className="tabular-nums">{a.balanceCents == null ? '—' : money(a.balanceCents)}</td><td className="tabular-nums">{a.limitCents == null ? '—' : money(a.limitCents)}</td><td>{fmtDate(a.opened)}</td><td className="text-muted">{!isOpen(a) ? 'Not counted' : isRevolving(a) ? 'Card (usage + age)' : 'Age only'}</td></tr>)}</tbody></table></div>
             </Section>
           </div>
         </div>

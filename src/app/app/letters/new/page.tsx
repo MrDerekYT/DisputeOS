@@ -37,7 +37,7 @@ export default async function NewLetterPage({ searchParams }: { searchParams: Pr
         ) : (
           <>
             <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">{clients.map((c) => (
-              <li key={c.id}><Link href={`/app/letters/new?clientId=${c.id}${sp.templateKey ? `&templateKey=${encodeURIComponent(sp.templateKey)}` : ''}`} className="card flex items-center gap-3 p-4 transition hover:border-brand/50"><Avatar name={c.full_name} /><span className="truncate font-medium">{c.full_name}</span></Link></li>))}</ul>
+              <li key={c.id}><Link href={`/app/letters/new?clientId=${c.id}${sp.templateKey ? `&templateKey=${encodeURIComponent(sp.templateKey)}` : ''}`} className="panel flex items-center gap-3 p-4 transition-colors hover:bg-raised"><Avatar name={c.full_name} /><span className="truncate font-medium">{c.full_name}</span></Link></li>))}</ul>
             {clients.length === PICK_LIMIT && <p className="mt-3 text-sm text-muted">Showing the {PICK_LIMIT} {q ? 'most recently active matches' : 'most recently active clients'}. Search by name to find others.</p>}
           </>
         )}
@@ -59,8 +59,8 @@ export default async function NewLetterPage({ searchParams }: { searchParams: Pr
           hint={`${client.full_name} prefers ${client.preferred_language === 'es' ? 'Spanish' : 'English'}.`} />
         <Select label="Related dispute" name="disputeId" defaultValue={sp.disputeId ?? ''} placeholder="None — a standalone letter" options={disputes.map((d) => ({ value: d.id, label: `${d.item_label} (${d.status.replace(/_/g, ' ')})` }))}
           hint="Linking a dispute fills in the account, reason, bureau address and enclosures automatically." />
-        <details className="rounded-xl border border-line p-4">
-          <summary className="cursor-pointer text-sm font-medium">Standalone letter details</summary>
+        <details className="border-t border-line pt-4">
+          <summary className="link cursor-pointer text-sm">Standalone letter details</summary>
           <div className="mt-4 space-y-4">
             <Field label="Recipient name" name="recipientName" />
             <Field label="Recipient address" name="recipientAddress" />

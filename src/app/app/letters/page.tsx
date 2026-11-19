@@ -1,7 +1,8 @@
 import Link from 'next/link';
 import type { Metadata } from 'next';
 import { FilePlus2, FileText } from 'lucide-react';
-import { Badge, EmptyState, PageHeader, Pagination, StatusBadge, Tabs } from '@/components/ui';
+import { AiTag, Badge, EmptyState, PageHeader, Pagination, StatusBadge, Tabs } from '@/components/ui';
+import { aiUnapproved, FilterChips } from '@/components/staff-kit';
 import { requireStaff } from '@/lib/auth/context';
 import { KIND_LABEL, TEMPLATES, type LetterKind } from '@/lib/letters/templates';
 import { fmtDate, pageParam, relTime } from '@/lib/util';
@@ -20,8 +21,10 @@ export default async function LettersPage({ searchParams }: { searchParams: Prom
   const page = pageParam(sp.page);
   const data = await ctx.tx(async (db) => {
     const w = status ? 'where l.status = $1' : '';
-    const letters = await db.rows<{ id: string; title: string; status: string; current_version: number; kind: string; client_id: string; client_name: string; created_at: string; language: string }>(
-      `select l.id, l.title, l.status, l.current_version, l.kind, l.client_id, c.full_name as client_name, l.created_at, l.language from public.letters l join public.clients c on c.id = l.client_id ${w} order by l.created_at desc, l.id limit ${PAGE_SIZE} offset ${(page - 1) * PAGE_SIZE}`, status ? [status] : []);
+    const letters = await db.rows<{ id: string; title: string; status: string; current_version: number; kind: string; client_id: string; client_name: string; created_at: string; language: string; source: string | null }>(
+      `select l.id, l.title, l.status, l.current_version, l.kind, l.client_id, c.full_name as client_name, l.created_at, l.language,
+              (select v.source from public.letter_versions v where v.letter_id = l.id and v.version = l.current_version) as source
+         from public.letters l join public.clients c on c.id = l.client_id ${w} order by l.created_at desc, l.id limit ${PAGE_SIZE} offset ${(page - 1) * PAGE_SIZE}`, status ? [status] : []);
     const counts = await db.rows<{ status: string; n: number }>('select status, count(*)::int as n from public.letters group by status');
     const org = await db.rows<{ id: string; name: string; kind: LetterKind; language: string; active: boolean; version: number }>('select id, name, kind, language, active, version from public.letter_templates order by name');
     return { letters, counts: Object.fromEntries(counts.map((c) => [c.status, c.n])) as Record<string, number>, org };
@@ -34,46 +37,41 @@ export default async function LettersPage({ searchParams }: { searchParams: Prom
 
   return (
     <>
-      <PageHeader title="Letter center" subtitle="Templates, drafts, approvals and history — every letter is reviewed by a person before it can be sent."
-        actions={<Link href="/app/letters/new" className="btn-primary"><FilePlus2 size={16} /> New letter</Link>} />
+      <PageHeader title="Letter center" subtitle="Every letter is reviewed by a person before it can be sent."
+        actions={<Link href="/app/letters/new" className="btn-primary"><FilePlus2 size={16} aria-hidden /> New letter</Link>} />
       <Tabs active={tab} tabs={[{ key: 'history', label: 'History', href: '/app/letters', count: allCount }, { key: 'templates', label: 'Templates', href: '/app/letters?tab=templates' }]} />
 
       {tab === 'history' ? (
         <>
-          <nav aria-label="Letter status" className="mb-4 flex flex-wrap gap-2">
-            {[['', 'All'], ['draft', 'Drafts'], ['pending_approval', 'Awaiting approval'], ['approved', 'Approved'], ['sent', 'Sent']].map(([k, l]) => (
-              <Link key={k} href={k ? `/app/letters?status=${k}` : '/app/letters'} aria-current={status === k ? 'page' : undefined} className={`rounded-full border px-3.5 py-1.5 text-sm font-medium ${status === k ? 'border-brand bg-brand-soft text-brand-strong' : 'border-line bg-surface text-muted hover:text-ink'}`}>
-                {l}{k && data.counts[k] ? <span className="ml-1.5 text-xs tabular-nums opacity-70">{data.counts[k]}</span> : null}
-              </Link>
-            ))}
-          </nav>
+          <FilterChips label="Letter status" items={([['', 'All'], ['draft', 'Drafts'], ['pending_approval', 'Awaiting approval'], ['approved', 'Approved'], ['sent', 'Sent']] as const).map(([k, l]) => (
+            { key: k || 'all', label: l, href: k ? `/app/letters?status=${k}` : '/app/letters', count: k && data.counts[k] ? data.counts[k] : null, active: status === k }))} />
           {data.letters.length === 0 && (status || page > 1) ? <EmptyState title={status ? 'No letters with this status' : 'No more letters'} body="Choose a different status, or go back to all letters." action={<Link href="/app/letters" className="btn-secondary">All letters</Link>} />
           : data.letters.length === 0 ? <EmptyState title="No letters yet" body="Letters are created from a dispute, or from any template." action={<Link href="/app/letters/new" className="btn-primary">Create a letter</Link>} /> : (
-            <div className="table-wrap"><table className="table">
-              <thead><tr><th>Letter</th><th>Client</th><th>Status</th><th>Version</th><th>Created</th><th></th></tr></thead>
+            <div className="table-wrap"><table className="table table-stack">
+              <thead><tr><th>Letter</th><th>Client</th><th>Status</th><th>Version</th><th>Created</th><th><span className="sr-only">Download</span></th></tr></thead>
               <tbody>{data.letters.map((l) => (
                 <tr key={l.id} className="row-link">
-                  <td><Link href={`/app/letters/${l.id}`} className="flex items-center gap-2 font-medium hover:underline"><FileText size={16} className="shrink-0 text-muted" /><span className="truncate">{l.title}</span></Link></td>
-                  <td><Link href={`/app/clients/${l.client_id}`} className="text-muted hover:underline">{l.client_name}</Link></td>
-                  <td><StatusBadge status={l.status} /></td>
-                  <td className="tabular-nums text-muted">v{l.current_version}</td>
-                  <td className="whitespace-nowrap text-muted" title={fmtDate(l.created_at)}>{relTime(l.created_at)}</td>
-                  <td className="text-right">{(l.status === 'approved' || l.status === 'sent') && <a className="btn-ghost btn-sm" href={`/api/letters/${l.id}/pdf`}>PDF</a>}</td>
+                  <td className="cell-main"><Link href={`/app/letters/${l.id}`} className="flex items-start gap-2 font-semibold hover:underline sm:items-center"><FileText size={16} aria-hidden className="mt-0.5 shrink-0 text-muted sm:mt-0" /><span className="min-w-0 [overflow-wrap:anywhere] sm:truncate">{l.title}</span></Link></td>
+                  <td className="max-sm:order-2"><Link href={`/app/clients/${l.client_id}`} className="text-muted hover:underline">{l.client_name}</Link></td>
+                  <td className="max-sm:order-1"><span className="flex flex-wrap items-center gap-1.5"><StatusBadge status={l.status} />{aiUnapproved(l) && <AiTag title="This version was worded by AI and has not been approved by a person yet">AI wording</AiTag>}</span></td>
+                  <td className="tabular-nums text-muted max-sm:order-3">v{l.current_version}</td>
+                  <td className="whitespace-nowrap text-muted max-sm:order-3" title={fmtDate(l.created_at)}>{relTime(l.created_at)}</td>
+                  <td className={(l.status === 'approved' || l.status === 'sent') ? 'cell-end text-right max-sm:order-4' : 'cell-none'}>{(l.status === 'approved' || l.status === 'sent') && <a className="btn-ghost btn-sm" href={`/api/letters/${l.id}/pdf`}>PDF</a>}</td>
                 </tr>))}</tbody>
             </table></div>
           )}
           <Pagination page={page} pages={pages} hrefFor={(n) => `/app/letters?${status ? `status=${status}&` : ''}page=${n}`} />
         </>
       ) : (
-        <div className="space-y-8">
+        <div className="space-y-10">
           <section>
             <h2 className="mb-1 text-lg font-semibold">Standard templates</h2>
-            <p className="mb-4 text-sm text-muted">Starting points that cite the statute behind each request. They are not legal advice and promise no result — have counsel review them for your business and state.</p>
+            <p className="mb-4 max-w-3xl text-sm text-muted">Starting points that cite the statute behind each request. They are not legal advice and promise no result — have counsel review them for your business and state.</p>
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
               {TEMPLATES.map((t) => (
-                <article key={t.key} className="card flex flex-col p-5">
-                  <div className="mb-2 flex flex-wrap gap-1.5"><Badge tone="brand">{KIND_LABEL[t.kind]}</Badge><Badge>{t.language === 'es' ? 'Español' : 'English'}</Badge></div>
-                  <h3 className="font-medium leading-snug">{t.name}</h3>
+                <article key={t.key} className="panel flex flex-col p-5">
+                  <div className="mb-2 text-[0.8125rem] font-medium text-muted">{KIND_LABEL[t.kind]} · {t.language === 'es' ? 'Español' : 'English'}</div>
+                  <h3 className="font-semibold leading-snug">{t.name}</h3>
                   <p className="mt-1.5 flex-1 text-sm text-muted">{t.description}</p>
                   <div className="mt-4 flex gap-2">
                     <Link href={`/app/letters/new?templateKey=${t.key}`} className="btn-secondary btn-sm">Use</Link>
@@ -84,12 +82,12 @@ export default async function LettersPage({ searchParams }: { searchParams: Prom
             </div>
           </section>
           <section>
-            <div className="mb-3 flex items-center justify-between"><h2 className="text-lg font-semibold">Your templates</h2>{canTemplate && <Link href="/app/letters/templates/new" className="btn-secondary btn-sm">New template</Link>}</div>
+            <div className="mb-3 flex items-center justify-between gap-3 border-t border-line pt-6"><h2 className="text-lg font-semibold">Your templates</h2>{canTemplate && <Link href="/app/letters/templates/new" className="btn-secondary btn-sm">New template</Link>}</div>
             {data.org.length === 0 ? <p className="text-sm text-muted">{canTemplate ? 'Customize a standard template to create your own version.' : 'No custom templates yet. Managers can create them.'}</p> : (
               <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{data.org.map((t) => (
-                <article key={t.id} className={`card p-5 ${t.active ? '' : 'opacity-60'}`}>
-                  <div className="mb-2 flex flex-wrap gap-1.5"><Badge tone="brand">{KIND_LABEL[t.kind]}</Badge><Badge>v{t.version}</Badge>{!t.active && <Badge tone="warn">Inactive</Badge>}</div>
-                  <h3 className="font-medium">{t.name}</h3>
+                <article key={t.id} className="panel p-5">
+                  <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[0.8125rem] font-medium text-muted">{KIND_LABEL[t.kind]} · v{t.version}{!t.active && <Badge tone="warn">Inactive</Badge>}</div>
+                  <h3 className={`font-semibold ${t.active ? '' : 'text-muted'}`}>{t.name}</h3>
                   <div className="mt-4 flex gap-2">
                     {t.active && <Link href={`/app/letters/new?templateKey=org:${t.id}`} className="btn-secondary btn-sm">Use</Link>}
                     {canTemplate && <Link href={`/app/letters/templates/${t.id}`} className="btn-ghost btn-sm">Edit</Link>}

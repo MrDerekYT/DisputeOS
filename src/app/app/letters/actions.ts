@@ -7,11 +7,11 @@ import { z } from 'zod';
 import type { ActionState } from '@/components/forms';
 import { parseForm, run, UserError, zBool, zDate, zOpt, zText, zUuid } from '@/lib/action';
 import { audit } from '@/lib/audit';
-import { rewriteSafely } from '@/lib/ai/provider';
 import { requireStaff, type Ctx } from '@/lib/auth/context';
 import { findBlockedClaims } from '@/lib/compliance/claims';
 import { sameProtectedContent } from '@/lib/ai/protected';
 import type { Db } from '@/lib/db';
+import { suggestForLetter } from '@/lib/letters/suggest';
 import { createLetter, currentBody, markSent, saveVersion, setLetterStatus, type LActor } from '@/lib/letters/service';
 import { KIND_LABEL } from '@/lib/letters/templates';
 
@@ -99,7 +99,8 @@ async function protectedTermsFor(db: Db, letterId: string): Promise<string[]> {
 /**
  * Step 1 of AI wording help: produce a suggestion and show it next to the current text. NOTHING is saved here.
  * The model only receives the connective wording; every fact-bearing passage is hidden behind a marker and restored
- * server-side (src/lib/ai/protected.ts).
+ * server-side (src/lib/ai/protected.ts). A returned suggestion costs AI credits whether or not it is then accepted; it
+ * is kept for this version of the letter, so asking again for the same version shows it again without a new charge.
  */
 export async function aiSuggestLetterAction(_: ActionState, fd: FormData): Promise<ActionState> {
   const ctx = await requireStaff('letters:write');
@@ -107,9 +108,11 @@ export async function aiSuggestLetterAction(_: ActionState, fd: FormData): Promi
     const d = parseForm(z.object({ id: zUuid }), fd);
     const loaded = await ctx.tx(async (db) => ({ cur: await currentBody(db, d.id), terms: await protectedTermsFor(db, d.id) }));
     if (!loaded.cur) throw new UserError('Letter not found.');
-    const out = await rewriteSafely(loaded.cur.body, 'Polish the wording of this consumer letter so it is clear, courteous and concise.', undefined, loaded.terms);
-    if (!out.usedAi) return { error: out.provider === 'rules' ? 'No AI provider is configured (AI_PROVIDER). The letter is unchanged.' : out.note ?? 'The AI suggestion was not safe to use, so nothing changed.' };
-    return { ok: 'Suggestion ready. Compare it with the current text below. Nothing has been saved.', data: { before: loaded.cur.body, after: out.text, version: String(loaded.cur.version), provider: out.provider } };
+    const out = await suggestForLetter({ orgId: ctx.orgId, userId: ctx.userId, letterId: d.id, version: loaded.cur.version, body: loaded.cur.body, protectedTerms: loaded.terms }, ctx.tx);
+    revalidatePath(`/app/letters/${d.id}`); // the balance shown beside the button
+    if (!out.ok) return { error: out.message };
+    const paid = out.cost > 0 ? `Suggestion ready (${out.cost} AI credits used).` : 'This is the suggestion already paid for on this version; no new charge.';
+    return { ok: `${paid} Compare it with the current text below. Nothing has been saved.`, data: { before: loaded.cur.body, after: out.text, version: String(loaded.cur.version), provider: out.provider } };
   });
 }
 

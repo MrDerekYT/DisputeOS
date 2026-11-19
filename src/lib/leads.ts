@@ -2,6 +2,8 @@ import { z } from 'zod';
 import { auditSystem } from './audit';
 import { rateLimit } from './auth/rate-limit';
 import { withSystem } from './db';
+import { DEFAULT_LEAD_SOURCE, leadSourceTag } from './lead-emails';
+import { runLeadOutreach } from './lead-outreach';
 import { orgBrandBySlug } from './org-brand';
 
 /** What people usually want better credit for. A goal is context for the specialist — never a promise of approval. */
@@ -26,10 +28,14 @@ export type LeadResult = { ok: true } | { ok: false; error: string };
  * Records an enquiry as a client with status "lead" and a follow-up task for the team.
  * - Only active agency workspaces accept enquiries (same rule as the branded sign-in page).
  * - Rate limited per IP and per agency; a filled honeypot is accepted silently and discarded.
+ * - `meta.src` is the `?src=` tag from the link the person followed (instagram, flyer, …); it is stored as the lead's source.
+ * - When the agency has switched automatic follow-up on, a new lead gets the welcome email straight away — but never
+ *   inside the request: it is handed to `meta.defer` (the form passes Next's `after`), so an enquiry from a new address
+ *   and one from an address already on file answer in the same time. If it is lost, the scheduled job sends it.
  * - If the email already belongs to someone on file, nothing new is created and the reply is identical,
  *   so the form cannot be used to find out who is a client.
  */
-export async function submitLead(slug: string, raw: unknown, meta: { ip?: string | null; honeypot?: string | null } = {}): Promise<LeadResult> {
+export async function submitLead(slug: string, raw: unknown, meta: { ip?: string | null; honeypot?: string | null; src?: string | null; defer?: (task: () => Promise<void>) => void } = {}): Promise<LeadResult> {
   const brand = await orgBrandBySlug(slug);
   if (!brand) return { ok: false, error: 'This form is not available.' };
   if (meta.honeypot) return { ok: true };
@@ -50,8 +56,8 @@ export async function submitLead(slug: string, raw: unknown, meta: { ip?: string
     }
     const c = await db.row<{ id: string }>(
       `insert into public.clients (org_id, full_name, email, phone, preferred_language, status, stage, source, goals)
-       values ($1, $2, $3, $4, $5, 'lead', 'intake', 'Website form', $6) returning id`,
-      [org.id, d.fullName, d.email, d.phone || null, d.language, [d.goal ? `Goal: ${LEAD_GOALS[d.goal]}.` : '', d.message || ''].filter(Boolean).join(' ') || null]);
+       values ($1, $2, $3, $4, $5, 'lead', 'intake', $7, $6) returning id`,
+      [org.id, d.fullName, d.email, d.phone || null, d.language, [d.goal ? `Goal: ${LEAD_GOALS[d.goal]}.` : '', d.message || ''].filter(Boolean).join(' ') || null, leadSourceTag(meta.src) ?? DEFAULT_LEAD_SOURCE]);
     await db.run("insert into public.client_events (org_id, client_id, kind, summary, meta) values ($1, $2, 'lead_created', 'Enquiry received from the website form', $3)",
       [org.id, c!.id, JSON.stringify({ contact_consent: true })]);
     await db.run(
@@ -61,8 +67,13 @@ export async function submitLead(slug: string, raw: unknown, meta: { ip?: string
     return { orgId: org.id, clientId: c!.id, isNew: true };
   });
   if (!created) return { ok: false, error: 'This form is not available.' };
-  if (created.isNew) await auditSystem({ orgId: created.orgId, actorLabel: 'Website enquiry form', action: 'lead.created', entityType: 'client', entityId: created.clientId, ip: meta.ip ?? undefined });
+  if (created.isNew) {
+    await auditSystem({ orgId: created.orgId, actorLabel: 'Website enquiry form', action: 'lead.created', entityType: 'client', entityId: created.clientId, ip: meta.ip ?? undefined });
+    const welcome = () => runLeadOutreach(created.orgId, { clientId: created.clientId }).then(() => undefined, (e) => console.error('[leads] welcome email failed', created.clientId, (e as Error).message));
+    // Never awaited here: waiting on the email service would make the response time reveal whether the address was new.
+    if (meta.defer) meta.defer(welcome); else void welcome();
+  }
   return { ok: true };
 }
 
-export const leadFormPath = (slug: string) => `/start/${encodeURIComponent(slug)}`;
+export const leadFormPath = (slug: string, src?: string | null) => `/start/${encodeURIComponent(slug)}${src ? `?src=${encodeURIComponent(src)}` : ''}`;

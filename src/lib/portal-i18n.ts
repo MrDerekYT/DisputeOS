@@ -37,7 +37,7 @@ const EN = {
   monitoringDisclosure: 'may earn a commission if you sign up.', monitoringDefaultLabel: 'Credit monitoring',
   kind_id: 'Photo ID', kind_proof_of_address: 'Proof of address', kind_ssn_proof: 'Proof of SSN', kind_credit_report: 'Credit report', kind_bureau_response: 'Bureau response',
   kind_ftc_report: 'FTC identity theft report', kind_police_report: 'Police report', kind_contract: 'Contract', kind_evidence: 'Supporting evidence', kind_other: 'Other',
-  byStaff: 'recorded by your specialist', byCarrier: 'confirmed by the mail carrier',
+  byStaff: 'recorded by your specialist', byCarrier: 'confirmed by the mail carrier', sentNoDate: 'Sent, date not recorded',
   sentOn: 'Sent', expectBy: 'Response expected by', reason: 'What we asked', noDisputes: 'No items have been sent yet. We’ll show them here once we submit your first dispute.',
   scoresTitle: 'Your reported scores', scoresNote: 'Shown exactly as stated on your credit reports. Scores move for many reasons and are not a prediction or a promise.',
   uploaded: 'Your uploads', uploadedOk: 'Uploaded — thank you', uploadedOkBody: 'Your specialist has been notified.', noDocs: 'You haven’t uploaded anything yet.', requested: 'Requested', received: 'Received', docType: 'What is it?', chooseFile: 'Choose a file', uploadHelp: 'PDF, PNG or JPG, up to 10 MB. Your files are stored encrypted.',
@@ -53,6 +53,7 @@ const EN = {
   r_time: 'Bureaus generally have 30 days to investigate a dispute (up to 45 in some cases).',
   r_cancel: 'You can cancel your service agreement without penalty within 3 business days of signing it.',
   rightsMore: 'Learn more from the Consumer Financial Protection Bureau',
+  disclaimerShort: 'No one can guarantee a result. How to cancel and how to dispute on your own for free:',
   disclaimer: 'Your specialist is not a law firm and cannot guarantee any result. You can cancel your service agreement within 3 business days of signing, and you can dispute information with the credit bureaus yourself at no cost.',
   // Profile, items and home details
   city: 'City', state: 'State', zip: 'ZIP', currentPassword: 'Current password', newPassword: 'New password', confirmPassword: 'Confirm new password', passwordHint: 'At least 10 characters',
@@ -106,6 +107,15 @@ const EN = {
   mfa_other: 'Use a different account', mfa_setupTitle: 'Protect your account', mfa_setupSub: 'Add a second step to protect your account. After your password, you will enter a code from an app on your phone.',
   mfa_s1: 'Open an authenticator app (1Password, Google Authenticator, Authy…) and add a new account using “enter a setup key”.', mfa_s2: 'Use this key:',
   mfa_s2meta: 'Account: {email} · Type: time-based · 6 digits', mfa_s3: 'Enter the 6-digit code it shows:', mfa_notNow: 'Not now',
+  // Credit guide (chat panel)
+  g_open: 'Ask the credit guide', g_title: 'Credit guide', g_close: 'Close the credit guide', g_intro: 'Ask how credit and disputes work, or where to find something in your portal.',
+  g_try: 'Try asking', g_question: 'Your question', g_placeholder: 'Type your question…', g_send: 'Send', g_thinking: 'Looking that up…', g_guide: 'Credit guide',
+  g_forYou: 'For you right now', g_links: 'Where to go', g_related: 'Related questions',
+  g_note: 'General education, not legal or financial advice. Results are never guaranteed. Your specialist can help with your own accounts.',
+  g_tooLong: 'Please ask a question of up to 500 characters.',
+  // Investigation window and journey (portal home and items)
+  win_day: 'Day {d}', win_of: 'of {n}', win_sent: 'Sent {date}', win_expected: 'Expected {date}', win_title: 'Investigation window',
+  j_done: 'Done', j_here: 'You are here', j_later: 'Later', specialistIs: 'Your specialist is {name}.', history: 'History',
 } as const;
 
 export type PortalKey = keyof typeof EN;
@@ -143,7 +153,7 @@ const ES: Record<PortalKey, string> = {
   monitoringDisclosure: 'puede recibir una comisión si usted se suscribe.', monitoringDefaultLabel: 'Monitoreo de crédito',
   kind_id: 'Identificación con foto', kind_proof_of_address: 'Comprobante de domicilio', kind_ssn_proof: 'Comprobante de número de Seguro Social', kind_credit_report: 'Informe de crédito', kind_bureau_response: 'Respuesta de la agencia de crédito',
   kind_ftc_report: 'Informe de robo de identidad de la FTC', kind_police_report: 'Informe policial', kind_contract: 'Contrato', kind_evidence: 'Documentos de respaldo', kind_other: 'Otro',
-  byStaff: 'registrado por su especialista', byCarrier: 'confirmado por el servicio de correo',
+  byStaff: 'registrado por su especialista', byCarrier: 'confirmado por el servicio de correo', sentNoDate: 'Enviada, fecha no registrada',
   sentOn: 'Enviada', expectBy: 'Respuesta esperada para', reason: 'Lo que pedimos', noDisputes: 'Aún no se ha enviado ninguna cuenta. Las verá aquí cuando enviemos su primera disputa.',
   scoresTitle: 'Sus puntajes reportados', scoresNote: 'Tal como aparecen en sus informes de crédito. Los puntajes cambian por muchas razones y no son una predicción ni una promesa.',
   uploaded: 'Sus archivos', uploadedOk: 'Subido — gracias', uploadedOkBody: 'Su especialista ha sido notificado.', noDocs: 'Aún no ha subido nada.', requested: 'Solicitado', received: 'Recibido', docType: '¿Qué es?', chooseFile: 'Elija un archivo', uploadHelp: 'PDF, PNG o JPG, hasta 10 MB. Sus archivos se guardan cifrados.',
@@ -159,6 +169,7 @@ const ES: Record<PortalKey, string> = {
   r_time: 'Las agencias generalmente tienen 30 días para investigar una disputa (hasta 45 en algunos casos).',
   r_cancel: 'Puede cancelar su contrato de servicios sin penalidad dentro de los 3 días hábiles posteriores a su firma.',
   rightsMore: 'Más información de la Oficina para la Protección Financiera del Consumidor (CFPB)',
+  disclaimerShort: 'Nadie puede garantizar un resultado. Cómo cancelar y cómo disputar por su cuenta sin costo:',
   disclaimer: 'Su especialista no es un bufete de abogados y no puede garantizar ningún resultado. Puede cancelar su contrato dentro de los 3 días hábiles posteriores a la firma, y puede disputar información con las agencias de crédito usted mismo sin costo.',
   city: 'Ciudad', state: 'Estado', zip: 'C. postal', currentPassword: 'Contraseña actual', newPassword: 'Contraseña nueva', confirmPassword: 'Confirme la contraseña nueva', passwordHint: 'Al menos 10 caracteres',
   twoStepOn: 'Verificación en dos pasos activada', readAgreement: 'Leer', round: 'Ronda', dayAway: 'día', password: 'Contraseña', sending: 'Enviando…',
@@ -204,6 +215,13 @@ const ES: Record<PortalKey, string> = {
   mfa_other: 'Usar otra cuenta', mfa_setupTitle: 'Proteja su cuenta', mfa_setupSub: 'Agregue un segundo paso para proteger su cuenta. Después de su contraseña, escribirá un código de una aplicación en su teléfono.',
   mfa_s1: 'Abra una aplicación de autenticación (1Password, Google Authenticator, Authy…) y agregue una cuenta nueva con la opción “ingresar una clave de configuración”.', mfa_s2: 'Use esta clave:',
   mfa_s2meta: 'Cuenta: {email} · Tipo: basado en tiempo · 6 dígitos', mfa_s3: 'Escriba el código de 6 dígitos que muestra:', mfa_notNow: 'Ahora no',
+  g_open: 'Pregunte a la guía de crédito', g_title: 'Guía de crédito', g_close: 'Cerrar la guía de crédito', g_intro: 'Pregunte cómo funcionan el crédito y las disputas, o dónde encontrar algo en su portal.',
+  g_try: 'Pruebe preguntar', g_question: 'Su pregunta', g_placeholder: 'Escriba su pregunta…', g_send: 'Enviar', g_thinking: 'Buscando…', g_guide: 'Guía de crédito',
+  g_forYou: 'Para usted ahora', g_links: 'A dónde ir', g_related: 'Preguntas relacionadas',
+  g_note: 'Educación general, no asesoría legal ni financiera. Los resultados nunca están garantizados. Su especialista puede ayudarle con sus propias cuentas.',
+  g_tooLong: 'Por favor haga una pregunta de hasta 500 caracteres.',
+  win_day: 'Día {d}', win_of: 'de {n}', win_sent: 'Enviada: {date}', win_expected: 'Se espera: {date}', win_title: 'Plazo de investigación',
+  j_done: 'Listo', j_here: 'Usted está aquí', j_later: 'Más adelante', specialistIs: 'Su especialista es {name}.', history: 'Historial',
 };
 
 export const tr = (lang: Lang) => (k: PortalKey): string => (lang === 'es' ? ES[k] : EN[k]);

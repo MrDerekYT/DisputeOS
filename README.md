@@ -21,7 +21,7 @@ Built so that compliance is part of the product, not a checklist next to it.
 | **Client portal** | Under the **agency's own name and colour** (branded sign-in link per agency; the software name is a small "Powered by" line). Opens with one clear next step computed from the client's real records, explains the current stage, shows progress, reported scores and the client's rights; uploads, approved letters, messaging, e-signing; app-style bottom navigation on phones; English and Spanish (including dates). Clients can only ever see their own records (database-enforced) |
 | **Credit Connect** | Consent-gated import pipeline (no live provider is connected; reports arrive by upload or API push): provider adapter framework (+ dev sandbox) and a public REST API with scoped API keys, OpenAPI spec and idempotent report push. Live provider adapters need partner access — see [docs/CREDIT_CONNECT.md](docs/CREDIT_CONNECT.md) |
 | **Everyday speed** | Command palette (⌘K), reported-score history, white-label client portal colour |
-| **Lead capture** | A public, branded enquiry form per agency (`/start/<slug>`): contact details only, consent required, rate limited; each enquiry becomes a lead with a follow-up task |
+| **Lead capture** | A public, branded enquiry form per agency (`/start/<slug>`): contact details only, consent required, rate limited; each enquiry becomes a lead with a follow-up task. A Leads page shows where enquiries came from (`?src=` tags) and, when an owner switches it on, sends consent-based follow-up email (welcome, 2 days, 6 days) with an opt-out link — only when an email service is really connected |
 | **Client care** | Dashboard queues for clients waiting on the team: unanswered messages, client uploads to review, and active clients with no update in 14+ days |
 | **Business** | Team & roles, client assignment, analytics from real data, service plans and manually-recorded payments, audit log, retention tools |
 
@@ -56,6 +56,7 @@ Set `REQUIRE_STAFF_MFA=false` in `.env.local` to skip two-step verification loca
 | `npm test` | unit + database tests (needs `DATABASE_URL_TEST`) |
 | `node e2e/journey.cjs` | browser journey against a running server; prints `<n>/<n> steps passed` (see below) |
 | `npm run db:migrate` / `db:reset` / `db:seed` | migrations / drop-and-recreate (refused in production) / demo data |
+| `npm run credits:grant -- <org-slug> <amount> [note]` | platform operator: add AI credits to a workspace (1–100000). Records a grant and an audit entry; it takes no payment. New workspaces start at 0 |
 
 ## Architecture
 

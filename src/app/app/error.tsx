@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect } from 'react';
+import { AlertTriangle } from 'lucide-react';
 
 /** Error screen for the staff app. It renders inside the app shell, so the navigation stays usable. */
 export default function StaffError({ error, reset }: { error: Error & { digest?: string }; reset: () => void }) {
@@ -8,8 +9,9 @@ export default function StaffError({ error, reset }: { error: Error & { digest?:
     console.error(error);
   }, [error]);
   return (
-    <div role="alert" className="card mx-auto mt-10 max-w-lg p-8 text-center">
-      <h1 className="text-xl font-semibold">Something went wrong</h1>
+    <div role="alert" className="mx-auto mt-10 max-w-lg px-2 text-center sm:mt-16">
+      <div className="mx-auto mb-4 grid h-12 w-12 place-items-center rounded-xl bg-warn-soft text-warn" aria-hidden><AlertTriangle size={22} /></div>
+      <h1 className="display text-2xl">Something went wrong</h1>
       <p className="mt-2 text-sm text-muted">
         This page could not be shown, or the last action did not complete. Try again. If it keeps happening, go back to the dashboard and check
         whether your change was saved before repeating it.

@@ -6,6 +6,21 @@ export interface Email {
   to: string;
   subject: string;
   text: string;
+  /** Where a reply should go (the agency), when the sending address is a no-reply one. */
+  replyTo?: string;
+  /** Display name for the From line (the agency that is writing). The sending address stays the platform's. */
+  fromName?: string;
+}
+
+/**
+ * `"Agency name" <platform address>`: the From line names the business the message is from, while the address stays the
+ * verified sending address. Quotes, angle brackets, backslashes and control characters are removed from the name.
+ */
+export function fromHeader(platformFrom: string, name?: string): string {
+  const clean = (name ?? '').replace(/[\u0000-\u001f\u007f"<>\\]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 100);
+  if (!clean) return platformFrom;
+  const address = (/<([^<>\s]+)>\s*$/.exec(platformFrom)?.[1] ?? platformFrom).trim();
+  return `"${clean}" <${address}>`;
 }
 
 export interface SendResult {
@@ -31,7 +46,7 @@ export async function sendEmail(mail: Email): Promise<SendResult> {
       const res = await fetch('https://api.resend.com/emails', {
         method: 'POST',
         headers: { authorization: `Bearer ${env.RESEND_API_KEY}`, 'content-type': 'application/json' },
-        body: JSON.stringify({ from: env.EMAIL_FROM, to: [mail.to], subject: mail.subject, text: mail.text }),
+        body: JSON.stringify({ from: fromHeader(env.EMAIL_FROM, mail.fromName), to: [mail.to], subject: mail.subject, text: mail.text, ...(mail.replyTo ? { reply_to: mail.replyTo } : {}) }),
         signal: AbortSignal.timeout(15_000),
       });
       const body = (await res.json().catch(() => ({}))) as { id?: string; message?: string };

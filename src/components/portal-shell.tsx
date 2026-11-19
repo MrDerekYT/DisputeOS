@@ -6,7 +6,7 @@ import { PRODUCT } from '@/lib/product';
 import type { Lang } from '@/lib/portal-i18n';
 import { tr } from '@/lib/portal-i18n';
 import { OrgMark } from './ui';
-import { PortalBottomNav, PortalNav, type PortalNavItem } from './portal-nav';
+import { PortalBottomNav, PortalFooterNote, PortalNav, type PortalNavItem } from './portal-nav';
 
 /**
  * The client's portal frame. It carries the agency's identity — their name, monogram and colour — because this is the
@@ -24,17 +24,18 @@ export function PortalShell({ lang, orgName, name, children }: { lang: Lang; org
   ];
   return (
     <div className="min-h-screen" lang={lang}>
-      <header className="no-print sticky top-0 z-30 border-b border-line bg-canvas/90 backdrop-blur">
+      <header className="no-print sticky top-0 z-30 border-b border-line bg-canvas">
         <div className="mx-auto flex max-w-5xl items-center justify-between gap-3 px-4 py-3 sm:px-6">
-          <Link href="/portal" className="min-w-0" aria-label={`${orgName} — ${t('home')}`}><OrgMark name={orgName} /></Link>
+          <Link href="/portal" className="min-w-0 rounded-lg" aria-label={`${orgName} — ${t('home')}`}><OrgMark name={orgName} /></Link>
           <div className="flex shrink-0 items-center gap-3"><span className="hidden text-sm text-muted md:block">{name}</span>
-            <form action={portalLogoutAction}><button className="btn-secondary btn-sm" aria-label={t('signOut')}><LogOut size={14} aria-hidden className="sm:hidden" /><span className="hidden sm:inline">{t('signOut')}</span></button></form></div>
+            <form action={portalLogoutAction}><button className="btn-quiet btn-sm" aria-label={t('signOut')}><LogOut size={15} aria-hidden className="sm:hidden" /><span className="hidden sm:inline">{t('signOut')}</span></button></form></div>
         </div>
         <PortalNav items={items} />
       </header>
       <main id="main" className="mx-auto max-w-5xl px-4 py-6 sm:px-6 sm:py-8">{children}</main>
-      <footer className="mx-auto max-w-5xl px-4 pb-28 text-xs leading-relaxed text-muted sm:px-6 sm:pb-10">
-        <p>{t('disclaimer')}</p>
+      {/* Bottom padding on phones clears the fixed bottom bar and the round guide button above it. */}
+      <footer className="mx-auto max-w-5xl px-4 pb-[calc(9rem+env(safe-area-inset-bottom))] text-xs leading-relaxed text-muted sm:px-6 sm:pb-10">
+        <PortalFooterNote full={t('disclaimer')} short={t('disclaimerShort')} rights={t('rightsTitle')} />
         {PRODUCT.showPoweredBy && <p className="mt-3 text-faint">{t('poweredBy')} {PRODUCT.name}</p>}
       </footer>
       <PortalBottomNav items={items} />

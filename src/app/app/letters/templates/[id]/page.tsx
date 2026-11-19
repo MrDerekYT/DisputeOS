@@ -28,7 +28,7 @@ export default async function TemplateEditor({ params, searchParams }: { params:
       <PageHeader title={t.id ? 'Edit template' : 'New template'} back={{ href: '/app/letters?tab=templates', label: 'Templates' }} />
       <div className="mx-auto max-w-3xl space-y-4">
         <Notice tone="info" title="Merge fields">
-          Write <code>{'{{field}}'}</code> where details should appear: {MERGE_FIELDS.map((f) => <code key={f} className="mr-1.5 rounded bg-raised px-1">{`{{${f}}}`}</code>)}. Templates are checked for prohibited claims (guarantees, promised removals, score promises) and cannot be saved with them.
+          Write <code>{'{{field}}'}</code> where details should appear: {MERGE_FIELDS.map((f) => <code key={f} className="mr-1.5 rounded bg-surface px-1">{`{{${f}}}`}</code>)}. Templates are checked for prohibited claims (guarantees, promised removals, score promises) and cannot be saved with them.
         </Notice>
         <ActionForm action={saveTemplateAction} className="card card-pad space-y-5">
           {t.id && <input type="hidden" name="id" value={t.id} />}{t.baseKey && <input type="hidden" name="baseKey" value={t.baseKey} />}

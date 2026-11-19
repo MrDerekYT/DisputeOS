@@ -1,5 +1,37 @@
 # Changelog
 
+## Night Desk redesign: review fixes (unreleased, uncommitted)
+
+Fixes from the design, accessibility and accuracy review of the redesign. Presentation only, except where noted.
+
+- **No sideways page scroll.** The dispute pipeline board and the dispute page no longer widen the page (2184px / 523px before). Every
+  sideways scroller is now a positioned box so visually-hidden labels are clipped with it. On phones the dispute's seven-step
+  pipeline is one line in words ("Step 4 of 7: Submitted") with a segmented bar.
+- **Staff tables on phones** (`.table-stack` in `globals.css`): disputes, clients, letters, team, leads and a client's disputes
+  and letters stack into rows below `sm` — title wrapping on its own line, then status, the investigation-window meter, date and
+  the one action. The AI credit ledger is a plain list. Nothing important sits behind an unannounced scroll.
+- **Investigation window counted from receipt.** "Day N of M" and the bar now start at the deadline minus its 30 (or 45) days
+  (`windowStart` in `src/lib/day-meter.ts`), so M is always 30 or 45. It used to be measured from the mailing date, which read
+  "Day 5 of 35" when a letter was recorded five days after it was sent. Days left and days overdue are unchanged. New unit tests.
+- **Branded "not found" pages** (`src/app/not-found.tsx`, `src/app/app/not-found.tsx`). A damaged or expired unsubscribe link now
+  explains itself in English and Spanish instead of a bare 404.
+- **Client portal:** the credit-guide launcher is a round icon button (labelled for screen readers) so it no longer covers the
+  rights text or forms; every page uses one left-aligned content column; the full legal note stays on Home, My items and Profile and
+  the other pages carry one line linking to "Your rights"; "Sent —" is now "Sent, date not recorded" / "Enviada, fecha no registrada".
+- **Raw values removed:** a letter's recipient shows as "Equifax", not `equifax`; report sources read "file upload", "CSV import".
+- **Less clutter:** the report review is one divided list (four figures per account, the rest behind a disclosure); a client's
+  Reports tab is grouped by bureau with earlier reports folded away; Settings has an in-page section nav and collapsible
+  integration rows; Leads shows one status line for automatic follow-up with the detail behind "How it works" (opt-out and
+  postal-address copy stay visible); AI credit refund rules sit behind a disclosure. With a short queue the dashboard figures
+  move up beside the windows panel.
+- **Empty states** have no dashed box: a display-face title, one sentence and one action.
+- **AI mark on the dashboard:** letters awaiting approval whose current text is an AI draft carry the spark, as on the letters list.
+- **Marketing accuracy:** removed the claim (and the hero picture) that AI suggestions cite their source fields; the copy now
+  describes what exists: the suggestion beside the current text with changed lines marked, discarded if a number or date changes.
+- **Pricing structured data** no longer publishes the proposed prices as schema.org offers; billing is not connected.
+- **Portal colour:** the picker starts from the product colour (#3b49d1) and submits nothing until a colour is actually chosen, so
+  saving another setting cannot quietly store a brand colour. "Use the standard colour" clears a chosen one.
+
 ## 0.2.0 — Product takeover (unreleased, uncommitted)
 
 Consolidates the two diverged Copilot branches (`copilot/disputeos-phase-1-scaffold-auth`, `mrderekyt-disputeos-preview`)
@@ -94,6 +126,91 @@ into one codebase. Both branches are untouched. See `docs/ENGINEERING_ASSESSMENT
 - **Fixed:** every form lost what the person had typed when it came back with an error (found by the browser journey).
 - **Fixed:** score cards squeezed their dates into a narrow column on the client profile.
 - 6 more tests (229 total); browser journey extended to 33 steps.
+
+### Leads and automatic follow-up
+- **Leads page** (`/app/leads`, in Daily work): the enquiry-form link plus ready-made tagged links (`?src=instagram`, facebook, tiktok,
+  google, flyer, referral); counts from the database (enquiries this week, waiting for first contact, contacted, became clients) and
+  by source; the list of open leads with search by name, 25 per page, "Convert to client" and "Mark not interested".
+- **Source tracking:** `/start/<slug>?src=<tag>` stores a sanitised tag (`[a-z0-9-]{1,30}`) as the lead's source; without it the
+  source stays "Website form".
+- **Automatic follow-up email** to people who sent the form and agreed to be contacted: welcome, a follow-up after 2 days, a last
+  note after 6. Off by default; an owner or admin switches it on and must save a postal address and a reply address first. It stops
+  when the team messages the lead or logs a call, when staff press "They replied" or "Asked to stop" on the lead, when the lead
+  becomes a client, or when they use the opt-out link in every email (`/unsubscribe/<signed token>`, no sign-in). **Email replies
+  are not read by the system:** they go to the agency's reply address, so a reply stops the emails only once someone records it. Fixed EN/ES wording, checked by the claims guard. Each (lead, step) is sent once
+  (`lead_outreach`, migration 0011); each send is recorded in Messages and the timeline.
+- **Not connected means not sent:** with the `log` email driver nothing is sent and nothing is recorded as sent, and the Leads page
+  says so. No SMS, no purchased lists, no scraping.
+- The public enquiry form now has a title and description with the agency's name, so shared links preview as theirs.
+- `sendEmail` accepts an optional `replyTo`. The dashboard's "New leads to contact" no longer drops a lead just because an
+  automatic email went out.
+
+- **Review fixes (same release):**
+  - The page and every email no longer imply that replying stops the emails. Each email's footer says a reply reaches the team
+    but does not stop the automatic emails, and the link does. New "They replied" (logs an inbound message) and "Asked to stop"
+    (same effect as the opt-out link) buttons on each lead.
+  - Sending is now claim → send → record: the step is committed as `sending` first, the email is sent with no transaction or row
+    lock open, and the result is written afterwards. If the result is never written (crash, lost connection) the step stays
+    `sending`, is shown as "not confirmed" and is **not** sent again, and nothing later is sent to that lead — one email can be
+    lost, none duplicated. All stop conditions are re-checked under a row lock immediately before each claim.
+  - The greeting uses only a plain first name (letters, apostrophes, hyphens, 30 characters); anything else typed into the public
+    form becomes "Hi there". The From line shows the agency's name with the platform's sending address.
+  - The welcome email is no longer sent inside the enquiry request (it runs after the response via Next's `after`; the scheduled
+    job sends it if that is lost), so response time does not reveal whether an address was already on file.
+  - A staff email that failed, or was only written to the log because no email service is connected, no longer counts as
+    "contacted" and no longer stops follow-up.
+  - A Leads page past the last page redirects to the last page with leads instead of showing "No open leads yet".
+  - Not done: reading replies automatically (needs an inbound-email webhook). The Resend driver, including the new From name, is
+    still untested against the live service.
+
+### Credit guide (chat box)
+- **Ask the credit guide** button at the bottom right of the client portal (above the phone bottom bar) and the staff app. It
+  explains credit reports, disputes, timelines, collections, identity theft, CROA rights and where things are, in plain language
+  (EN/ES in the portal), from a vetted knowledge base of 38 entries in `src/lib/guide/knowledge.ts`.
+- Each reply has three parts: the knowledge-base answer; "For you right now" — up to three steps from the asker's own records
+  (portal: only their client record; staff: the plan of the client page being viewed), loaded under row-level security; and links
+  to existing screens. The guide explains and links; it performs no account action and stores no conversation.
+- Works with no AI configured (deterministic keyword matcher; unknown questions get "I am not sure" plus topics). With
+  `AI_PROVIDER` configured, the model may only re-phrase the retrieved entries: the question is sent as untrusted text with names,
+  numbers, amounts and addresses masked; step text is replaced by generic labels; output is discarded for prohibited claims
+  (English guard plus Spanish rules), any number or web address not in the entries, prompt markers, or excess length. Like the
+  other adapters, this path is tested against a fake provider only, not a live service.
+- Limits: 500 characters per question; 20 (portal) / 30 (staff) questions per 5 minutes per user. No new tables.
+- **Review fixes:** AI-written wording is now also checked by stricter rules that need no number — any future-tense or promise
+  wording about a score, a removal or an approval, and any suggestion to dispute accurate information, in English and Spanish
+  ("this will raise your score", "su puntaje subirá", "even if it is accurate"). They are pattern rules, not a proof: they catch
+  the phrasings tested, and a miss is still possible. A match only means the vetted text is shown instead. In the staff app the
+  guide button is a 48px circle with no label, and the report review bar leaves room for it, so it no longer sits on "Approve
+  report" (checked from the layout classes, not in a browser).
+
+### AI credits (metered AI)
+- **Nothing about AI is free.** Each AI result that is returned costs credits from the workspace's balance: letter wording
+  suggestion 5, progress note polish 2, AI-worded guide answer 1 (`AI_COSTS`, `src/lib/ai/credits.ts`). With no credits, or
+  no AI provider, the app uses its existing non-AI wording and tells staff why; portal clients just get the vetted answer.
+- Migration 0012: `ai_credit_ledger`, append-only, balance = `sum(delta)`. Staff of the organization may read it; only the
+  system connection can write. Credits are taken when the model is called (race-safe, per-organization lock) and given back
+  if the call fails or its output is discarded by the safety checks.
+- Wired into every model call: letter suggestion, staff and portal credit guide (portal questions use the agency's credits),
+  and the progress note.
+- **Changed:** the client progress note no longer calls the model when the Messages tab loads. The draft is built from the
+  dispute data for free, and "Polish wording with AI (2 credits)" is a separate button — a page reload can never charge.
+- AI assistant page: balance, price list, last 20 ledger entries (owners/admins). Balance shown beside "Suggest better wording".
+- `npm run credits:grant -- <org-slug> <amount> [note]` for the platform operator (validated, audited). New workspaces start
+  at 0. The demo seed adds 100 labelled sample credits.
+- **Not connected:** buying credits online. The app says so, and Settings → Integrations lists it as a manual path.
+- 24 new tests (`tests/unit/ai-credits.test.ts`, `tests/db/ai-credits.test.ts`): spend, refusal, concurrent spends,
+  refunds, append-only, row-level security, the letter path with a fake provider, the guide on credits, the operator script.
+- **Fixed after review (migration 0013):**
+  - The press that spent the last credits on a progress note polish could lose the polished text, because the refreshed
+    page removed the button that held it. The button now stays whenever a provider is connected.
+  - A charge whose request died before a result, or whose refund could not be written, stayed charged. Charges are now
+    reservations with a recorded outcome; the scheduled jobs refund any without one after 10 minutes, and a failed refund
+    no longer hides the original error or claims "no credits were used". Staff and portal layouts set `maxDuration = 60`.
+  - A paid letter suggestion existed only in the browser. It is now stored per letter version, shown again after a reload,
+    and not charged twice for the same version. (The polished progress note is still not stored.)
+  - Portal clients could spend the agency's balance with only a rate limit. AI wording in the portal guide is now off
+    until an owner or admin turns it on (AI assistant → AI credits), and capped at 10 AI-worded answers per client per 24 hours.
+  - 13 more tests for the above.
 
 ### Defects found and fixed in the client-first pass
 - Disputes that were approved-but-not-mailed or on hold showed a **blank status** to clients (no portal text for those statuses); now

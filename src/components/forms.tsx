@@ -1,6 +1,6 @@
 'use client';
 
-import { useActionState, useEffect, useId, useRef, type ReactNode } from 'react';
+import { useActionState, useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { useFormStatus } from 'react-dom';
 import { AlertCircle, CheckCircle2, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/util';
@@ -103,7 +103,7 @@ export function Select({ label, name, options, defaultValue, required, hint, cla
 export function Check({ name, children, defaultChecked, required, value }: { name: string; children: ReactNode; defaultChecked?: boolean; required?: boolean; value?: string }) {
   return (
     <label className="flex cursor-pointer items-start gap-3 text-sm">
-      <input type="checkbox" name={name} value={value} defaultChecked={defaultChecked} required={required} className="mt-0.5 h-4 w-4 shrink-0 rounded border-line accent-[rgb(var(--brand))]" />
+      <input type="checkbox" name={name} value={value} defaultChecked={defaultChecked} required={required} className="mt-0.5 h-4 w-4 shrink-0 rounded border-line-strong accent-[rgb(var(--brand))]" />
       <span>{children}</span>
     </label>
   );
@@ -131,4 +131,27 @@ function restoreForm(form: HTMLFormElement, data: FormData) {
       if (typeof v === 'string') el.value = v;
     }
   }
+}
+
+/**
+ * The agency's client-portal colour. A colour input always submits a value, so until someone actually picks a colour
+ * the input carries no name and nothing is sent: saving the business name or another setting must never quietly turn
+ * "no colour chosen" into a stored one. "Use the standard colour" goes back to that state.
+ */
+export function BrandColorField({ initial, fallback }: { initial?: string | null; fallback: string }) {
+  const [chosen, setChosen] = useState(!!initial);
+  const [value, setValue] = useState(initial ?? fallback);
+  return (
+    <div>
+      <label className="label" htmlFor="brandColor">Client portal colour</label>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <input id="brandColor" name={chosen ? 'brandColor' : undefined} type="color" value={value} aria-describedby="brandColor-hint"
+          onChange={(e) => { setValue(e.target.value); setChosen(true); }} className="h-11 w-16 shrink-0 cursor-pointer rounded-xl border border-line-strong/70 bg-canvas p-1" />
+        <span id="brandColor-hint" className="min-w-[12rem] flex-1 text-xs text-muted">
+          {chosen ? 'Your clients see their portal in this colour. Text contrast is adjusted automatically.' : 'Not set, so your clients see the standard colour. Pick one to use your own.'}
+        </span>
+        {chosen && <button type="button" className="btn-ghost btn-sm" onClick={() => { setChosen(false); setValue(fallback); }}>Use the standard colour</button>}
+      </div>
+    </div>
+  );
 }

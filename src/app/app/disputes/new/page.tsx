@@ -116,18 +116,18 @@ export default async function NewDisputePage({ searchParams }: { searchParams: P
 
           <TextArea label="Reason" name="reason" rows={8} required defaultValue={reason}
             hint="Drafted from the report data and phrased as a request to verify. Edit it so it reflects what is true for this client — and only dispute what you believe is inaccurate or unverifiable." />
-          <p className="text-xs text-muted">{cat.hint}</p>
+          <p className="text-[0.8125rem] text-muted">{cat.hint}</p>
           <Check name="makeLetter" defaultChecked>Also draft the letter (you will review and edit it before anything can be approved)</Check>
           <div className="flex justify-end gap-3"><SubmitButton pendingText="Creating…">Create dispute draft</SubmitButton></div>
         </ActionForm>
 
         <aside className="space-y-4">
           {finding && (
-            <Section title="Why this was suggested">
+            <Section plain title="Why this was suggested">
               <div className="mb-2"><Badge tone={finding.basis === 'user_provided' ? 'info' : finding.basis === 'verified_fact' ? 'ok' : 'warn'}>{finding.basis.replace(/_/g, ' ')}</Badge></div>
               <p className="text-sm font-medium">{finding.title}</p>
               <p className="mt-1 text-sm text-muted">{finding.explanation}</p>
-              <ul className="mt-3 space-y-1 text-xs text-muted">{evidence.map((e, i) => <li key={i}>• {e.bureau ? BUREAU_LABEL[e.bureau] : e.source}: {e.field} — {e.value}</li>)}</ul>
+              <ul className="mt-3 space-y-1 text-[0.8125rem] text-muted">{evidence.map((e, i) => <li key={i}>• {e.bureau ? BUREAU_LABEL[e.bureau] : e.source}: {e.field} — {e.value}</li>)}</ul>
             </Section>
           )}
           {cs.missing.length > 0 && <Notice tone="warn" title="Consents missing">This client still needs: {cs.missing.join(', ').replace(/_/g, ' ')}. You can draft now, but submission is blocked until they are recorded.</Notice>}

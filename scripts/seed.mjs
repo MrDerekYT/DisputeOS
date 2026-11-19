@@ -127,8 +127,11 @@ try {
     const s = await one('insert into public.client_subscriptions (org_id, client_id, plan_id) values ($1,$2,$3) returning id', [org.id, ids[n], plan.id]);
     await db.query("insert into public.payments (org_id, client_id, subscription_id, amount_cents, method, recorded_by, paid_at) values ($1,$2,$3,9900,'card',$4, now() - interval '12 days')", [org.id, ids[n], s.id, manager]);
   }
+  // Sample AI credits so the metered AI features can be tried locally. Real workspaces start at 0 and get credits
+  // only from `npm run credits:grant`.
+  await db.query("insert into public.ai_credit_ledger (org_id, delta, reason, note) values ($1, 100, 'grant', 'Sample balance for the demo agency (seed data, not a purchase)')", [org.id]);
   await db.query('commit');
-  console.log(`Seeded "Demo Agency (sample data)".\n  owner       owner@demo.disputeos.test\n  manager     manager@demo.disputeos.test\n  specialist  specialist@demo.disputeos.test\n  client portal  jordan.rivera@example.test  (and maria.gomez@example.test, Spanish)\n  password    ${PASSWORD}\nSet REQUIRE_STAFF_MFA=false in .env.local to skip two-step verification locally.`);
+  console.log(`Seeded "Demo Agency (sample data)".\n  owner       owner@demo.disputeos.test\n  manager     manager@demo.disputeos.test\n  specialist  specialist@demo.disputeos.test\n  client portal  jordan.rivera@example.test  (and maria.gomez@example.test, Spanish)\n  password    ${PASSWORD}\n  AI credits  100 sample credits (used only when an AI provider is configured)\nSet REQUIRE_STAFF_MFA=false in .env.local to skip two-step verification locally.`);
 } catch (e) {
   await db.query('rollback').catch(() => {});
   console.error(e);

@@ -24,26 +24,30 @@ export default async function MfaSetupPage() {
   const lang = isClient ? await portalLangForUser(s.userId) : 'en';
   const brand = isClient ? await orgBrandById(s.orgId) : null;
   const t = tr(lang);
+  const num = 'grid h-6 w-6 shrink-0 place-items-center rounded-full bg-raised text-xs font-semibold text-ink';
   return (
     <AuthLayout
       portal={isClient} brand={brand} lang={lang}
       title={t('mfa_setupTitle')}
       subtitle={isClient ? t('mfa_setupSub') : `${PRODUCT.name} holds sensitive financial and identity records, so staff accounts require two-step verification.`}
-      footer={isClient ? <Link href="/portal/profile" className="font-medium text-brand-strong hover:underline">{t('mfa_notNow')}</Link> : undefined}
+      footer={isClient ? <Link href="/portal/profile" className="link">{t('mfa_notNow')}</Link> : undefined}
     >
-      <ol className="mb-6 space-y-4 text-sm">
-        <li><span className="font-semibold">1.</span> {t('mfa_s1')}</li>
-        <li>
-          <span className="font-semibold">2.</span> {t('mfa_s2')}
-          <code className="mt-2 block select-all break-all rounded-xl border border-line bg-raised px-3.5 py-3 font-mono text-base tracking-wider" data-testid="totp-secret">{grouped}</code>
-          <span className="mt-1 block text-xs text-muted">{fill(t('mfa_s2meta'), { email: s.email })}</span>
+      <ol className="mb-6 space-y-5 text-[0.9375rem]">
+        <li className="flex gap-3"><span className={num}>1<span className="sr-only">.</span></span><span className="min-w-0">{t('mfa_s1')}</span></li>
+        <li className="flex gap-3">
+          <span className={num}>2<span className="sr-only">.</span></span>
+          <span className="min-w-0 flex-1">
+            {t('mfa_s2')}
+            <code className="mt-2 block select-all break-all rounded-xl bg-raised px-3.5 py-3 font-mono text-base tracking-wider text-ink" data-testid="totp-secret">{grouped}</code>
+            <span className="mt-1.5 block text-[0.8125rem] text-muted [overflow-wrap:anywhere]">{fill(t('mfa_s2meta'), { email: s.email })}</span>
+          </span>
         </li>
-        <li><span className="font-semibold">3.</span> {t('mfa_s3')}</li>
+        <li className="flex gap-3"><span className={num}>3<span className="sr-only">.</span></span><span className="min-w-0">{t('mfa_s3')}</span></li>
       </ol>
       <ActionForm action={enrollMfaAction} className="space-y-4">
         <input type="hidden" name="lang" value={lang} />
         <Field label={t('mfa_code')} name="code" inputMode="numeric" autoComplete="one-time-code" maxLength={6} pattern="\d{6}" required />
-        <SubmitButton className="w-full" pendingText={t('mfa_verifying')}>{t('twoStep')}</SubmitButton>
+        <SubmitButton className="btn-lg w-full" pendingText={t('mfa_verifying')}>{t('twoStep')}</SubmitButton>
       </ActionForm>
     </AuthLayout>
   );

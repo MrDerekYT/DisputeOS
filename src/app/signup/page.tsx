@@ -12,7 +12,7 @@ export default function SignUpPage() {
     <AuthLayout
       title="Start your 14-day trial"
       subtitle="Set up your workspace in a couple of minutes. No card required."
-      footer={<>Already have an account? <Link href="/login" className="font-medium text-brand-strong underline-offset-4 hover:underline">Sign in</Link></>}
+      footer={<>Already have an account? <Link href="/login" className="link">Sign in</Link></>}
     >
       <ActionForm action={signUpAction} className="space-y-4">
         <Field label="Your name" name="fullName" autoComplete="name" required />
@@ -29,7 +29,7 @@ export default function SignUpPage() {
         <Check name="terms" required>
           I understand {PRODUCT.name} is software, not legal advice, and that I am responsible for complying with the laws that apply to my business.
         </Check>
-        <SubmitButton className="w-full" pendingText="Creating workspace…">Create workspace</SubmitButton>
+        <SubmitButton className="btn-lg w-full" pendingText="Creating workspace…">Create workspace</SubmitButton>
       </ActionForm>
     </AuthLayout>
   );

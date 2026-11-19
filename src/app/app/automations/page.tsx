@@ -29,48 +29,48 @@ export default async function AutomationsPage() {
   }));
   return (
     <>
-      <PageHeader title="Automations" subtitle="Save your team time on reminders and follow-ups — with guardrails so nothing is sent twice or without approval."
-        actions={<><ActionForm action={addStartersAction} className="inline"><SubmitButton variant="secondary">Add recommended set</SubmitButton></ActionForm><ActionForm action={runNowAction} className="inline"><SubmitButton variant="secondary"><Play size={14} /> Run scheduled checks now</SubmitButton></ActionForm></>} />
-      <div className="mb-6 grid gap-3 sm:grid-cols-3">
-        {[['No duplicates', 'Each automation runs once per client or dispute per cooldown window — enforced in the database.'], ['People approve', 'Client-facing messages wait in your Inbox until someone approves the exact text.'], ['Capped runs', 'A single run can touch only a limited number of clients, so nothing becomes a mass message by accident.']].map(([t, b]) => (
-          <div key={t} className="card flex gap-3 p-4"><ShieldCheck size={18} className="mt-0.5 shrink-0 text-brand" /><div><div className="text-sm font-semibold">{t}</div><p className="text-xs text-muted">{b}</p></div></div>))}
-      </div>
+      <PageHeader title="Automations" subtitle="Reminders and follow-ups, with guardrails so nothing is sent twice or without approval."
+        actions={<>{autos.length > 0 && <ActionForm action={addStartersAction} className="inline"><SubmitButton variant="secondary">Add recommended set</SubmitButton></ActionForm>}<ActionForm action={runNowAction} className="inline"><SubmitButton variant="secondary"><Play size={14} aria-hidden /> Run scheduled checks now</SubmitButton></ActionForm></>} />
+      <ul aria-label="Guardrails" className="mb-8 grid gap-x-8 gap-y-4 sm:grid-cols-3">
+        {[['No duplicates', 'Each automation runs once per client or dispute per cooldown window.'], ['People approve', 'Client-facing messages wait in your Inbox until someone approves the exact text.'], ['Capped runs', 'A single run can touch only a limited number of clients.']].map(([t, b]) => (
+          <li key={t} className="flex gap-3 border-l-2 border-line pl-4"><ShieldCheck size={18} className="mt-0.5 shrink-0 text-muted" aria-hidden /><div><div className="text-sm font-semibold">{t}</div><p className="text-[0.8125rem] text-muted">{b}</p></div></li>))}
+      </ul>
 
-      {autos.length === 0 ? <EmptyState title="No automations yet" body="Start with the recommended set — they are created switched off so you can review each one." icon={<Zap size={20} />} /> : (
-        <div className="space-y-3">{autos.map((a) => (
-          <article key={a.id} className="card card-pad">
+      {autos.length === 0 ? <EmptyState title="No automations yet" body="Start with the recommended set — they are created switched off so you can review each one." icon={<Zap size={20} />} action={<ActionForm action={addStartersAction}><SubmitButton>Add recommended set</SubmitButton></ActionForm>} /> : (
+        <div className="panel divide-y divide-line/70">{autos.map((a) => (
+          <article key={a.id} className="p-5 sm:p-6">
             <div className="flex flex-wrap items-start justify-between gap-3">
-              <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><h2 className="font-semibold">{a.name}</h2><Badge tone={a.enabled ? 'ok' : 'neutral'} dot>{a.enabled ? 'On' : 'Off'}</Badge>{a.requires_approval && <Badge tone="info">Needs approval</Badge>}</div><div className="mt-1"><Describe a={a} /></div>
-                <div className="mt-1 text-xs text-faint">Cap {a.max_subjects_per_run} per run · cooldown {a.cooldown_days} day{a.cooldown_days === 1 ? '' : 's'}</div></div>
+              <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><h2 className="font-sans text-[0.9375rem] font-semibold tracking-normal">{a.name}</h2><Badge tone={a.enabled ? 'ok' : 'neutral'} dot>{a.enabled ? 'On' : 'Off'}</Badge>{a.requires_approval && <Badge tone="info">Needs approval</Badge>}</div><div className="mt-1"><Describe a={a} /></div>
+                <div className="mt-1 text-[0.8125rem] text-muted">Cap {a.max_subjects_per_run} per run · cooldown {a.cooldown_days} day{a.cooldown_days === 1 ? '' : 's'}</div></div>
               <div className="flex gap-2">
                 <form action={toggleAutomationAction}><input type="hidden" name="id" value={a.id} /><button className={a.enabled ? 'btn-secondary btn-sm' : 'btn-primary btn-sm'}>{a.enabled ? 'Turn off' : 'Turn on'}</button></form>
                 <form action={deleteAutomationAction}><input type="hidden" name="id" value={a.id} /><ConfirmButton message="Delete this automation and its run history?" className="btn-ghost btn-sm">Delete</ConfirmButton></form>
               </div>
             </div>
-            <details className="mt-3"><summary className="cursor-pointer text-sm font-medium text-brand-strong">Edit</summary><div className="mt-4"><AutomationForm a={a} /></div></details>
+            <details className="mt-3"><summary className="link w-fit cursor-pointer text-sm">Edit</summary><div className="mt-4"><AutomationForm a={a} /></div></details>
           </article>))}</div>
       )}
 
       <details className="mt-6"><summary className="btn-secondary w-fit cursor-pointer list-none">New automation</summary><div className="card card-pad mt-3"><AutomationForm /></div></details>
 
-      <Section title="Scheduled checks" className="mt-8" hint="Reminders and deadline checks run on a schedule set up by whoever hosts the app. Each run is recorded here, including failures.">
-        {jobs.length === 0 ? <p className="text-sm text-muted">No scheduled run has been recorded yet. Until the schedule is set up, use “Run scheduled checks now” above. See docs/INTEGRATIONS.md for the scheduler command.</p> : (
+      <Section plain title="Scheduled checks" className="mt-10" hint="Each run is recorded here, including failures.">
+        {jobs.length === 0 ? <p className="text-sm text-muted">No scheduled run has been recorded yet. Until the schedule is set up, use “Run scheduled checks now” above.</p> : (
           <>
             {jobs[0]!.status === 'failed' && <div className="mb-3"><Notice tone="bad" title="The last scheduled run failed">{jobs[0]!.error ?? 'No details were recorded.'} Nothing was half-done: a failed run is rolled back and retried on the next schedule.</Notice></div>}
-            <ul className="divide-y divide-line text-sm">{jobs.map((j) => (
+            <ul className="divide-y divide-line/70 text-sm">{jobs.map((j) => (
               <li key={j.id} className="flex flex-wrap items-center justify-between gap-2 py-2">
                 <span className="flex items-center gap-2"><Badge tone={j.status === 'ok' ? 'ok' : 'bad'}>{j.status === 'ok' ? 'Completed' : 'Failed'}</Badge><span className="text-muted">{fmtDate(j.started_at)} · {relTime(j.started_at)}</span></span>
                 <span className="text-muted">{j.status === 'ok' ? `${j.executed} done · ${j.pending} waiting for approval · ${j.skipped} already handled` : j.error}</span>
               </li>))}</ul>
           </>
         )}
+        <p className="mt-4 text-[0.8125rem] text-muted">Scheduled checks (reminders, deadlines, inactivity, weekly summary) run when <code>POST /api/jobs/run</code> is called with your <code>CRON_SECRET</code>. Set it up on your host’s scheduler, every 15–60 minutes; the command is in docs/INTEGRATIONS.md.</p>
       </Section>
 
-      <Section title="Recent runs" className="mt-8" hint="Every execution is recorded.">
+      <Section plain title="Recent runs" className="mt-8">
         {runs.length === 0 ? <p className="text-sm text-muted">Nothing has run yet.</p> : (
-          <ul className="divide-y divide-line text-sm">{runs.map((r) => (<li key={r.id} className="flex items-center justify-between gap-3 py-2.5"><span><strong>{r.name}</strong>{r.client && <span className="text-muted"> · {r.client}</span>}</span><span className="flex items-center gap-3"><StatusBadge status={r.status === 'completed' ? 'completed_run' : r.status} text={r.status.replace(/_/g, ' ')} /><span className="text-xs text-muted">{relTime(r.created_at)}</span></span></li>))}</ul>)}
+          <ul className="divide-y divide-line/70 text-sm">{runs.map((r) => (<li key={r.id} className="flex items-center justify-between gap-3 py-2.5"><span><strong>{r.name}</strong>{r.client && <span className="text-muted"> · {r.client}</span>}</span><span className="flex items-center gap-3"><StatusBadge status={r.status === 'completed' ? 'completed_run' : r.status} text={r.status.replace(/_/g, ' ')} /><span className="text-[0.8125rem] text-muted">{relTime(r.created_at)}</span></span></li>))}</ul>)}
       </Section>
-      <div className="mt-6"><Notice tone="info" title="Scheduling">Scheduled checks (reminders, deadlines, inactivity, weekly summary) run when <code>POST /api/jobs/run</code> is called with your <code>CRON_SECRET</code> — set it up on your host’s scheduler (every 15–60 minutes). You can also run them manually above.</Notice></div>
     </>
   );
 }
@@ -92,7 +92,7 @@ function AutomationForm({ a }: { a?: AutomationRow }) {
       {[1, 2, 3].map((n) => {
         const x = acts[n - 1];
         return (
-          <fieldset key={n} className="grid gap-3 rounded-xl border border-line p-4 sm:grid-cols-2">
+          <fieldset key={n} className="grid gap-3 rounded-xl border border-line-strong/60 p-4 sm:grid-cols-2">
             <legend className="px-1 text-sm font-semibold">Then{n > 1 ? ` (${n})` : ''}</legend>
             <Select label="Action" name={`a${n}`} defaultValue={x?.type ?? ''} options={actionOpts} className="sm:col-span-2" />
             <Field label="Title" name={`t${n}`} defaultValue={x?.title} />

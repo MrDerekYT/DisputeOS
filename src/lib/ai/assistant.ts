@@ -1,6 +1,7 @@
 import { assertNoBlockedClaims } from '../compliance/claims';
+import type { Db } from '../db';
 import type { Outcome } from '../disputes/workflow';
-import { rewriteSafely, type Rewritten } from './provider';
+import { getProvider, rewriteSafely, type AiProvider, type Rewritten } from './provider';
 
 /**
  * The AI assistant's deterministic core. Every capability here works with no LLM at all; an LLM (if configured) may
@@ -39,6 +40,15 @@ export function classifyResponse(text: string): ResponseReading {
 // ---- Client progress note ------------------------------------------------------------------------------------------------
 export interface ProgressStats { firstName: string; total: number; deleted: number; updated: number; verified: number; waiting: number; draft: number; language: 'en' | 'es' }
 
+export type DisputeCounts = Pick<ProgressStats, 'total' | 'deleted' | 'updated' | 'verified' | 'waiting' | 'draft'>;
+
+/** The counts a progress note is built from, read under the caller's row-level security. */
+export function loadDisputeCounts(db: Db, clientId: string): Promise<DisputeCounts | null> {
+  return db.row<DisputeCounts>(
+    `select count(*) filter (where status in ('submitted','under_investigation','response_received','resolved'))::int as total, count(*) filter (where outcome = 'deleted')::int as deleted, count(*) filter (where outcome = 'updated')::int as updated,
+            count(*) filter (where outcome = 'verified')::int as verified, count(*) filter (where status in ('submitted','under_investigation'))::int as waiting, count(*) filter (where status = 'draft')::int as draft from public.disputes where client_id = $1`, [clientId]);
+}
+
 export function progressSummary(s: ProgressStats): string {
   const changed = s.deleted + s.updated;
   const es = s.language === 'es';
@@ -56,6 +66,7 @@ export function progressSummary(s: ProgressStats): string {
   return assertNoBlockedClaims(parts.join(' '));
 }
 
-export async function polishedProgress(s: ProgressStats): Promise<Rewritten> {
-  return rewriteSafely(progressSummary(s), `Make this client progress note warm and easy to read in ${s.language === 'es' ? 'Spanish' : 'English'}.`);
+/** Calls the LLM when a provider is given. Callers that serve users must go through withAiCredits (./credits.ts). */
+export async function polishedProgress(s: ProgressStats, provider: AiProvider | null = getProvider()): Promise<Rewritten> {
+  return rewriteSafely(progressSummary(s), `Make this client progress note warm and easy to read in ${s.language === 'es' ? 'Spanish' : 'English'}.`, provider);
 }

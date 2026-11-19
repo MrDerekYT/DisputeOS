@@ -2,7 +2,7 @@ import Link from 'next/link';
 import type { Metadata } from 'next';
 import { Check as CheckIcon } from 'lucide-react';
 import { ActionForm, Field, Select, SubmitButton, TextArea } from '@/components/forms';
-import { Badge, EmptyState, PageHeader, Section } from '@/components/ui';
+import { Badge, EmptyState, PageHeader, Section, Tabs } from '@/components/ui';
 import { requireStaff } from '@/lib/auth/context';
 import { memberLabel, staffMembers } from '@/lib/crm';
 import { getEnv } from '@/lib/env';
@@ -40,27 +40,26 @@ export default async function TasksPage({ searchParams }: { searchParams: Promis
   ];
   return (
     <>
-      <PageHeader title="Tasks" subtitle="Follow-ups, reviews and reminders — including the ones automations create." />
+      <PageHeader title="Tasks" subtitle="Follow-ups, reviews and reminders, including the ones automations create." />
       <div className="grid gap-6 lg:grid-cols-[1fr_22rem]">
         <div>
-          <nav aria-label="Task lists" className="mb-4 flex gap-2">{[['mine', 'Mine'], ['all', 'Everyone’s open'], ['done', 'Done']].map(([k, l]) => (
-            <Link key={k} href={`/app/tasks?scope=${k}`} aria-current={scope === k ? 'page' : undefined} className={cn('rounded-full border px-3.5 py-1.5 text-sm font-medium', scope === k ? 'border-brand bg-brand-soft text-brand-strong' : 'border-line bg-surface text-muted hover:text-ink')}>{l}</Link>))}</nav>
-          {tasks.length === 0 ? <EmptyState title={scope === 'done' ? 'Nothing completed yet' : 'No open tasks'} body="Tasks you create — and ones created by automations — appear here." /> : (
+          <Tabs active={scope} tabs={[{ key: 'mine', label: 'Mine', href: '/app/tasks?scope=mine' }, { key: 'all', label: 'Everyone’s open', href: '/app/tasks?scope=all' }, { key: 'done', label: 'Done', href: '/app/tasks?scope=done' }]} />
+          {tasks.length === 0 ? <EmptyState title={scope === 'done' ? 'Nothing completed yet' : 'No open tasks'} body="Tasks appear here as you or an automation create them." action={scope === 'done' ? undefined : <a href="#new-task" className="btn-primary">New task</a>} /> : (
             <div className="space-y-6">{groups.filter((g) => g.rows.length).map((g) => (
-              <section key={g.label}><h2 className="mb-2 flex items-center gap-2 text-sm font-semibold">{g.label} <span className="rounded-full bg-raised px-2 text-xs font-normal text-muted ring-1 ring-inset ring-line">{g.rows.length}</span></h2>
-                <ul className="card divide-y divide-line">{g.rows.map((t) => (
-                  <li key={t.id} className="flex items-start gap-3 p-4">
+              <section key={g.label}><h2 className={cn('mb-2 flex items-baseline gap-2 font-sans text-sm font-semibold tracking-normal', g.tone === 'bad' && 'text-bad')}>{g.label} <span className="font-semibold tabular-nums text-muted">{g.rows.length}</span></h2>
+                <ul className="panel divide-y divide-line/70">{g.rows.map((t) => (
+                  <li key={t.id} className="flex items-start gap-3 px-5 py-4">
                     <form action={setTaskStatusAction}><input type="hidden" name="id" value={t.id} /><input type="hidden" name="status" value={t.status === 'done' ? 'open' : 'done'} />
-                      <button aria-label={t.status === 'done' ? 'Reopen task' : 'Complete task'} className="group -m-1.5 grid h-8 w-8 place-items-center rounded-full"><span className={cn('grid h-5 w-5 place-items-center rounded-full border', t.status === 'done' ? 'border-ok bg-ok text-surface' : 'border-line group-hover:border-brand')}>{t.status === 'done' && <CheckIcon size={12} />}</span></button></form>
-                    <div className="min-w-0 flex-1"><div className={cn('text-sm font-medium', t.status === 'done' && 'text-muted line-through')}>{t.title}</div>{t.detail && <div className="text-sm text-muted">{t.detail}</div>}
-                      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted">{t.client_name && <Link href={`/app/clients/${t.client_id}`} className="hover:underline">{t.client_name}</Link>}<span>{t.assignee ?? 'Unassigned'}</span>{t.source === 'automation' && <Badge tone="info">Automation</Badge>}</div></div>
-                    {t.due_at && <Badge tone={g.label === 'Overdue' ? 'bad' : 'neutral'}>{fmtDate(t.due_at)}</Badge>}
+                      <button aria-label={t.status === 'done' ? 'Reopen task' : 'Complete task'} className="group -m-1.5 grid h-8 w-8 place-items-center rounded-full"><span className={cn('grid h-5 w-5 place-items-center rounded-full border-2', t.status === 'done' ? 'border-ok bg-ok text-surface' : 'border-line-strong group-hover:border-brand')}>{t.status === 'done' && <CheckIcon size={12} aria-hidden />}</span></button></form>
+                    <div className="min-w-0 flex-1"><div className={cn('text-[0.9375rem] font-semibold leading-snug', t.status === 'done' && 'font-medium text-muted line-through')}>{t.title}</div>{t.detail && <div className="text-sm text-muted">{t.detail}</div>}
+                      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[0.8125rem] text-muted">{t.client_name && <Link href={`/app/clients/${t.client_id}`} className="hover:underline">{t.client_name}</Link>}<span>{t.assignee ?? 'Unassigned'}</span>{t.source === 'automation' && <Badge tone="info">Automation</Badge>}</div></div>
+                    {t.due_at && <Badge tone={g.label === 'Overdue' ? 'bad' : 'neutral'}>{g.label === 'Overdue' && <span className="sr-only">Overdue: </span>}{fmtDate(t.due_at)}</Badge>}
                   </li>))}</ul></section>))}
               {tasks.length === TASK_LIMIT && <p className="text-sm text-muted">Showing the first {TASK_LIMIT} tasks{scope === 'done' ? ' (most recently completed)' : ' by due date'}. Complete or reassign some to see the rest, or open a client to see all of their tasks.</p>}
             </div>
           )}
         </div>
-        <Section title="New task">
+        <Section id="new-task" title="New task">
           <ActionForm action={createTaskAction} resetOnSuccess className="space-y-3">
             <Field label="Title" name="title" required /><TextArea label="Details" name="detail" rows={2} />
             <Select label="Client (optional)" name="clientId" placeholder="Not tied to a client" options={clients.map((c) => ({ value: c.id, label: c.full_name }))}

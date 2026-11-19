@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import type { Metadata } from 'next';
 import { Bell, MessageSquare, ShieldCheck } from 'lucide-react';
-import { Badge, EmptyState, PageHeader, Section } from '@/components/ui';
+import { Badge, EmptyState, ListRow, PageHeader, RowList, Section } from '@/components/ui';
 import { requireStaff } from '@/lib/auth/context';
 import { fmtDate, relTime } from '@/lib/util';
 import { decideRunAction, markNotificationReadAction } from './actions';
@@ -24,40 +24,43 @@ export default async function InboxPage() {
   return (
     <>
       <PageHeader title="Inbox" subtitle="Things waiting on you: approvals, client messages and notifications." />
-      {empty && <EmptyState title="Inbox zero" body="Approvals for automated messages, new client messages and alerts will show up here." />}
+      {empty && <EmptyState title="Inbox zero" body="Approvals for automated messages, new client messages and alerts will show up here." action={<Link href="/app" className="btn-primary">Back to the dashboard</Link>} />}
       <div className="space-y-6">
         {(d.letters?.n ?? 0) > 0 && ctx.can('letters:approve') && (
-          <Link href="/app/letters?status=pending_approval" className="card flex items-center justify-between gap-3 p-4 transition hover:border-brand/50"><span className="flex items-center gap-3"><ShieldCheck size={18} className="text-warn" /><span><strong>{d.letters!.n}</strong> letter{d.letters!.n > 1 ? 's' : ''} waiting for your approval</span></span><span className="text-sm text-brand-strong">Review →</span></Link>
+          <div className="panel overflow-hidden"><RowList>
+            <ListRow icon={<ShieldCheck size={18} />} title={<>{d.letters!.n} letter{d.letters!.n > 1 ? 's' : ''} waiting for your approval</>} action={{ href: '/app/letters?status=pending_approval', label: 'Review', primary: true }} />
+          </RowList></div>
         )}
 
         {d.runs.length > 0 && (
           <Section title={`Automated messages awaiting approval (${d.runs.length})`} hint="Nothing client-facing is sent by an automation until a person approves the exact text.">
-            <ul className="space-y-3">{d.runs.map((r) => (
-              <li key={r.id} className="rounded-xl border border-line p-4">
-                <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-sm"><span><strong>{r.result.automation}</strong> → {r.result.client_id ? <Link className="underline" href={`/app/clients/${r.result.client_id}`}>{r.result.client_name}</Link> : r.result.client_name}</span><span className="text-xs text-muted">{relTime(r.created_at)}</span></div>
+            <ul className="divide-y divide-line/70">{d.runs.map((r) => (
+              <li key={r.id} className="py-4 first:pt-0 last:pb-0">
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-sm"><span><strong>{r.result.automation}</strong> → {r.result.client_id ? <Link className="link" href={`/app/clients/${r.result.client_id}`}>{r.result.client_name}</Link> : r.result.client_name}</span><span className="text-[0.8125rem] text-muted">{relTime(r.created_at)}</span></div>
                 {(r.result.planned ?? []).map((p, i) => (
                   <div key={i} className="mb-2 rounded-lg bg-raised p-3 text-sm"><Badge>{p.type === 'portal_message' ? 'Portal message' : p.type === 'request_document' ? 'Document request' : p.type}</Badge>{p.title && <div className="mt-1.5 font-medium">{p.title}</div>}<p className="mt-1 whitespace-pre-wrap text-muted">{p.body ?? (p.kind ? `Request: ${p.kind.replace(/_/g, ' ')}` : '')}</p></div>))}
                 {canApprove ? (
                   <div className="flex gap-2">
                     <form action={decideRunAction}><input type="hidden" name="id" value={r.id} /><input type="hidden" name="decision" value="approve" /><button className="btn-primary btn-sm">Approve & send</button></form>
                     <form action={decideRunAction}><input type="hidden" name="id" value={r.id} /><input type="hidden" name="decision" value="cancel" /><button className="btn-secondary btn-sm">Discard</button></form>
-                  </div>) : <p className="text-xs text-muted">A manager or admin approves these.</p>}
+                  </div>) : <p className="text-[0.8125rem] text-muted">A manager or admin approves these.</p>}
               </li>))}</ul>
           </Section>
         )}
 
         {d.messages.length > 0 && (
-          <Section title={`Unread client messages (${d.messages.length})`}>
-            <ul className="divide-y divide-line">{d.messages.map((m) => (
-              <li key={m.client_id}><Link href={`/app/clients/${m.client_id}?tab=messages`} className="flex items-start gap-3 py-3 hover:bg-raised"><MessageSquare size={16} className="mt-1 shrink-0 text-brand" /><div className="min-w-0"><div className="text-sm font-medium">{m.client_name} <span className="font-normal text-muted">· {relTime(m.created_at)}</span></div><p className="truncate text-sm text-muted">{m.body}</p></div></Link></li>))}</ul>
-          </Section>
+          <section aria-labelledby="unread" className="panel overflow-hidden">
+            <h2 id="unread" className="px-5 pb-3 pt-5 text-lg font-semibold sm:px-6">Unread client messages ({d.messages.length})</h2>
+            <RowList className="border-t border-line/70">{d.messages.map((m) => (
+              <ListRow key={m.client_id} icon={<MessageSquare size={18} />} title={m.client_name} detail={<span className="line-clamp-2">{m.body}</span>} aside={relTime(m.created_at)} action={{ href: `/app/clients/${m.client_id}?tab=messages`, label: 'Reply' }} />))}</RowList>
+          </section>
         )}
 
         {d.notes.length > 0 && (
-          <Section title="Notifications" actions={<form action={markNotificationReadAction}><input type="hidden" name="id" value="" /><button className="btn-ghost btn-sm">Mark all read</button></form>}>
-            <ul className="divide-y divide-line">{d.notes.map((n) => (
-              <li key={n.id} className="flex items-start gap-3 py-3"><Bell size={16} className={`mt-1 shrink-0 ${n.read_at ? 'text-faint' : 'text-brand'}`} />
-                <div className="min-w-0 flex-1"><div className={`text-sm ${n.read_at ? 'text-muted' : 'font-medium'}`}>{n.href ? <Link className="hover:underline" href={n.href}>{n.title}</Link> : n.title}</div>{n.body && <p className="text-sm text-muted">{n.body}</p>}<div className="text-xs text-faint">{fmtDate(n.created_at)}</div></div>
+          <Section plain title="Notifications" actions={<form action={markNotificationReadAction}><input type="hidden" name="id" value="" /><button className="btn-ghost btn-sm">Mark all read</button></form>}>
+            <ul className="divide-y divide-line/70">{d.notes.map((n) => (
+              <li key={n.id} className="flex items-start gap-3 py-3"><Bell size={16} aria-hidden className={`mt-1 shrink-0 ${n.read_at ? 'text-faint' : 'text-ink'}`} />
+                <div className="min-w-0 flex-1"><div className={`text-sm ${n.read_at ? 'text-muted' : 'font-semibold'}`}>{!n.read_at && <span className="sr-only">Unread: </span>}{n.href ? <Link className="hover:underline" href={n.href}>{n.title}</Link> : n.title}</div>{n.body && <p className="text-sm text-muted">{n.body}</p>}<div className="text-xs text-muted">{fmtDate(n.created_at)}</div></div>
                 {!n.read_at && <form action={markNotificationReadAction}><input type="hidden" name="id" value={n.id} /><button className="btn-ghost btn-sm shrink-0">Mark read</button></form>}</li>))}</ul>
           </Section>
         )}

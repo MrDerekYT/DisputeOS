@@ -1,7 +1,9 @@
+import { refundUnsettled } from '../ai/credits';
 import { withSystem, type Db } from '../db';
+import { runLeadOutreach } from '../lead-outreach';
 import { runSweeps, type SweepSummary } from './engine';
 
-export interface JobsResult { orgs: number; failures: number; executed: number; pending: number; skipped: number; cleaned: Record<string, number>; failed: { orgId: string; error: string }[] }
+export interface JobsResult { orgs: number; failures: number; executed: number; pending: number; skipped: number; leadEmails: number; aiRefunds: number; cleaned: Record<string, number>; failed: { orgId: string; error: string }[] }
 type Sweep = (db: Db, actor: { orgId: string; userId: string | null }) => Promise<SweepSummary[]>;
 
 /**
@@ -10,6 +12,8 @@ type Sweep = (db: Db, actor: { orgId: string; userId: string | null }) => Promis
  * - Each organization runs in its own transaction, so one organization's failure cannot stop or roll back another's.
  * - Safe to retry: automation runs are unique per (automation, subject, cooldown bucket), so running this twice
  *   creates no duplicate tasks, messages or notifications.
+ * - Automatic follow-up to consenting leads runs per organization too: each (lead, step) is sent once, and nothing is
+ *   sent or recorded unless the agency switched it on and email is really connected (src/lib/lead-outreach.ts).
  * - Failures are never silent: each one is written to job_runs (shown on the Automations page) and the
  *   organization's owners and admins get an in-app notification — at most one per day while it keeps failing.
  */
@@ -17,13 +21,14 @@ export async function runScheduledJobs(opts: { sweep?: Sweep; onlyOrgIds?: strin
   const sweep = opts.sweep ?? runSweeps;
   const orgs = await withSystem((db) => db.rows<{ id: string }>(
     "select id from public.organizations where status = 'active' and ($1::uuid[] is null or id = any($1)) order by created_at", [opts.onlyOrgIds ?? null]));
-  const out: JobsResult = { orgs: orgs.length, failures: 0, executed: 0, pending: 0, skipped: 0, cleaned: {}, failed: [] };
+  const out: JobsResult = { orgs: orgs.length, failures: 0, executed: 0, pending: 0, skipped: 0, leadEmails: 0, aiRefunds: 0, cleaned: {}, failed: [] };
   for (const o of orgs) {
     const started = new Date();
     try {
       const sums = await withSystem((db) => sweep(db, { orgId: o.id, userId: null }));
       const t = sums.reduce((a, s) => ({ executed: a.executed + s.executed, pending: a.pending + s.pending, skipped: a.skipped + s.skipped }), { executed: 0, pending: 0, skipped: 0 });
       out.executed += t.executed; out.pending += t.pending; out.skipped += t.skipped;
+      out.leadEmails += (await runLeadOutreach(o.id)).sent;
       await withSystem((db) => db.run("insert into public.job_runs (org_id, started_at, finished_at, status, executed, pending, skipped) values ($1, $2, now(), 'ok', $3, $4, $5)", [o.id, started, t.executed, t.pending, t.skipped]));
     } catch (e) {
       const error = String((e as Error).message ?? e).slice(0, 1000);
@@ -42,6 +47,8 @@ export async function runScheduledJobs(opts: { sweep?: Sweep; onlyOrgIds?: strin
       }).catch((err) => console.error('[jobs] could not record the failure', o.id, (err as Error).message));
     }
   }
+  // AI charges whose request died before an outcome was recorded are given back (src/lib/ai/credits.ts).
+  out.aiRefunds = await refundUnsettled().catch((e) => { console.error('[jobs] AI credit sweep failed', (e as Error).message); return 0; });
   out.cleaned = await withSystem(async (db) => ({
     sessions: await db.run("delete from public.sessions where expires_at < now() - interval '7 days' or revoked_at < now() - interval '7 days'"),
     resets: await db.run("delete from public.password_resets where expires_at < now() - interval '1 day'"),

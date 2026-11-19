@@ -151,7 +151,7 @@ async function signUpAgency(browser, label) {
       if (!/SYNTHETIC BANK NA/.test(body) || !/\$2,450\.00/.test(body)) throw new Error('letter does not carry the disputed account and amount');
       await see(staff, 'AI wording help'); // the suggest step exists; no provider is configured in this environment
       await staff.getByRole('button', { name: 'Suggest better wording' }).click();
-      await see(staff, 'No AI provider is configured');
+      await see(staff, 'AI wording is off: no AI provider connected. The letter is unchanged.');
       if ((await staff.locator('textarea[name=body]').inputValue()) !== body) throw new Error('letter text changed without an accepted suggestion');
       await staff.getByRole('button', { name: 'Send for approval' }).click();
       await staff.getByRole('button', { name: /Approve this exact text/ }).click();

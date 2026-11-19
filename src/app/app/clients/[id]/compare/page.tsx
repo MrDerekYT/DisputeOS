@@ -55,9 +55,9 @@ export default async function ComparePage({ params, searchParams }: { params: Pr
 
   return (
     <>
-      <PageHeader title="Three-bureau comparison" subtitle={<>For <Link className="underline" href={`/app/clients/${id}`}>{c.full_name}</Link>. Differences are things to look into — a difference alone does not mean anything is inaccurate.</>}
+      <PageHeader title="Three-bureau comparison" subtitle={<>For <Link className="link" href={`/app/clients/${id}`}>{c.full_name}</Link>. Differences are things to look into — a difference alone does not mean anything is inaccurate.</>}
         back={{ href: `/app/clients/${id}?tab=reports`, label: c.full_name }}
-        actions={<form action={refreshFindingsAction}><input type="hidden" name="clientId" value={id} /><button className="btn-secondary" type="submit"><RefreshCw size={15} /> Re-run analysis</button></form>} />
+        actions={<form action={refreshFindingsAction}><input type="hidden" name="clientId" value={id} /><button className="btn-secondary" type="submit"><RefreshCw size={15} aria-hidden /> Re-run analysis</button></form>} />
 
       <div className="mb-5 flex flex-wrap items-center gap-2 text-sm">
         {BUREAUS.map((b) => <Badge key={b} tone={have.has(b) ? 'ok' : 'neutral'} dot>{BUREAU_LABEL[b]}: {have.has(b) ? 'approved report' : 'not uploaded'}</Badge>)}
@@ -69,8 +69,7 @@ export default async function ComparePage({ params, searchParams }: { params: Pr
       ) : (
         <>
           <div className="mb-3 flex flex-wrap items-center gap-x-5 gap-y-1 text-xs text-muted" aria-label="Legend">
-            <span className="flex items-center gap-1.5"><span className="h-3 w-3 rounded bg-warn-soft ring-1 ring-warn/40" /> differs from another bureau</span>
-            <span className="flex items-center gap-1.5"><span className="h-3 w-3 rounded bg-raised ring-1 ring-line" /> as reported</span>
+            <span className="flex items-center gap-1.5"><span aria-hidden className="grid h-5 w-5 place-items-center rounded bg-warn-soft text-[0.8125rem] font-semibold text-warn">≠</span> differs from another bureau</span>
             <span className="flex items-center gap-1.5"><Badge tone="info">Client says</Badge> from the client, unverified</span>
           </div>
 
@@ -78,22 +77,22 @@ export default async function ComparePage({ params, searchParams }: { params: Pr
             {groups.map((g) => {
               const diffs = new Set(diffGroup(g).map((d) => d.field as string));
               return (
-                <article key={g.key} className="card overflow-hidden">
-                  <header className="flex flex-wrap items-center justify-between gap-2 border-b border-line bg-raised px-4 py-3">
-                    <div className="font-semibold">{g.creditor} <span className="font-normal text-muted">{g.byBureau[BUREAUS.find((b) => g.byBureau[b])!]?.account_last4 && `••${g.byBureau[BUREAUS.find((b) => g.byBureau[b])!]!.account_last4}`}</span></div>
+                <article key={g.key} className="panel overflow-hidden">
+                  <header className="flex flex-wrap items-center justify-between gap-2 border-b border-line/70 px-4 py-3.5">
+                    <div className="font-display text-base font-semibold">{g.creditor} <span className="font-sans font-normal text-muted">{g.byBureau[BUREAUS.find((b) => g.byBureau[b])!]?.account_last4 && `••${g.byBureau[BUREAUS.find((b) => g.byBureau[b])!]!.account_last4}`}</span></div>
                     <div className="flex items-center gap-2">
                       {g.itemType === 'collection' && <Badge tone="bad">Collection</Badge>}
                       {diffs.size > 0 && <Badge tone="warn">{diffs.size} difference{diffs.size > 1 ? 's' : ''}</Badge>}
                     </div>
                   </header>
-                  <div className="grid divide-line md:grid-cols-3 md:divide-x">
+                  <div className="grid divide-y divide-line/70 md:grid-cols-3 md:divide-x md:divide-y-0">
                     {BUREAUS.map((b: Bureau) => {
                       const t = g.byBureau[b];
                       return (
-                        <div key={b} className={cn('min-w-0 p-4', !have.has(b) && 'bg-raised/60')}>
+                        <div key={b} className="min-w-0 p-4">
                           <div className="mb-3 flex items-center justify-between">
                             <span className="text-sm font-semibold">{BUREAU_LABEL[b]}</span>
-                            {t && <Link href={`/app/disputes/new?clientId=${id}&tradelineId=${t.id}`} className="btn-ghost btn-sm !px-2" title={`Start a dispute with ${BUREAU_LABEL[b]}`}><Gavel size={14} /> Dispute</Link>}
+                            {t && <Link href={`/app/disputes/new?clientId=${id}&tradelineId=${t.id}`} className="btn-ghost btn-sm !px-2" title={`Start a dispute with ${BUREAU_LABEL[b]}`}><Gavel size={14} aria-hidden /> Dispute</Link>}
                           </div>
                           {!t ? (
                             <p className="text-sm text-muted">{have.has(b) ? 'Not reported on this bureau’s approved report.' : 'No report uploaded for this bureau.'}</p>
@@ -103,9 +102,9 @@ export default async function ComparePage({ params, searchParams }: { params: Pr
                                 const v = f.get(t);
                                 const differs = diffs.has(f.field) && v;
                                 return (
-                                  <div key={f.field} className={cn('flex justify-between gap-3 rounded-lg px-2 py-1', differs ? 'bg-warn-soft ring-1 ring-warn/30' : '')}>
-                                    <dt className="text-muted">{f.label}</dt>
-                                    <dd className={cn('text-right font-medium tabular-nums', !v && 'font-normal text-faint')}>{v ?? '—'}</dd>
+                                  <div key={f.field} className={cn('flex justify-between gap-3 rounded-lg px-2 py-1', differs ? 'bg-warn-soft' : '')}>
+                                    <dt className={differs ? 'text-ink' : 'text-muted'}>{f.label}</dt>
+                                    <dd className={cn('text-right font-medium tabular-nums', !v && 'font-normal text-faint')}>{differs && <><span aria-hidden className="mr-1.5 font-semibold text-warn">≠</span><span className="sr-only">Differs from another bureau: </span></>}{v ?? '—'}</dd>
                                   </div>
                                 );
                               })}
@@ -128,20 +127,20 @@ export default async function ComparePage({ params, searchParams }: { params: Pr
             {groups.length === 0 && <EmptyState title="No accounts in the approved reports" />}
           </div>
 
-          <section className="mt-10" aria-labelledby="findings">
+          <section className="mt-10 border-t border-line pt-8" aria-labelledby="findings">
             <div className="mb-4 flex flex-wrap items-end justify-between gap-2">
               <div><h2 id="findings" className="text-lg font-semibold">Findings to review ({findings.length})</h2><p className="text-sm text-muted">Each one shows exactly which reported values it rests on.</p></div>
               <div className="flex flex-wrap gap-2">{Object.entries(BASIS_LABEL).map(([k, v]) => <span key={k} className="flex items-center gap-1.5 text-xs text-muted"><Badge tone={v.tone}>{v.text}</Badge>{v.hint}</span>)}</div>
             </div>
-            {sp.drafted != null && Number(sp.drafted) > 0 && <div className="mb-4"><Notice tone="ok" title={`${Number(sp.drafted)} dispute${Number(sp.drafted) === 1 ? '' : 's'} drafted`}>Each is a draft with the reason written from its evidence. Read and edit each one, then send it for review — nothing is submitted until it is approved. <Link className="font-medium underline" href="/app/disputes?view=table&status=draft">Open the drafts</Link>{Number(sp.skipped) > 0 && <> · {Number(sp.skipped)} skipped{sp.why ? ` (${sp.why})` : ''}</>}</Notice></div>}
+            {sp.drafted != null && Number(sp.drafted) > 0 && <div className="mb-4"><Notice tone="ok" title={`${Number(sp.drafted)} dispute${Number(sp.drafted) === 1 ? '' : 's'} drafted`}>Each is a draft with the reason written from its evidence. Read and edit each one, then send it for review — nothing is submitted until it is approved. <Link className="link" href="/app/disputes?view=table&status=draft">Open the drafts</Link>{Number(sp.skipped) > 0 && <> · {Number(sp.skipped)} skipped{sp.why ? ` (${sp.why})` : ''}</>}</Notice></div>}
             {sp.drafted === '0' && <div className="mb-4"><Notice tone="warn" title="Nothing was drafted">{sp.why ?? 'The selected findings could not be drafted automatically.'}</Notice></div>}
             {sp.bulk === 'none' && <div className="mb-4"><Notice tone="warn" title="Select at least one finding">Tick the findings you and the client agreed to pursue, then draft.</Notice></div>}
             {sp.bulk === 'error' && <div className="mb-4"><Notice tone="warn" title="Could not draft">{sp.why}</Notice></div>}
             {canDispute && findings.some((f) => f.status !== 'disputed') && (
-              <form id="bulk" action={bulkDraftAction} className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-line bg-raised p-4">
+              <form id="bulk" action={bulkDraftAction} className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-raised p-4">
                 <input type="hidden" name="clientId" value={id} />
                 <p className="text-sm"><strong>Draft several at once.</strong> <span className="text-muted">Tick the findings to pursue. One draft dispute is created per finding — a person still reviews and approves each before anything is sent.</span></p>
-                <button className="btn-primary btn-sm"><Gavel size={14} /> Draft disputes for selected</button>
+                <button className="btn-primary btn-sm"><Gavel size={14} aria-hidden /> Draft disputes for selected</button>
               </form>
             )}
             {findings.length === 0 ? <Notice tone="ok">{dismissed.length ? 'No findings left to review. The ones you dismissed are listed below.' : 'Nothing to flag. The approved reports agree with each other and nothing looks out of the ordinary.'}</Notice> : (
@@ -153,16 +152,16 @@ export default async function ComparePage({ params, searchParams }: { params: Pr
                       <div className="flex flex-wrap items-start justify-between gap-3">
                         <div className="min-w-0 flex-1">
                           <div className="mb-1.5 flex flex-wrap items-center gap-2">
-                            {canDispute && f.status !== 'disputed' && <label className="flex items-center gap-1.5 text-xs font-medium"><input type="checkbox" form="bulk" name="finding" value={f.id} className="h-4 w-4 rounded border-line accent-[rgb(var(--brand))]" /> Select</label>}
+                            {canDispute && f.status !== 'disputed' && <label className="flex items-center gap-1.5 text-xs font-medium"><input type="checkbox" form="bulk" name="finding" value={f.id} className="h-4 w-4 rounded border-line-strong accent-[rgb(var(--brand))]" /> Select</label>}
                             <Badge tone={basis.tone}>{basis.text}</Badge>
                             <Badge>{FINDING_CATEGORIES[f.category] ?? f.category}</Badge>
                             {f.severity === 'strong' && <Badge tone="warn">Worth a close look</Badge>}
                             {f.status !== 'suggested' && <StatusBadge status={f.status} />}
                           </div>
-                          <h3 className="font-medium">{f.title}</h3>
+                          <h3 className="text-[0.9375rem] font-semibold leading-snug">{f.title}</h3>
                           <p className="mt-1 text-sm text-muted">{f.explanation}</p>
                           <details className="mt-3">
-                            <summary className="cursor-pointer text-xs font-medium text-brand-strong">What this is based on ({f.evidence.length})</summary>
+                            <summary className="link cursor-pointer text-[0.8125rem]">What this is based on ({f.evidence.length})</summary>
                             <ul className="mt-2 space-y-1 rounded-xl bg-raised p-3 text-xs">
                               {f.evidence.map((e, i) => (
                                 <li key={i} className="flex flex-wrap gap-x-2">
@@ -175,10 +174,10 @@ export default async function ComparePage({ params, searchParams }: { params: Pr
                           </details>
                         </div>
                         <div className="flex shrink-0 flex-col gap-2">
-                          {f.status !== 'disputed' && <Link href={`/app/disputes/new?clientId=${id}&findingId=${f.id}`} className="btn-primary btn-sm"><Gavel size={14} /> Start dispute</Link>}
+                          {f.status !== 'disputed' && <Link href={`/app/disputes/new?clientId=${id}&findingId=${f.id}`} className="btn-primary btn-sm"><Gavel size={14} aria-hidden /> Start dispute</Link>}
                           <div className="flex gap-1.5">
-                            <form action={setFindingStatusAction}><input type="hidden" name="id" value={f.id} /><input type="hidden" name="clientId" value={id} /><input type="hidden" name="status" value="accepted" /><button className="btn-secondary btn-sm" title="Mark as worth pursuing"><Check size={14} /> Keep</button></form>
-                            <form action={setFindingStatusAction}><input type="hidden" name="id" value={f.id} /><input type="hidden" name="clientId" value={id} /><input type="hidden" name="status" value="dismissed" /><button className="btn-ghost btn-sm" title="Not relevant"><X size={14} /> Dismiss</button></form>
+                            <form action={setFindingStatusAction}><input type="hidden" name="id" value={f.id} /><input type="hidden" name="clientId" value={id} /><input type="hidden" name="status" value="accepted" /><button className="btn-secondary btn-sm" title="Mark as worth pursuing"><Check size={14} aria-hidden /> Keep</button></form>
+                            <form action={setFindingStatusAction}><input type="hidden" name="id" value={f.id} /><input type="hidden" name="clientId" value={id} /><input type="hidden" name="status" value="dismissed" /><button className="btn-ghost btn-sm" title="Not relevant"><X size={14} aria-hidden /> Dismiss</button></form>
                           </div>
                         </div>
                       </div>
@@ -188,9 +187,9 @@ export default async function ComparePage({ params, searchParams }: { params: Pr
               </ul>
             )}
             {dismissed.length > 0 && (
-              <details className="mt-4 rounded-2xl border border-line p-4">
-                <summary className="cursor-pointer text-sm font-medium">Dismissed ({dismissed.length})</summary>
-                <ul className="mt-3 divide-y divide-line">
+              <details className="mt-6 border-t border-line pt-4">
+                <summary className="link cursor-pointer text-sm">Dismissed ({dismissed.length})</summary>
+                <ul className="mt-3 divide-y divide-line/70">
                   {dismissed.map((f) => (
                     <li key={f.id} className="flex flex-wrap items-start justify-between gap-3 py-3">
                       <div className="min-w-0 flex-1"><div className="text-sm font-medium">{f.title}</div><p className="mt-0.5 text-sm text-muted">{f.explanation}</p></div>
@@ -203,7 +202,7 @@ export default async function ComparePage({ params, searchParams }: { params: Pr
           </section>
         </>
       )}
-      <p className="mt-6 flex items-center gap-2 text-xs text-muted"><Eye size={14} /> Analysis uses only the most recent approved report from each bureau.</p>
+      <p className="mt-6 flex items-center gap-2 text-xs text-muted"><Eye size={14} aria-hidden /> Analysis uses only the most recent approved report from each bureau.</p>
     </>
   );
 }

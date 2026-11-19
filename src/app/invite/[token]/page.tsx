@@ -16,7 +16,7 @@ export default async function InvitePage({ params }: { params: Promise<{ token: 
   const inv = await getInvite(token);
   if (!inv) {
     return (
-      <AuthLayout title="Invitation not valid" subtitle="It may have expired or already been used. Ask your contact for a new one." footer={<Link href="/login" className="font-medium text-brand-strong hover:underline">Go to sign in</Link>}>
+      <AuthLayout title="Invitation not valid" subtitle="It may have expired or already been used. Ask your contact for a new one." footer={<Link href="/login" className="btn-primary btn-lg w-full">Go to sign in</Link>}>
         <></>
       </AuthLayout>
     );
@@ -39,11 +39,11 @@ export default async function InvitePage({ params }: { params: Promise<{ token: 
         <input type="hidden" name="lang" value={lang} />
         <div>
           <label className="label" htmlFor="inviteEmail">{t('email')}</label>
-          <input id="inviteEmail" className="field bg-raised" value={inv.email} readOnly aria-readonly />
+          <input id="inviteEmail" className="field !bg-raised text-muted" value={inv.email} readOnly aria-readonly />
         </div>
         <Field label={t('inv_name')} name="fullName" defaultValue={inv.clientName ?? ''} autoComplete="name" required />
         <Field label={t('password')} name="password" type="password" autoComplete="new-password" required hint={isClient ? t('inv_pwHint') : `At least 10 characters. If you already have a ${PRODUCT.name} account with this email, enter its current password.`} />
-        <SubmitButton className="w-full" pendingText={t('inv_settingUp')}>{t('inv_accept')}</SubmitButton>
+        <SubmitButton className="btn-lg w-full" pendingText={t('inv_settingUp')}>{t('inv_accept')}</SubmitButton>
       </ActionForm>
     </AuthLayout>
   );

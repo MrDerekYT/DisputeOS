@@ -72,17 +72,17 @@ export function CommandPalette() {
 
   return (
     <>
-      <button ref={trigger} type="button" onClick={() => setOpen(true)} aria-label="Search or jump to…" aria-haspopup="dialog"
-        className="relative ml-1 flex h-10 w-10 shrink-0 items-center justify-center gap-2 rounded-full border border-line bg-surface text-sm text-faint transition hover:border-brand/50 sm:h-9 sm:w-auto sm:max-w-sm sm:flex-1 sm:shrink sm:justify-start sm:px-3.5">
-        <Search size={15} aria-hidden /> <span className="hidden flex-1 text-left sm:inline">Search or jump to…</span>
-        <kbd className="hidden items-center gap-0.5 rounded-md border border-line bg-raised px-1.5 py-0.5 text-[11px] font-medium text-muted md:flex"><Command size={10} />K</kbd>
+      <button ref={trigger} type="button" onClick={() => setOpen(true)} aria-label="Search clients, disputes, letters" aria-haspopup="dialog"
+        className="relative flex h-10 w-10 shrink-0 items-center justify-center gap-2.5 rounded-xl text-sm text-muted transition-colors hover:bg-raised hover:text-ink sm:h-[2.375rem] sm:w-auto sm:max-w-md sm:flex-1 sm:shrink sm:justify-start sm:border sm:border-line sm:bg-surface sm:px-3.5 sm:hover:border-line-strong sm:hover:bg-surface">
+        <Search size={17} aria-hidden className="shrink-0" /> <span className="hidden min-w-0 flex-1 truncate text-left sm:inline">Search clients, disputes, letters</span>
+        <kbd className="hidden items-center gap-0.5 rounded-md bg-raised px-1.5 py-0.5 font-sans text-xs font-semibold text-muted md:flex"><Command size={11} aria-hidden />K</kbd>
       </button>
       {open && (
         <div className="fixed inset-0 z-[60] flex items-start justify-center px-4 pt-[12vh]" role="dialog" aria-modal="true" aria-label="Command palette">
-          <button type="button" tabIndex={-1} className="absolute inset-0 bg-black/40" aria-label="Close" onClick={close} />
-          <div className="relative w-full max-w-xl animate-rise overflow-hidden rounded-2xl border border-line bg-surface shadow-pop">
+          <button type="button" tabIndex={-1} className="absolute inset-0 bg-[rgb(4_6_24/0.6)]" aria-label="Close" onClick={close} />
+          <div className="relative w-full max-w-xl animate-rise overflow-hidden rounded-2xl bg-surface shadow-pop">
             <div className="flex items-center gap-3 border-b border-line px-4">
-              <Search size={18} className="text-faint" aria-hidden />
+              <Search size={18} className="text-muted" aria-hidden />
               <input ref={input} value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find a client, dispute or letter — or type to filter actions" aria-label="Search"
                 role="combobox" aria-expanded aria-controls="cp-list" aria-autocomplete="list" aria-activedescendant={shown.length ? `cp-${i}` : undefined}
                 className="h-14 flex-1 bg-transparent text-base outline-none placeholder:text-faint"
@@ -107,7 +107,7 @@ export function CommandPalette() {
                   </li>);
               })}
             </ul>
-            <div className="flex items-center justify-between border-t border-line bg-raised px-4 py-2 text-[11px] text-muted"><span>↑↓ to move · ↵ to open · esc to close</span><span>Only your organization’s data</span></div>
+            <div className="flex items-center justify-between gap-3 border-t border-line px-4 py-2.5 text-xs text-muted"><span>↑↓ to move · ↵ to open · esc to close</span><span>Only your organization’s data</span></div>
           </div>
         </div>
       )}

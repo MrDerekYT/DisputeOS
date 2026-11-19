@@ -4,11 +4,11 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react';
 import {
-  BarChart3, Bell, CheckSquare, CreditCard, FileText, Gavel, Home, Inbox, Menu, Moon, ScrollText, Settings, Sparkles, Sun, Users, UsersRound, X, Zap,
+  BarChart3, Bell, CheckSquare, CreditCard, FileText, Gavel, Home, Inbox, Menu, Moon, ScrollText, Settings, Sparkles, Sun, UserPlus, Users, UsersRound, X, Zap,
 } from 'lucide-react';
 import { cn } from '@/lib/util';
 
-const ICONS = { home: Home, users: Users, gavel: Gavel, file: FileText, tasks: CheckSquare, inbox: Inbox, zap: Zap, chart: BarChart3, card: CreditCard, team: UsersRound, settings: Settings, audit: ScrollText, spark: Sparkles, bell: Bell };
+const ICONS = { home: Home, users: Users, gavel: Gavel, file: FileText, tasks: CheckSquare, inbox: Inbox, zap: Zap, chart: BarChart3, card: CreditCard, team: UsersRound, settings: Settings, audit: ScrollText, spark: Sparkles, bell: Bell, lead: UserPlus };
 export type IconKey = keyof typeof ICONS;
 export interface NavItem { href: string; label: string; icon: IconKey; badge?: number; group?: string }
 
@@ -16,25 +16,27 @@ export function NavLinks({ items, onNavigate }: { items: NavItem[]; onNavigate?:
   const path = usePathname();
   return (
     <nav aria-label="Main" className="flex flex-col gap-0.5">
+      {/* Always rendered inside a `.night` scope (the rail or the drawer), so these colours are the rail's in both themes. */}
       {items.map((it, i) => {
         const Icon = ICONS[it.icon];
         const heading = it.group && it.group !== items[i - 1]?.group ? it.group : null;
         const active = it.href === '/app' || it.href === '/portal' ? path === it.href : path === it.href || path.startsWith(`${it.href}/`);
         return (
           <Fragment key={it.href}>
-          {heading && <div className={cn('px-3 pb-1 text-[11px] font-semibold uppercase tracking-wide text-faint', i > 0 && 'mt-4 border-t border-line pt-4')}>{heading}</div>}
+          {heading && <div className={cn('px-3 pb-1.5 text-[0.8125rem] font-medium text-rail-muted', i > 0 ? 'mt-4' : 'mt-1')}>{heading}</div>}
           <Link
             href={it.href}
             onClick={onNavigate}
             aria-current={active ? 'page' : undefined}
             className={cn(
-              'group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors',
-              active ? 'bg-brand-soft text-brand-strong' : 'text-muted hover:bg-raised hover:text-ink',
+              'group relative flex min-h-[2.25rem] items-center gap-3 rounded-xl px-3 py-1.5 text-[0.9375rem] transition-colors',
+              active ? 'bg-rail-active font-semibold text-rail-ink' : 'font-medium text-rail-muted hover:bg-rail-active/50 hover:text-rail-ink',
             )}
           >
-            <Icon size={18} aria-hidden className={cn(active ? 'text-brand' : 'text-faint group-hover:text-muted')} />
+            {active && <span aria-hidden className="absolute inset-y-1.5 left-0 w-[3px] rounded-full bg-brand" />}
+            <Icon size={18} strokeWidth={1.8} aria-hidden className="shrink-0" />
             <span className="flex-1">{it.label}</span>
-            {it.badge ? <span className="rounded-full bg-brand px-1.5 py-0.5 text-[11px] font-semibold leading-none text-brand-ink">{it.badge}</span> : null}
+            {it.badge ? <span className={cn('grid h-[1.375rem] min-w-[1.375rem] place-items-center rounded-full px-1.5 text-xs font-semibold tabular-nums', active ? 'bg-brand text-brand-ink' : 'bg-rail-active text-rail-ink')}>{it.badge}</span> : null}
           </Link>
           </Fragment>
         );
@@ -44,15 +46,17 @@ export function NavLinks({ items, onNavigate }: { items: NavItem[]; onNavigate?:
 }
 
 export function ThemeToggle() {
-  const [dark, setDark] = useState(false);
+  // Dark is the default; the page is light only when the person chose light (see THEME_BOOT in src/app/layout.tsx).
+  const [dark, setDark] = useState(true);
   useEffect(() => {
-    setDark(document.documentElement.dataset.theme === 'dark');
+    setDark(document.documentElement.dataset.theme !== 'light');
   }, []);
   return (
     <button
       type="button"
-      className="btn-ghost btn-sm !px-2"
+      className="grid h-[2.375rem] w-[2.375rem] shrink-0 place-items-center rounded-xl text-muted transition-colors hover:bg-raised hover:text-ink"
       aria-label={dark ? 'Switch to light mode' : 'Switch to dark mode'}
+      title={dark ? 'Switch to light mode' : 'Switch to dark mode'}
       onClick={() => {
         const next = dark ? 'light' : 'dark';
         document.documentElement.dataset.theme = next;
@@ -60,7 +64,7 @@ export function ThemeToggle() {
         setDark(!dark);
       }}
     >
-      {dark ? <Sun size={16} /> : <Moon size={16} />}
+      {dark ? <Sun size={18} aria-hidden /> : <Moon size={18} aria-hidden />}
     </button>
   );
 }
@@ -94,17 +98,17 @@ export function MobileDrawer({ items, children }: { items: NavItem[]; children?:
   }, [open]);
   return (
     <>
-      <button ref={trigger} type="button" className="btn-ghost !px-2 lg:hidden" aria-label="Open menu" aria-expanded={open} onClick={() => setOpen(true)}>
+      <button ref={trigger} type="button" className="-ml-1.5 grid h-10 w-10 shrink-0 place-items-center rounded-xl text-muted transition-colors hover:bg-raised hover:text-ink lg:hidden" aria-label="Open menu" aria-expanded={open} onClick={() => setOpen(true)}>
         <Menu size={22} />
       </button>
       {open && (
         <div className="fixed inset-0 z-50 lg:hidden" role="dialog" aria-modal="true" aria-label="Menu">
-          <button type="button" tabIndex={-1} className="absolute inset-0 bg-black/40" aria-label="Close menu" onClick={() => setOpen(false)} />
-          <div ref={panel} className="absolute inset-y-0 left-0 flex w-72 max-w-[85%] animate-rise flex-col bg-surface p-4 shadow-pop">
-            <div className="mb-3 flex justify-end">
-              <button type="button" autoFocus className="btn-ghost !px-2" aria-label="Close menu" onClick={() => setOpen(false)}><X size={20} /></button>
+          <button type="button" tabIndex={-1} className="absolute inset-0 bg-[rgb(4_6_24/0.6)]" aria-label="Close menu" onClick={() => setOpen(false)} />
+          <div ref={panel} className="night absolute inset-y-0 left-0 flex w-72 max-w-[85%] animate-rise flex-col border-r border-rail-line bg-rail p-3.5 shadow-pop">
+            <div className="mb-2 flex justify-end">
+              <button type="button" autoFocus className="grid h-10 w-10 place-items-center rounded-xl text-rail-muted transition-colors hover:bg-rail-active hover:text-rail-ink" aria-label="Close menu" onClick={() => setOpen(false)}><X size={20} aria-hidden /></button>
             </div>
-            <div className="flex-1 overflow-y-auto"><NavLinks items={items} onNavigate={() => setOpen(false)} /></div>
+            <div className="-mx-1 min-h-0 flex-1 overflow-y-auto px-1"><NavLinks items={items} onNavigate={() => setOpen(false)} /></div>
             {children}
           </div>
         </div>

@@ -13,7 +13,7 @@ import { MONITORING_LABEL_MAX, MONITORING_URL_MAX, monitoringLabelIssue, safeMon
 export async function updateOrgAction(_: ActionState, fd: FormData): Promise<ActionState> {
   const ctx = await requireStaff('settings:manage');
   return run(async () => {
-    const d = parseForm(z.object({ name: zText(160), stateCode: z.string().trim().toUpperCase().regex(/^[A-Z]{2}$/, 'Use a two-letter state code').optional().or(z.literal('')), retentionDays: z.coerce.number().int().min(365).max(3650), brandColor: z.string().trim().regex(/^#[0-9a-fA-F]{6}$/, 'Choose a colour like #0f766e').optional().or(z.literal('')),
+    const d = parseForm(z.object({ name: zText(160), stateCode: z.string().trim().toUpperCase().regex(/^[A-Z]{2}$/, 'Use a two-letter state code').optional().or(z.literal('')), retentionDays: z.coerce.number().int().min(365).max(3650), brandColor: z.string().trim().regex(/^#[0-9a-fA-F]{6}$/, 'Choose a colour like #3b49d1').optional().or(z.literal('')),
       monitoringUrl: z.string().trim().max(MONITORING_URL_MAX).refine((v) => v === '' || safeMonitoringUrl(v) !== null, 'Use a full https:// link, without a username or password in it').optional(),
       monitoringLabel: z.string().trim().max(MONITORING_LABEL_MAX).regex(/^[^<>]*$/, 'Use plain text').optional(), monitoringPaid: z.string().optional() }), fd);
     const monitoringUrl = safeMonitoringUrl(d.monitoringUrl) ?? '';
@@ -27,6 +27,20 @@ export async function updateOrgAction(_: ActionState, fd: FormData): Promise<Act
     revalidatePath('/app', 'layout');
     return { ok: 'Settings saved.' };
   });
+}
+
+/**
+ * Whether portal clients' guide questions may use the workspace's AI credits. Off until an owner or admin turns it
+ * on: the clients are spending the agency's balance, so the agency decides. Checked in portalGuideAiAllowed.
+ */
+export async function setPortalGuideAiAction(fd: FormData) {
+  const ctx = await requireStaff('settings:manage');
+  const on = fd.get('on') === 'true';
+  await ctx.tx(async (db) => {
+    await db.run("update public.organizations set settings = settings || jsonb_build_object('portal_ai_guide', $2::boolean) where id = $1", [ctx.orgId, on]);
+    await audit(db, { orgId: ctx.orgId, actorId: ctx.userId, action: 'org.portal_ai_guide', entityType: 'organization', entityId: ctx.orgId, ip: ctx.meta.ip, meta: { enabled: on } });
+  });
+  revalidatePath('/app/assistant');
 }
 
 export async function changePasswordAction(_: ActionState, fd: FormData): Promise<ActionState> {

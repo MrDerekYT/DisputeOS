@@ -24,12 +24,12 @@ export default async function AuditPage({ searchParams }: { searchParams: Promis
   return (
     <>
       <PageHeader title="Audit log" subtitle="An append-only record of sensitive actions. It cannot be edited or deleted — not even by administrators." />
-      <form method="get" className="mb-4 flex gap-2" role="search"><input name="q" defaultValue={q} placeholder="Filter by action, e.g. dispute. or letter." className="field max-w-sm" aria-label="Filter by action" /><button className="btn-secondary">Filter</button></form>
-      {rows.length === 0 ? <EmptyState title="No entries" /> : (
+      <form method="get" className="mb-4 flex flex-wrap gap-2" role="search"><input name="q" defaultValue={q} placeholder="Filter by action, e.g. dispute. or letter." className="field min-w-[12rem] max-w-sm flex-1" aria-label="Filter by action" /><button className="btn-secondary" type="submit">Filter</button></form>
+      {rows.length === 0 ? <EmptyState title="No entries" body={q ? 'No recorded action starts with that text.' : undefined} /> : (
         <div className="table-wrap"><table className="table"><thead><tr><th>When</th><th>Who</th><th>Action</th><th>Details</th><th>IP</th></tr></thead>
           <tbody>{rows.map((r) => (
             <tr key={r.id}><td className="whitespace-nowrap text-muted">{fmtDate(r.created_at)} <span className="text-xs">{new Date(r.created_at).toISOString().slice(11, 16)}Z</span></td><td>{r.actor ?? <span className="text-faint">system</span>}</td>
-              <td><code className="rounded bg-raised px-1.5 py-0.5 text-xs">{r.action}</code></td>
+              <td><code className="whitespace-nowrap rounded bg-raised px-1.5 py-0.5 text-xs">{r.action}</code></td>
               <td className="max-w-xs truncate text-xs text-muted">{r.entity_type ? titleCase(r.entity_type) : ''}{Object.keys(r.metadata).length ? ` · ${Object.entries(r.metadata).map(([k, v]) => `${k}=${String(v)}`).join(' ')}` : ''}</td><td className="text-xs text-muted">{r.ip ?? '—'}</td></tr>))}</tbody></table></div>
       )}
       <Pagination page={page} pages={pages} hrefFor={(p) => `/app/audit?page=${p}${q ? `&q=${encodeURIComponent(q)}` : ''}`} />

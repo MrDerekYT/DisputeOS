@@ -4,6 +4,7 @@ import { Plus, Search } from 'lucide-react';
 import { Avatar, EmptyState, PageHeader, Pagination, StatusBadge, Badge } from '@/components/ui';
 import { requireStaff } from '@/lib/auth/context';
 import { listClients, SEGMENTS, STAGE_LABEL, CLIENT_STATUSES, staffMembers, memberLabel } from '@/lib/crm';
+import { FilterChips } from '@/components/staff-kit';
 import { relTime } from '@/lib/util';
 
 export const metadata: Metadata = { title: 'Clients' };
@@ -40,18 +41,10 @@ export default async function ClientsPage({ searchParams }: { searchParams: Prom
       <PageHeader
         title="Clients"
         subtitle={`${segmentCounts.all ?? 0} in your workspace`}
-        actions={<Link href="/app/clients/new" className="btn-primary"><Plus size={16} /> New client</Link>}
+        actions={<Link href="/app/clients/new" className="btn-primary"><Plus size={16} aria-hidden /> New client</Link>}
       />
 
-      <nav className="-mx-1 mb-4 flex gap-2 overflow-x-auto px-1 pb-1" aria-label="Segments">
-        {SEGMENTS.map((s) => (
-          <Link key={s.key} href={qs({ segment: s.key === 'all' ? undefined : s.key, page: undefined })} aria-current={segment === s.key ? 'page' : undefined}
-            className={`flex shrink-0 items-center gap-2 rounded-full border px-3.5 py-1.5 text-sm font-medium transition ${segment === s.key ? 'border-brand bg-brand-soft text-brand-strong' : 'border-line bg-surface text-muted hover:text-ink'}`}>
-            {s.label}
-            <span className="text-xs tabular-nums opacity-70">{segmentCounts[s.key === 'active_disputes' ? 'active_disputes' : s.key === 'needs_docs' ? 'needs_docs' : s.key] ?? 0}</span>
-          </Link>
-        ))}
-      </nav>
+      <FilterChips label="Segments" items={SEGMENTS.map((s) => ({ key: s.key, label: s.label, href: qs({ segment: s.key === 'all' ? undefined : s.key, page: undefined }), count: segmentCounts[s.key] ?? 0, active: segment === s.key }))} />
 
       <form method="get" className="mb-4 flex flex-wrap items-center gap-3" role="search">
         {sp.segment && <input type="hidden" name="segment" value={sp.segment} />}
@@ -80,18 +73,18 @@ export default async function ClientsPage({ searchParams }: { searchParams: Prom
         />
       ) : (
         <div className="table-wrap">
-          <table className="table">
+          <table className="table table-stack">
             <thead>
               <tr><th>Client</th><th>Status</th><th>Stage</th><th>Specialist</th><th className="text-right">Active disputes</th><th>Last activity</th></tr>
             </thead>
             <tbody>
               {rows.map((c) => (
                 <tr key={c.id} className="row-link">
-                  <td>
-                    <Link href={`/app/clients/${c.id}`} className="flex items-center gap-3">
+                  <td className="cell-main">
+                    <Link href={`/app/clients/${c.id}`} className="flex items-center gap-3 rounded-md">
                       <Avatar name={c.full_name} />
                       <span className="min-w-0">
-                        <span className="block truncate font-medium">{c.full_name}</span>
+                        <span className="block truncate font-semibold">{c.full_name}</span>
                         <span className="block truncate text-xs text-muted">{c.email ?? c.phone ?? 'No contact info'}</span>
                       </span>
                     </Link>
@@ -103,9 +96,9 @@ export default async function ClientsPage({ searchParams }: { searchParams: Prom
                     </div>
                   </td>
                   <td className="text-muted">{STAGE_LABEL[c.stage as keyof typeof STAGE_LABEL] ?? c.stage}</td>
-                  <td className="text-muted">{c.assignee_name ?? <span className="text-faint">Unassigned</span>}</td>
-                  <td className="text-right tabular-nums">{c.active_disputes || <span className="text-faint">0</span>}</td>
-                  <td className="whitespace-nowrap text-muted">{relTime(c.last_activity_at)}</td>
+                  <td className="text-muted" data-label="Specialist">{c.assignee_name ?? <span className="text-faint">Unassigned</span>}</td>
+                  <td className="text-right tabular-nums" data-label="Active disputes">{c.active_disputes || <span className="text-faint">0</span>}</td>
+                  <td className="whitespace-nowrap text-muted" data-label="Last activity">{relTime(c.last_activity_at)}</td>
                 </tr>
               ))}
             </tbody>

@@ -31,20 +31,20 @@ export default async function BillingPage() {
     <>
       <PageHeader title="Billing" subtitle="Your plans, your clients’ subscriptions and payment history." />
       <div className="mb-6"><Notice tone="warn" title="Payments are recorded manually">{PRODUCT.name} does not process cards or bank transfers. Record payments your team collected elsewhere. Under the Credit Repair Organizations Act you may not charge for services before they are fully performed — every payment requires you to confirm that.</Notice></div>
-      <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div className="mb-8 grid grid-cols-2 gap-x-6 gap-y-6 lg:grid-cols-4">
         <Stat label="Monthly recurring" value={moneyShort(d.totals?.mrr ?? 0)} sub={`${d.totals?.subs ?? 0} active plans`} /><Stat label="Collected this month" value={moneyShort(d.totals?.month ?? 0)} /><Stat label="Collected · 90 days" value={moneyShort(d.totals?.ninety ?? 0)} /><Stat label="Plans offered" value={d.plans.filter((p) => p.active).length} />
       </div>
       <div className="grid gap-6 lg:grid-cols-[1fr_22rem]">
         <div className="space-y-6">
           <Section title="Collected per month ($)"><BarSeries data={d.series} format={(n) => `$${n.toLocaleString()}`} /></Section>
-          <Section title="Recent payments">
+          <Section plain title="Recent payments">
             {d.payments.length === 0 ? <EmptyState title="No payments yet" body="Record a payment from a client’s Billing tab." /> : (
-              <div className="table-wrap !shadow-none"><table className="table"><thead><tr><th>Client</th><th>Amount</th><th>Method</th><th>Status</th><th>Date</th></tr></thead><tbody>{d.payments.map((p) => <tr key={p.id}><td><Link className="hover:underline" href={`/app/clients/${p.client_id}?tab=billing`}>{p.client_name}</Link></td><td className="tabular-nums font-medium">{money(p.amount_cents)}</td><td className="capitalize text-muted">{p.method}</td><td><StatusBadge status={p.status} /></td><td className="text-muted">{fmtDate(p.paid_at)}</td></tr>)}</tbody></table></div>)}
+              <div className="table-wrap"><table className="table"><thead><tr><th>Client</th><th>Amount</th><th>Method</th><th>Status</th><th>Date</th></tr></thead><tbody>{d.payments.map((p) => <tr key={p.id}><td><Link className="font-medium hover:underline" href={`/app/clients/${p.client_id}?tab=billing`}>{p.client_name}</Link></td><td className="tabular-nums font-medium">{money(p.amount_cents)}</td><td className="capitalize text-muted">{p.method}</td><td><StatusBadge status={p.status} /></td><td className="text-muted">{fmtDate(p.paid_at)}</td></tr>)}</tbody></table></div>)}
           </Section>
         </div>
         <div className="space-y-6">
           <Section title="Service plans">
-            {d.plans.length === 0 ? <p className="mb-3 text-sm text-muted">No plans yet.</p> : <ul className="mb-4 divide-y divide-line">{d.plans.map((p) => <li key={p.id} className="py-2.5 text-sm"><div className="flex items-center justify-between"><span className="font-medium">{p.name}</span><span className="tabular-nums">{money(p.price_cents)}{p.interval === 'month' ? '/mo' : ''}</span></div><div className="flex items-center gap-2 text-xs text-muted">{p.subs} active{!p.active && <Badge>Inactive</Badge>}</div></li>)}</ul>}
+            {d.plans.length === 0 ? <p className="mb-3 text-sm text-muted">No plans yet.</p> : <ul className="mb-4 divide-y divide-line/70">{d.plans.map((p) => <li key={p.id} className="py-2.5 text-sm"><div className="flex items-center justify-between"><span className="font-medium">{p.name}</span><span className="tabular-nums">{money(p.price_cents)}{p.interval === 'month' ? '/mo' : ''}</span></div><div className="flex items-center gap-2 text-xs text-muted">{p.subs} active{!p.active && <Badge>Inactive</Badge>}</div></li>)}</ul>}
             {ctx.can('billing:write') && (
               <ActionForm action={createPlanAction} resetOnSuccess className="space-y-3 border-t border-line pt-4">
                 <Field label="Plan name" name="name" required /><Field label="Price ($)" name="price" inputMode="decimal" required />

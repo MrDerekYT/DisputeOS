@@ -27,9 +27,9 @@ export default async function MfaPage() {
       <ActionForm action={verifyMfaAction} className="space-y-4">
         <input type="hidden" name="lang" value={lang} />
         <Field label={t('mfa_code')} name="code" inputMode="numeric" autoComplete="one-time-code" maxLength={6} pattern="\d{6}" required />
-        <SubmitButton className="w-full" pendingText={t('mfa_verifying')}>{t('mfa_verify')}</SubmitButton>
+        <SubmitButton className="btn-lg w-full" pendingText={t('mfa_verifying')}>{t('mfa_verify')}</SubmitButton>
       </ActionForm>
-      <form action={isClient ? portalLogoutAction : logoutAction} className="mt-4"><button className="text-sm text-muted underline-offset-4 hover:underline" type="submit">{t('mfa_other')}</button></form>
+      <form action={isClient ? portalLogoutAction : logoutAction} className="mt-5"><button className="rounded-md text-sm text-muted underline underline-offset-4 hover:text-ink" type="submit">{t('mfa_other')}</button></form>
     </AuthLayout>
   );
 }

@@ -514,14 +514,21 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
       await expectText(staff, 'Draft');
     });
 
-    await check('dark mode toggles and persists', async () => {
+    await check('dark is the default theme; light mode toggles and persists, and so does going back', async () => {
+      const theme = () => staff.evaluate(() => document.documentElement.dataset.theme);
       await staff.setViewportSize({ width: 1360, height: 900 });
       await staff.goto(BASE + '/app');
-      await staff.getByRole('button', { name: /dark mode/i }).click();
-      if ((await staff.evaluate(() => document.documentElement.dataset.theme)) !== 'dark') throw new Error('theme not applied');
-      await staff.reload();
-      if ((await staff.evaluate(() => document.documentElement.dataset.theme)) !== 'dark') throw new Error('theme not persisted');
+      if ((await theme()) !== 'dark') throw new Error('first visit is not dark');
       await staff.screenshot({ path: `${SHOTS}/08-dark.png`, fullPage: true, caret: 'initial' });
+      await staff.getByRole('button', { name: /light mode/i }).click();
+      if ((await theme()) !== 'light') throw new Error('light theme not applied');
+      await staff.reload();
+      if ((await theme()) !== 'light') throw new Error('light theme not persisted');
+      await staff.screenshot({ path: `${SHOTS}/08-light.png`, fullPage: true, caret: 'initial' });
+      await staff.getByRole('button', { name: /dark mode/i }).click();
+      if ((await theme()) !== 'dark') throw new Error('dark theme not applied');
+      await staff.reload();
+      if ((await theme()) !== 'dark') throw new Error('dark theme not persisted');
     });
 
     await check('sign out ends the session; the old session cookie no longer works', async () => {

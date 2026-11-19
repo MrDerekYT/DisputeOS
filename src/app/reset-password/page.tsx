@@ -10,7 +10,7 @@ export default async function ResetPasswordPage({ searchParams }: { searchParams
   const { token } = await searchParams;
   if (!token) {
     return (
-      <AuthLayout title="Link not valid" subtitle="This reset link is missing its token." footer={<Link href="/forgot-password" className="font-medium text-brand-strong hover:underline">Request a new link</Link>}>
+      <AuthLayout title="Link not valid" subtitle="This reset link is missing its token." footer={<Link href="/forgot-password" className="btn-primary btn-lg w-full">Request a new link</Link>}>
         <></>
       </AuthLayout>
     );
@@ -21,7 +21,7 @@ export default async function ResetPasswordPage({ searchParams }: { searchParams
         <input type="hidden" name="token" value={token} />
         <Field label="New password" name="password" type="password" autoComplete="new-password" required hint="At least 10 characters." />
         <Field label="Confirm new password" name="confirm" type="password" autoComplete="new-password" required />
-        <SubmitButton className="w-full" pendingText="Saving…">Update password</SubmitButton>
+        <SubmitButton className="btn-lg w-full" pendingText="Saving…">Update password</SubmitButton>
       </ActionForm>
     </AuthLayout>
   );

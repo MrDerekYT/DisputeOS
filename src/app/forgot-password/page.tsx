@@ -15,7 +15,7 @@ export default async function ForgotPasswordPage({ searchParams }: { searchParam
   const portal = Boolean(sp.portal || brand);
   const lang = portal ? parseLang(sp.lang) : 'en';
   const t = tr(lang);
-  const link = 'font-medium text-brand-strong hover:underline';
+  const link = 'link';
   const portalHref = `/portal/login${qs({ org: brand?.slug, lang: lang === 'es' && 'es' })}`;
   return (
     <AuthLayout portal={portal} brand={brand} lang={lang} title={t('fp_title')} subtitle={t('fp_sub')}
@@ -25,7 +25,7 @@ export default async function ForgotPasswordPage({ searchParams }: { searchParam
       <ActionForm action={forgotPasswordAction} className="space-y-4">
         <input type="hidden" name="lang" value={lang} />
         <Field label={t('email')} name="email" type="email" autoComplete="email" required />
-        <SubmitButton className="w-full" pendingText={t('sending')}>{t('fp_send')}</SubmitButton>
+        <SubmitButton className="btn-lg w-full" pendingText={t('sending')}>{t('fp_send')}</SubmitButton>
       </ActionForm>
     </AuthLayout>
   );

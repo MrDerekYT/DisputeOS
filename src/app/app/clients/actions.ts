@@ -6,6 +6,8 @@ import { z } from 'zod';
 import type { ActionState } from '@/components/forms';
 import { parseForm, run, UserError, zBool, zDate, zOpt, zText, zUuid } from '@/lib/action';
 import { audit } from '@/lib/audit';
+import { loadDisputeCounts, polishedProgress } from '@/lib/ai/assistant';
+import { AI_OFF, notChargedNote, withAiCredits } from '@/lib/ai/credits';
 import { requireStaff } from '@/lib/auth/context';
 import { createInviteToken } from '@/lib/auth/service';
 import { fireTrigger } from '@/lib/automation/engine';
@@ -224,6 +226,28 @@ export async function setTaskStatusAction(fd: FormData) {
 }
 
 // ---------------------------------------------------------------- messaging
+/**
+ * Paid AI polish of the progress note. The note is rebuilt on the server from the dispute data (nothing typed in the
+ * browser is sent to the model), and credits are charged only when polished wording is returned. Nothing is saved or sent.
+ */
+export async function polishProgressAction(_: ActionState, fd: FormData): Promise<ActionState> {
+  const ctx = await requireStaff('comms:send');
+  return run(async () => {
+    const d = parseForm(z.object({ clientId: zUuid }), fd);
+    const loaded = await ctx.tx(async (db) => ({
+      client: await db.row<{ full_name: string; preferred_language: 'en' | 'es' }>('select full_name, preferred_language from public.clients where id = $1', [d.clientId]),
+      counts: await loadDisputeCounts(db, d.clientId),
+    }));
+    if (!loaded.client || !loaded.counts) throw new UserError('Client not found.');
+    const stats = { firstName: loaded.client.full_name.split(' ')[0] ?? '', language: loaded.client.preferred_language, ...loaded.counts };
+    const { result, ai } = await withAiCredits({ orgId: ctx.orgId, feature: 'progress_note', actorUserId: ctx.userId }, (p) => polishedProgress(stats, p));
+    revalidatePath(`/app/clients/${d.clientId}`);
+    if (result.usedAi && ai.status === 'charged') return { ok: `Wording polished by ${result.provider} (${ai.cost} AI credits used); the numbers are verified unchanged. Read it before you send it.`, data: { text: result.text } };
+    if (ai.status === 'no_provider' || ai.status === 'no_credits') return { error: `${AI_OFF[ai.status]} The draft is unchanged.` };
+    return { error: `${result.note ?? 'The AI wording was not safe to use.'} The draft is unchanged. ${notChargedNote(ai)}` };
+  });
+}
+
 export async function sendMessageAction(_: ActionState, fd: FormData): Promise<ActionState> {
   const ctx = await requireStaff('comms:send');
   return run(async () => {

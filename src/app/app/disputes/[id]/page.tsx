@@ -3,15 +3,16 @@ import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import { CalendarClock, Check as CheckIcon, FileText, Lightbulb } from 'lucide-react';
 import { ActionForm, Check, ConfirmButton, Field, Select, SubmitButton, TextArea } from '@/components/forms';
-import { Badge, DeliveryRecord, EmptyState, Notice, PageHeader, Section, StatusBadge } from '@/components/ui';
+import { Badge, DayMeter, DeliveryRecord, EmptyState, Notice, PageHeader, Section, StatusBadge } from '@/components/ui';
 import { requireStaff } from '@/lib/auth/context';
 import { consentStatus } from '@/lib/compliance/disclosures';
-import { CATEGORIES, daysOverdue, daysRemaining, deadlineState, nextSteps, OUTCOME_LABEL, OUTCOMES, PIPELINE, STATUS_LABEL, type DisputeStatus, type Outcome } from '@/lib/disputes/workflow';
+import { CATEGORIES, deadlineState, nextSteps, OUTCOME_LABEL, OUTCOMES, PIPELINE, STATUS_LABEL, type DisputeStatus, type Outcome } from '@/lib/disputes/workflow';
 import { staffMembers, memberLabel, DOC_KIND_LABEL } from '@/lib/crm';
 import { businessToday } from '@/lib/letters/service';
 import { BUREAU_LABEL, cn, fmtDate, isUuid, relTime, type Bureau } from '@/lib/util';
 import { addEvidenceAction, addFollowUpTaskAction, analyzeReplyAction, assignDisputeAction, nextRoundAction, recordResponseAction, transitionAction } from '../actions';
 import { PRODUCT } from '@/lib/product';
+import { dayWindow, windowStart, windowText } from '@/lib/day-meter';
 import { loadRecheck } from '@/lib/disputes/recheck-load';
 
 export const metadata: Metadata = { title: 'Dispute' };
@@ -66,34 +67,64 @@ export default async function DisputePage({ params }: { params: Promise<{ id: st
   const state = deadlineState(d.due_at);
   const idx = PIPELINE.indexOf(d.status);
   const open = !['resolved', 'cancelled'].includes(d.status);
+  const now = new Date();
+  // The window is running only while the dispute is submitted or under investigation (the same test the overdue counts use).
+  const windowOpen = (d.status === 'submitted' || d.status === 'under_investigation') && !!d.due_at;
+  // The window is counted from receipt: the stored deadline minus its 30 (or 45) days — not from the mailing date.
+  const opened = windowStart(d.due_at, d.deadline_extended);
+  const wt = windowText(dayWindow(opened, d.due_at, now));
+  const sameDay = !!opened && !!d.submitted_at && fmtDate(opened) === fmtDate(d.submitted_at);
 
   return (
     <>
       <PageHeader
         title={d.item_label}
-        subtitle={<>Round {d.round} · {CATEGORIES[d.category]?.label ?? d.category} · for <Link className="underline" href={`/app/clients/${d.client_id}`}>{d.client_name}</Link> · sent to {d.bureau ? BUREAU_LABEL[d.bureau] : d.recipient_name}</>}
+        subtitle={<>Round {d.round} · {CATEGORIES[d.category]?.label ?? d.category} · for <Link className="link" href={`/app/clients/${d.client_id}`}>{d.client_name}</Link> · sent to {d.bureau ? BUREAU_LABEL[d.bureau] : d.recipient_name}</>}
         back={{ href: '/app/disputes', label: 'Disputes' }}
         actions={<StatusBadge status={d.status} />}
       />
 
       {/* Pipeline stepper */}
-      <nav aria-label="Pipeline" className="card mb-6 overflow-x-auto p-4">
-        <ol className="flex min-w-[40rem] items-center">
+      <nav aria-label="Pipeline" className="mb-8">
+        <ol className="hidden items-center sm:flex">
           {PIPELINE.map((s, i) => {
             const done = idx > i, current = d.status === s;
             return (
-              <li key={s} className={cn('flex flex-1 items-center', i === PIPELINE.length - 1 && 'flex-none')}>
+              <li key={s} aria-current={current ? 'step' : undefined} className={cn('flex flex-1 items-center', i === PIPELINE.length - 1 && 'flex-none')}>
                 <span className="flex flex-col items-center gap-1.5 text-center">
-                  <span className={cn('grid h-8 w-8 place-items-center rounded-full text-xs font-semibold ring-2', done ? 'bg-brand text-brand-ink ring-brand' : current ? 'bg-brand-soft text-brand-strong ring-brand' : 'bg-surface text-faint ring-line')}>{done ? <CheckIcon size={15} /> : i + 1}</span>
-                  <span className={cn('w-20 text-[11px] leading-tight', current ? 'font-semibold text-ink' : 'text-muted')}>{STATUS_LABEL[s]}</span>
+                  <span className={cn('grid h-8 w-8 place-items-center rounded-full text-xs font-semibold', done ? 'bg-raised text-ink' : current ? 'bg-ink text-canvas' : 'border border-line-strong/70 text-muted')}>{done ? <><CheckIcon size={15} aria-hidden /><span className="sr-only">Done: </span></> : i + 1}</span>
+                  <span className={cn('w-20 text-xs leading-tight', current ? 'font-semibold text-ink' : 'text-muted')}>{STATUS_LABEL[s]}</span>
                 </span>
-                {i < PIPELINE.length - 1 && <span className={cn('mx-1 mb-5 h-0.5 flex-1', done ? 'bg-brand' : 'bg-line')} />}
+                {i < PIPELINE.length - 1 && <span aria-hidden className={cn('mx-1 mb-5 h-0.5 flex-1', done ? 'bg-line-strong' : 'bg-line')} />}
               </li>
             );
           })}
         </ol>
+        {/* Phones: the step in words and a segmented bar — seven dots do not fit, and a sideways scroll hides the rest. */}
+        {idx >= 0 && (
+          <div className="sm:hidden">
+            <p className="text-sm text-muted">Step {idx + 1} of {PIPELINE.length}: <strong className="font-semibold text-ink">{STATUS_LABEL[d.status]}</strong></p>
+            <div className="mt-2 flex gap-1" aria-hidden>{PIPELINE.map((s, i) => <span key={s} className={cn('h-1.5 flex-1 rounded-full', i < idx ? 'bg-line-strong' : i === idx ? 'bg-ink' : 'bg-line')} />)}</div>
+            {idx < PIPELINE.length - 1 && <p className="mt-2 text-[0.8125rem] text-muted">Next: {STATUS_LABEL[PIPELINE[idx + 1]!]}</p>}
+          </div>
+        )}
         {(d.status === 'on_hold' || d.status === 'cancelled') && <p className="mt-3 text-sm text-muted">This dispute is <strong>{STATUS_LABEL[d.status].toLowerCase()}</strong>.</p>}
       </nav>
+
+      {windowOpen && (
+        <section aria-labelledby="window" className={cn('panel mb-6 p-5 sm:p-6', state === 'overdue' && 'ring-1 ring-inset ring-bad/50')}>
+          <div className="mb-4 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+            <h2 id="window" className="display text-xl">Investigation window</h2>
+            <p className={cn('display text-xl', state === 'overdue' && 'text-bad')}>{wt.status}</p>
+          </div>
+          <DayMeter dueAt={d.due_at} extended={d.deadline_extended} now={now} variant="ticks" showText={false} />
+          <div className="mt-3 flex flex-wrap justify-between gap-x-6 gap-y-1 text-[0.8125rem] text-muted">
+            <span>{!d.submitted_at ? `Window opened ${fmtDate(opened)}` : sameDay ? `Submitted ${fmtDate(d.submitted_at)}` : `Sent ${fmtDate(d.submitted_at)} · window opened ${fmtDate(opened)}`}</span>
+            {wt.count && <span className="font-semibold text-ink">{wt.count}</span>}
+            <span>Response due {fmtDate(d.due_at)}</span>
+          </div>
+        </section>
+      )}
 
       <div className="grid gap-6 lg:grid-cols-[1fr_22rem]">
         <div className="space-y-6">
@@ -107,7 +138,7 @@ export default async function DisputePage({ params }: { params: Promise<{ id: st
                     <tbody>{check.changes.map((c) => <tr key={c.field}><td>{c.field}</td><td>{c.before}</td><td className="font-semibold">{c.after}</td></tr>)}</tbody></table></div>
                 </>
               )}
-              <p className="mt-3 text-xs text-muted">This is a comparison only. Nothing is recorded until a person enters the response below.</p>
+              <p className="mt-3 text-[0.8125rem] text-muted">This is a comparison only. Nothing is recorded until a person enters the response below.</p>
             </Section>
           )}
           {letters.filter((l) => l.status === 'sent').slice(0, 1).map((l) => (
@@ -117,7 +148,7 @@ export default async function DisputePage({ params }: { params: Promise<{ id: st
           ))}
           {/* What to do now */}
           <Section title="What happens next" hint="The system suggests; people decide.">
-            <ul className="space-y-2">{steps.map((s) => <li key={s} className="flex gap-2 text-sm"><Lightbulb size={16} className="mt-0.5 shrink-0 text-brand" />{s}</li>)}</ul>
+            <ul className="space-y-2">{steps.map((s) => <li key={s} className="flex gap-2 text-sm"><Lightbulb size={16} className="mt-0.5 shrink-0 text-muted" aria-hidden />{s}</li>)}</ul>
 
             <div className="mt-5 space-y-4 border-t border-line pt-5">
               {d.status === 'draft' && <Transition id={d.id} to="ready_for_review" label="Send for review" />}
@@ -130,7 +161,7 @@ export default async function DisputePage({ params }: { params: Promise<{ id: st
               {d.status === 'approved' && (
                 <ActionForm action={transitionAction} className="space-y-4">
                   <input type="hidden" name="id" value={d.id} /><input type="hidden" name="to" value="submitted" />
-                  {cs.missing.length > 0 && <Notice tone="bad" title="Cannot submit yet">Required consents missing: {cs.missing.join(', ').replace(/_/g, ' ')}. <Link className="underline" href={`/app/clients/${d.client_id}?tab=overview`}>Record them on the client profile.</Link></Notice>}
+                  {cs.missing.length > 0 && <Notice tone="bad" title="Cannot submit yet">Required consents missing: {cs.missing.join(', ').replace(/_/g, ' ')}. <Link className="link" href={`/app/clients/${d.client_id}?tab=overview`}>Record them on the client profile.</Link></Notice>}
                   {cs.inCancellationWindow && <Notice tone="warn" title="Within the 3-business-day cancellation window">The client signed their agreement recently and may still cancel without penalty. Confirm before mailing.</Notice>}
                   {!hasApproved && <Notice tone="bad" title="No approved letter">Approve a letter for this dispute first.</Notice>}
                   {/* The delivery form only appears once it can succeed: an approved letter and the required consents. */}
@@ -142,7 +173,7 @@ export default async function DisputePage({ params }: { params: Promise<{ id: st
                     <Field label="Date the recipient received it (if known)" name="receivedOn" type="date" hint="The 30-day clock starts at receipt. Leave blank to count from today." />
                     <div className="self-end pb-2"><Check name="extended">Client sent additional information (45-day window)</Check></div>
                   </div>
-                  <p className="text-xs text-muted">Recording a submission means a person has already mailed the approved letter. {PRODUCT.name} never sends correspondence on its own.</p>
+                  <p className="text-[0.8125rem] text-muted">Recording a submission means a person has already mailed the approved letter. {PRODUCT.name} never sends correspondence on its own.</p>
                   <SubmitButton>Record submission</SubmitButton>
                   </>)}
                 </ActionForm>
@@ -172,7 +203,7 @@ export default async function DisputePage({ params }: { params: Promise<{ id: st
               {d.status === 'response_received' && <Transition id={d.id} to="resolved" label="Mark resolved" />}
               {d.status === 'on_hold' && <Transition id={d.id} to={d.submitted_at ? 'under_investigation' : 'draft'} label="Resume" />}
               {d.status === 'resolved' && ['verified', 'unresolved', 'no_response'].includes(d.outcome ?? '') && !children.length && (
-                <details className="rounded-xl border border-line p-4">
+                <details className="rounded-xl border border-line-strong/60 p-4">
                   <summary className="cursor-pointer text-sm font-semibold">Start round {d.round + 1}</summary>
                   <ActionForm action={nextRoundAction} className="mt-4 space-y-3">
                     <input type="hidden" name="id" value={d.id} />
@@ -188,16 +219,16 @@ export default async function DisputePage({ params }: { params: Promise<{ id: st
             </div>
           </Section>
 
-          <Section title="Reason">
+          <Section plain title="Reason">
             <p className="whitespace-pre-wrap text-sm leading-relaxed">{d.reason}</p>
             {d.fields.length > 0 && <div className="mt-3 flex flex-wrap gap-1.5">{d.fields.map((f) => <Badge key={f}>{f}</Badge>)}</div>}
           </Section>
 
-          <Section title={`Evidence (${evidence.length})`} hint="Everything attached to this dispute, in the order it was added.">
+          <Section title={`Evidence (${evidence.length})`}>
             {evidence.length === 0 ? <p className="mb-4 text-sm text-muted">No evidence attached yet. Statements, letters and records strengthen a dispute — and are what an investigator reviews.</p> : (
-              <ul className="mb-4 divide-y divide-line text-sm">{evidence.map((e) => (
+              <ul className="mb-4 divide-y divide-line/70 text-sm">{evidence.map((e) => (
                 <li key={e.id} className="flex items-start justify-between gap-3 py-2.5">
-                  <div className="min-w-0"><div className="font-medium">{e.label}</div>{e.note && <div className="text-muted">{e.note}</div>}{e.file_name && <a className="text-xs text-brand-strong underline" href={`/api/documents/${e.document_id}`}>{e.file_name}</a>}</div>
+                  <div className="min-w-0"><div className="font-medium">{e.label}</div>{e.note && <div className="text-muted">{e.note}</div>}{e.file_name && <a className="link text-[0.8125rem]" href={`/api/documents/${e.document_id}`}>{e.file_name}</a>}</div>
                   <span className="shrink-0 text-xs text-muted">{fmtDate(e.created_at)}</span>
                 </li>))}</ul>
             )}
@@ -212,11 +243,11 @@ export default async function DisputePage({ params }: { params: Promise<{ id: st
             )}
           </Section>
 
-          <Section title="History" hint="Every change is recorded automatically and cannot be edited.">
+          <Section plain title="History" hint="Every change is recorded automatically and cannot be edited.">
             <ol className="space-y-3">
               {events.map((e) => (
                 <li key={e.id} className="flex gap-3 text-sm">
-                  <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-brand" aria-hidden />
+                  <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-line-strong" aria-hidden />
                   <div className="min-w-0">
                     <div>{e.kind === 'status_changed' ? <>Status: <strong>{STATUS_LABEL[e.from_status as DisputeStatus]}</strong> → <strong>{STATUS_LABEL[e.to_status as DisputeStatus]}</strong></> : e.note ?? e.kind.replace(/_/g, ' ')}</div>
                     <div className="text-xs text-muted">{e.actor ?? 'System'} · {relTime(e.created_at)} · {fmtDate(e.created_at)}</div>
@@ -228,23 +259,23 @@ export default async function DisputePage({ params }: { params: Promise<{ id: st
         </div>
 
         <aside className="space-y-6">
-          <Section title="Timeline">
-            <dl className="space-y-3 text-sm">
+          <Section plain title="Timeline">
+            <dl className="space-y-3 text-sm [&>div]:gap-3">
               <div className="flex justify-between"><dt className="text-muted">Created</dt><dd>{fmtDate(d.created_at)}</dd></div>
               <div className="flex justify-between"><dt className="text-muted">Approved</dt><dd>{d.approved_at ? `${fmtDate(d.approved_at)} · ${d.approved_by_name ?? ''}` : '—'}</dd></div>
               <div className="flex justify-between"><dt className="text-muted">Submitted</dt><dd>{fmtDate(d.submitted_at)}</dd></div>
-              <div className="flex justify-between"><dt className="text-muted">Response due</dt><dd className="flex items-center gap-2">{fmtDate(d.due_at)}{d.due_at && open && <Badge tone={state === 'overdue' ? 'bad' : state === 'soon' ? 'warn' : 'neutral'}><CalendarClock size={12} /> {state === 'overdue' ? `${daysOverdue(d.due_at)}d overdue` : `${daysRemaining(d.due_at)}d`}</Badge>}</dd></div>
+              <div className="flex justify-between"><dt className="text-muted">Response due</dt><dd className="flex flex-wrap items-center justify-end gap-2">{fmtDate(d.due_at)}{d.due_at && open && !windowOpen && <Badge tone={state === 'overdue' ? 'bad' : state === 'soon' ? 'warn' : 'neutral'}><CalendarClock size={12} aria-hidden /> {wt.status}</Badge>}</dd></div>
               <div className="flex justify-between"><dt className="text-muted">Response</dt><dd>{fmtDate(d.response_at)}</dd></div>
               <div className="flex justify-between"><dt className="text-muted">Outcome</dt><dd>{d.outcome ? <StatusBadge status={d.outcome} text={OUTCOME_LABEL[d.outcome]} /> : '—'}</dd></div>
             </dl>
-            {d.due_at && <p className="mt-3 text-xs text-muted">{d.deadline_extended ? '45' : '30'}-day investigation window counted from receipt.</p>}
+            {d.due_at && <p className="mt-3 text-[0.8125rem] text-muted">{d.deadline_extended ? '45' : '30'}-day investigation window counted from receipt.</p>}
           </Section>
 
-          <Section title="Letters" actions={open ? <Link href={`/app/letters/new?clientId=${d.client_id}&disputeId=${d.id}`} className="btn-secondary btn-sm">New</Link> : undefined}>
+          <Section plain title="Letters" actions={open ? <Link href={`/app/letters/new?clientId=${d.client_id}&disputeId=${d.id}`} className="btn-secondary btn-sm">New</Link> : undefined}>
             {letters.length === 0 ? <p className="text-sm text-muted">No letter yet.</p> : (
               <ul className="space-y-2">{letters.map((l) => (
-                <li key={l.id}><Link href={`/app/letters/${l.id}`} className="flex items-center justify-between gap-2 rounded-xl border border-line p-3 text-sm transition hover:border-brand/50">
-                  <span className="flex min-w-0 items-center gap-2"><FileText size={16} className="shrink-0 text-muted" /><span className="truncate">{l.title}</span></span><StatusBadge status={l.status} />
+                <li key={l.id}><Link href={`/app/letters/${l.id}`} className="flex items-center justify-between gap-2 rounded-xl bg-raised p-3 text-sm transition-colors hover:bg-line">
+                  <span className="flex min-w-0 items-center gap-2"><FileText size={16} className="shrink-0 text-muted" aria-hidden /><span className="truncate">{l.title}</span></span><StatusBadge status={l.status} />
                 </Link></li>))}</ul>
             )}
           </Section>
@@ -265,10 +296,10 @@ export default async function DisputePage({ params }: { params: Promise<{ id: st
           </Section>
 
           {(d.parent_dispute_id || children.length > 0) && (
-            <Section title="Rounds">
+            <Section plain title="Rounds">
               <ul className="space-y-1.5 text-sm">
-                {d.parent_dispute_id && <li><Link className="underline" href={`/app/disputes/${d.parent_dispute_id}`}>← Previous round</Link></li>}
-                {children.map((c) => <li key={c.id}><Link className="underline" href={`/app/disputes/${c.id}`}>Round {c.round} →</Link> <StatusBadge status={c.status} /></li>)}
+                {d.parent_dispute_id && <li><Link className="link" href={`/app/disputes/${d.parent_dispute_id}`}>← Previous round</Link></li>}
+                {children.map((c) => <li key={c.id}><Link className="link" href={`/app/disputes/${c.id}`}>Round {c.round} →</Link> <StatusBadge status={c.status} /></li>)}
               </ul>
             </Section>
           )}

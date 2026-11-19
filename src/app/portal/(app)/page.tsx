@@ -1,15 +1,16 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { ArrowRight, Check, CheckCircle2, Clock3, FileUp, Hourglass, MessageCircle, PenLine, Scale, Search } from 'lucide-react';
+import { AlertTriangle, ArrowRight, Check, CheckCircle2, Clock3, FileUp, Hourglass, MessageCircle, PenLine, Scale, Search } from 'lucide-react';
 import { ActionForm, SubmitButton } from '@/components/forms';
-import { SplitBar } from '@/components/charts';
+import { DatedRow, PortalBlock, PortalTitle } from '@/components/portal-kit';
 import { ScoreHistory, type ScoreRow } from '@/components/score-history';
-import { Badge, Section } from '@/components/ui';
+import { DayMeter, Notice, StatFigure } from '@/components/ui';
 import { CONSENT_DOCS } from '@/lib/compliance/disclosures';
 import { CLIENT_STAGES, DOC_KINDS } from '@/lib/crm';
+import { dayWindow, windowStart, windowText } from '@/lib/day-meter';
 import { portalContext, specialistFirstName } from '@/lib/portal';
 import { nextStep, type NextKey } from '@/lib/portal-next-step';
-import type { PortalKey } from '@/lib/portal-i18n';
+import { fill, type PortalKey } from '@/lib/portal-i18n';
 import { cn, daysUntil, fmtDate, relTimeIn } from '@/lib/util';
 import { portalUploadAction } from '../actions';
 import { PortalFileInput } from '../file-input';
@@ -31,6 +32,9 @@ export default async function PortalHome() {
               count(*) filter (where status = 'response_received')::int as reviewing,
               min(due_at) filter (where status in ('submitted','under_investigation')) as next_due
          from public.disputes`),
+    // The dispute behind `next_due`: its own sent date and deadline, so the window is drawn from real dates.
+    nextWindow: await db.row<{ submitted_at: string | null; due_at: string; deadline_extended: boolean }>(
+      "select submitted_at, due_at, deadline_extended from public.disputes where status in ('submitted','under_investigation') and due_at is not null order by due_at limit 1"),
     requests: await db.rows<{ id: string; kind: string; note: string | null; due_at: string | null }>('select id, kind, note, due_at from public.document_requests where fulfilled_document_id is null order by created_at'),
     consents: await db.rows<{ kind: string }>('select kind from public.client_consents where revoked_at is null'),
     events: await db.rows<{ id: string; note: string | null; to_status: string | null; kind: string; created_at: string }>('select id, note, to_status, kind, created_at from public.dispute_events order by created_at desc limit 6'),
@@ -46,98 +50,158 @@ export default async function PortalHome() {
   const s = d.stats!;
   const stLabel = (k: string | null) => (k ? t(`st_${k}` as PortalKey) : '');
   const next = nextStep({ needSign: needSign.length > 0, needDocs: d.requests.length > 0, reviewing: s.reviewing > 0, nextDue: s.next_due, stage: client.stage });
-  const days = s.next_due ? daysUntil(s.next_due) : null;
+  // One clock for the sentence and the bar, so they can never disagree.
+  const now = new Date();
+  const days = s.next_due ? daysUntil(s.next_due, now) : null;
   const NextIcon = NEXT_ICON[next.key];
+  // Counted from receipt (the deadline minus its 30 or 45 days), so "Day N of 30" matches the legal window.
+  const win = d.nextWindow ? dayWindow(windowStart(d.nextWindow.due_at, d.nextWindow.deadline_extended), d.nextWindow.due_at, now) : null;
+  const winText = win ? windowText(win, lang) : null;
+  const messageLabel = specialist ? `${t('messageTo')} ${specialist}` : t('messageTeam');
 
   return (
-    <div className="space-y-6">
-      <div><h1 className="font-display text-3xl font-semibold sm:text-4xl">{t('hello')}, {first}</h1><p className="mt-1 text-muted">{t('welcomeSub')}{specialist && ` · ${t('specialist')}: ${specialist}`}</p></div>
+    <div className="space-y-7 sm:space-y-9">
+      <PortalTitle sub={<>{t('welcomeSub')}{specialist && <> {fill(t('specialistIs'), { name: specialist })}</>}</>}>{t('hello')}, {first}</PortalTitle>
 
-      {/* One clear answer to "what happens now?" — computed only from this client's real records. */}
-      <section aria-labelledby="next-step" className={cn('card overflow-hidden p-5 sm:p-6', next.mine && 'ring-1 ring-brand/40')}>
-        <div className="flex items-start gap-4">
-          <span className={cn('grid h-11 w-11 shrink-0 place-items-center rounded-2xl', next.mine ? 'bg-brand text-brand-ink' : 'bg-brand-soft text-brand-strong')}><NextIcon size={20} aria-hidden /></span>
-          <div className="min-w-0 flex-1">
-            <p className="text-xs font-semibold uppercase tracking-wide text-brand-strong">{t('nextStep')} · {next.mine ? t('forYou') : t('forUs')}</p>
-            <h2 id="next-step" className="mt-1 font-display text-2xl font-semibold leading-tight">{t(`ns_${next.key}_t` as PortalKey)}</h2>
-            <p className="mt-1.5 text-muted">
+      {/* Phones read top to bottom in the numbered order; wide screens get the same blocks in two columns. */}
+      <div className="flex flex-col gap-9 lg:grid lg:grid-cols-[minmax(0,1fr)_19rem] lg:items-start lg:gap-x-12">
+        <div className="contents lg:block lg:space-y-10">
+          {/* One clear answer to "what happens now?" — computed only from this client's real records. Dark in both themes. */}
+          <section aria-labelledby="next-step" className="night order-1 rounded-[1.25rem] border border-line bg-surface p-5 shadow-pop sm:p-7">
+            <p className="inline-flex min-h-[1.75rem] items-center gap-2 rounded-full bg-brand-soft px-3 text-[0.8125rem] font-semibold text-brand-strong">
+              <NextIcon size={15} aria-hidden className="shrink-0" /> {t('nextStep')} · {next.mine ? t('forYou') : t('forUs')}
+            </p>
+            <h2 id="next-step" className="display mt-3.5 text-[1.625rem] sm:text-[2rem]">{t(`ns_${next.key}_t` as PortalKey)}</h2>
+            <p className="mt-2 max-w-xl text-[0.9375rem] text-muted">
               {t(`ns_${next.key}_b` as PortalKey)}
               {next.key === 'wait' && s.next_due && <> <strong className="font-semibold text-ink">{fmtDate(s.next_due, lang)}</strong>{days != null && days >= 0 && <> ({days === 0 ? t('today') : `${days} ${t(days === 1 ? 'dayAway' : 'daysAway')}`})</>}.</>}
             </p>
-            {next.key === 'wait' && days != null && days < 0 && <p className="mt-1 text-sm text-muted">{t('ns_late')}</p>}
-            <div className="mt-4 flex flex-wrap gap-2">
-              {next.key === 'sign' && <Link href="/portal/profile#agreements" className="btn-primary">{t('sign')} <ArrowRight size={16} aria-hidden /></Link>}
-              {next.key === 'upload' && <a href="#needs" className="btn-primary">{t('uploadNow')} <ArrowRight size={16} aria-hidden /></a>}
-              <Link href="/portal/messages" className={next.mine ? 'btn-ghost' : 'btn-secondary'}><MessageCircle size={16} aria-hidden /> {specialist ? `${t('messageTo')} ${specialist}` : t('messageTeam')}</Link>
+            {next.key === 'wait' && days != null && days < 0 && <p className="mt-1.5 max-w-xl text-sm text-muted">{t('ns_late')}</p>}
+
+            {/* The investigation window of the dispute whose answer is due first, from its own stored deadline. */}
+            {next.key === 'wait' && win && winText && d.nextWindow && (
+              <div className="mt-6">
+                <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-1">
+                  {win.day != null && win.totalDays != null ? (
+                    <p className="display text-[2.5rem] leading-none">
+                      {fill(t('win_day'), { d: win.day })} <span className="font-sans text-base font-medium tracking-normal text-muted">{fill(t('win_of'), { n: win.totalDays })}</span>
+                    </p>
+                  ) : <p className="text-sm font-medium text-muted">{t('win_title')}</p>}
+                  <p className={cn('inline-flex items-center gap-1.5 pb-0.5 text-sm font-semibold', win.state === 'overdue' ? 'text-bad' : 'text-ink')}>
+                    {win.state === 'overdue' && <AlertTriangle size={15} aria-hidden />}{winText.status}
+                  </p>
+                </div>
+                <DayMeter dueAt={d.nextWindow.due_at} extended={d.nextWindow.deadline_extended} now={now} lang={lang} variant="ticks" showText={false} className="mt-3" />
+                <div className="mt-2 flex flex-wrap justify-between gap-x-4 gap-y-0.5 text-[0.8125rem] text-muted">
+                  <span>{d.nextWindow.submitted_at && fill(t('win_sent'), { date: fmtDate(d.nextWindow.submitted_at, lang) })}</span>
+                  <span>{fill(t('win_expected'), { date: fmtDate(d.nextWindow.due_at, lang) })}</span>
+                </div>
+              </div>
+            )}
+
+            <div className="mt-6 flex flex-col gap-2.5 sm:flex-row">
+              {next.key === 'sign' && <Link href="/portal/profile#agreements" className="btn-primary btn-lg">{t('sign')} <ArrowRight size={17} aria-hidden /></Link>}
+              {next.key === 'upload' && <a href="#needs" className="btn-primary btn-lg">{t('uploadNow')} <ArrowRight size={17} aria-hidden /></a>}
+              <Link href="/portal/messages" className={cn('btn-quiet btn-lg', !next.mine && 'sm:min-w-[16rem]')}><MessageCircle size={17} aria-hidden /> {messageLabel}</Link>
             </div>
-          </div>
+          </section>
+
+          <PortalBlock id="needs" title={t('needFromYou')} className="order-3">
+            {d.requests.length === 0 && needSign.length === 0 ? <Notice tone="ok">{t('nothingNeeded')}</Notice> : (
+              <ul className="space-y-3">
+                {needSign.map((c) => (
+                  <li key={c.kind}>
+                    <Link href="/portal/profile#agreements" className="card flex items-center justify-between gap-3 p-4 text-[0.9375rem] transition-colors hover:bg-raised">
+                      <span className="flex min-w-0 items-center gap-3"><PenLine size={18} className="shrink-0 text-warn" aria-hidden /><span className="font-semibold">{t(`consent_${c.kind}_title` as PortalKey)}</span></span>
+                      <span className="inline-flex shrink-0 items-center gap-1 text-sm font-semibold text-brand-strong">{t('sign')} <ArrowRight size={15} aria-hidden /></span>
+                    </Link>
+                  </li>))}
+                {d.requests.map((r) => (
+                  <li key={r.id} className="card p-4">
+                    <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[0.9375rem]"><FileUp size={18} className="shrink-0 text-brand" aria-hidden /><span className="font-semibold">{kindLabel(r.kind)}</span>{r.due_at && <span className="text-[0.8125rem] text-muted">· {fmtDate(r.due_at, lang)}</span>}</div>
+                    {r.note && <p className="mt-1.5 text-sm text-muted">{r.note}</p>}
+                    <ActionForm action={portalUploadAction} resetOnSuccess className="mt-3">
+                      <input type="hidden" name="kind" value={r.kind} />
+                      <div className="flex flex-wrap items-end gap-2.5">
+                        <div className="min-w-[12rem] flex-1"><label className="sr-only" htmlFor={`f-${r.id}`}>{t('chooseFile')}</label><PortalFileInput id={`f-${r.id}`} tooLarge={t('e_fileTooLarge')} /></div>
+                        <SubmitButton>{t('upload')}</SubmitButton>
+                      </div>
+                    </ActionForm>
+                  </li>))}
+              </ul>
+            )}
+          </PortalBlock>
+
+          <PortalBlock id="progress" title={t('progress')} className="order-4">
+            {s.sent === 0 ? <p className="text-[0.9375rem] text-muted">{t('noDisputes')}</p> : (
+              <>
+                <div className="grid grid-cols-2 gap-x-4 gap-y-6 sm:grid-cols-4">
+                  <StatFigure label={t('itemsSent')} value={s.sent} />
+                  <StatFigure label={t('waiting')} value={s.waiting} />
+                  <StatFigure label={t('changed')} value={s.deleted + s.updated} />
+                  <StatFigure label={t('verified')} value={s.verified} />
+                </div>
+                {/* When the hero is about something else, the open window still has a place on the page. */}
+                {next.key !== 'wait' && d.nextWindow && (
+                  <div className="mt-6">
+                    <p className="mb-1.5 text-[0.8125rem] font-medium text-muted">{t('expectBy')} {fmtDate(d.nextWindow.due_at, lang)}</p>
+                    <DayMeter dueAt={d.nextWindow.due_at} extended={d.nextWindow.deadline_extended} now={now} lang={lang} variant="ticks" />
+                  </div>
+                )}
+                <p className="mt-5"><Link href="/portal/disputes" className="link inline-flex items-center gap-1.5 text-sm">{t('disputes')} <ArrowRight size={14} aria-hidden /></Link></p>
+              </>
+            )}
+            <p className="mt-4 max-w-2xl text-[0.8125rem] leading-relaxed text-muted">{t('progressNote')}</p>
+          </PortalBlock>
+
+          {d.scores.length > 0 && <PortalBlock id="scores" title={t('scoresTitle')} className="order-5"><ScoreHistory rows={d.scores} note={t('scoresNote')} lang={client.preferred_language} /></PortalBlock>}
+
+          <PortalBlock id="latest" title={t('latest')} className="order-6">
+            {d.events.length === 0 && d.msgs.length === 0 ? <p className="text-[0.9375rem] text-muted">{t('noUpdates')}</p> : (
+              <ul className="divide-y divide-line">
+                {d.msgs.map((m) => (
+                  <li key={m.id} className="py-3">
+                    <div className="flex items-center gap-1.5 text-[0.8125rem] font-medium text-muted"><MessageCircle size={14} aria-hidden /> {t('team')} · {relTimeIn(m.created_at, lang)}</div>
+                    <p className="mt-1 whitespace-pre-wrap text-[0.9375rem] [overflow-wrap:anywhere]">{m.body}</p>
+                  </li>))}
+                {d.events.map((e) => <DatedRow key={e.id} date={fmtDate(e.created_at, lang)}>{e.kind === 'status_changed' ? stLabel(e.to_status) : e.note}</DatedRow>)}
+              </ul>)}
+          </PortalBlock>
         </div>
-      </section>
 
-      <section className="card p-5 sm:p-6" aria-label={t('journey')}>
-        <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-muted">{t('journey')}</h2>
-        <ol className="grid grid-cols-4 gap-2 text-center">
-          {STEPS.map((k, i) => (
-            <li key={k} className="relative flex flex-col items-center gap-2" aria-current={i === stageIdx ? 'step' : undefined}>
-              {i > 0 && <span aria-hidden className={cn('absolute right-1/2 top-[1.125rem] z-0 h-0.5 w-[calc(100%+0.5rem)] -translate-y-1/2', i <= stageIdx ? 'bg-brand' : 'bg-line')} />}
-              <span className={cn('relative z-10 grid h-9 w-9 place-items-center rounded-full text-sm font-semibold ring-2', i < stageIdx ? 'bg-brand text-brand-ink ring-brand' : i === stageIdx ? 'bg-brand-soft text-brand-strong ring-brand' : 'bg-surface text-faint ring-line')}>{i < stageIdx ? <Check size={16} aria-hidden /> : i + 1}</span>
-              <span className={cn('text-xs leading-tight sm:text-sm', i === stageIdx ? 'font-semibold' : 'text-muted')}>{t(`s_${k}` as PortalKey)}</span>
-            </li>))}
-        </ol>
-        {stageIdx >= 0 && <p className="mt-5 rounded-xl bg-raised p-3.5 text-sm">{t(`sd_${client.stage === 'graduated' ? 'graduated' : STEPS[stageIdx]}` as PortalKey)}</p>}
-      </section>
+        <div className="contents lg:block lg:space-y-10">
+          <PortalBlock id="journey" title={t('journey')} className="order-2">
+            <ol>
+              {STEPS.map((k, i) => {
+                const state = i < stageIdx ? 'done' : i === stageIdx ? 'here' : 'later';
+                return (
+                  <li key={k} className="relative flex gap-3.5 pb-5 last:pb-0" aria-current={state === 'here' ? 'step' : undefined}>
+                    {i < STEPS.length - 1 && <span aria-hidden className={cn('absolute bottom-0 left-[0.6875rem] top-6 w-0.5 -translate-x-1/2', state === 'done' ? 'bg-brand' : 'bg-line')} />}
+                    <span aria-hidden className={cn('relative mt-0.5 grid h-[1.375rem] w-[1.375rem] shrink-0 place-items-center rounded-full border-2',
+                      state === 'done' ? 'border-brand bg-brand text-brand-ink' : state === 'here' ? 'border-brand bg-canvas' : 'border-line-strong bg-canvas')}>
+                      {state === 'done' ? <Check size={13} strokeWidth={3} /> : state === 'here' ? <span className="h-2 w-2 rounded-full bg-brand" /> : null}
+                    </span>
+                    <div className="min-w-0">
+                      <div className={cn('text-[0.9375rem] font-semibold', state === 'later' && 'text-muted')}>{t(`s_${k}` as PortalKey)}</div>
+                      <div className="text-[0.8125rem] text-muted">{t(state === 'done' ? 'j_done' : state === 'here' ? 'j_here' : 'j_later')}</div>
+                      {state === 'here' && <p className="mt-1.5 text-sm text-muted">{t(`sd_${k}` as PortalKey)}</p>}
+                    </div>
+                  </li>);
+              })}
+            </ol>
+            {client.stage === 'graduated' && <p className="mt-4 text-sm text-muted">{t('sd_graduated')}</p>}
+          </PortalBlock>
 
-      <Section title={t('needFromYou')} id="needs">
-        {d.requests.length === 0 && needSign.length === 0 ? <p className="text-sm text-muted">{t('nothingNeeded')}</p> : (
-          <ul className="space-y-3">
-            {needSign.map((c) => <li key={c.kind}><Link href="/portal/profile#agreements" className="flex items-center justify-between gap-3 rounded-xl border border-warn/40 bg-warn-soft/50 p-3.5 text-sm"><span className="flex items-center gap-2.5"><PenLine size={16} className="text-warn" aria-hidden /><span className="font-medium">{t(`consent_${c.kind}_title` as PortalKey)}</span></span><Badge tone="warn">{t('sign')}</Badge></Link></li>)}
-            {d.requests.map((r) => (
-              <li key={r.id} className="rounded-xl border border-line p-3.5">
-                <div className="mb-2 flex items-center gap-2.5 text-sm"><FileUp size={16} className="text-brand" aria-hidden /><span className="font-medium">{kindLabel(r.kind)}</span>{r.due_at && <span className="text-xs text-muted">· {fmtDate(r.due_at, lang)}</span>}</div>
-                {r.note && <p className="mb-2 text-sm text-muted">{r.note}</p>}
-                <ActionForm action={portalUploadAction} resetOnSuccess className="flex flex-wrap items-end gap-2">
-                  <input type="hidden" name="kind" value={r.kind} />
-                  <div className="min-w-[12rem] flex-1"><label className="sr-only" htmlFor={`f-${r.id}`}>{t('chooseFile')}</label><PortalFileInput id={`f-${r.id}`} tooLarge={t('e_fileTooLarge')} /></div>
-                  <SubmitButton>{t('upload')}</SubmitButton>
-                </ActionForm>
-              </li>))}
-          </ul>
-        )}
-      </Section>
-
-      <Section title={t('progress')}>
-        {s.sent === 0 ? <p className="text-sm text-muted">{t('noDisputes')}</p> : (
-          <>
-            <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
-              {([[t('itemsSent'), s.sent], [t('changed'), s.deleted + s.updated], [t('verified'), s.verified], [t('waiting'), s.waiting]] as const).map(([l, v]) => <div key={l} className="rounded-xl bg-raised p-3"><div className="font-display text-3xl font-semibold tabular-nums">{v}</div><div className="text-xs text-muted">{l}</div></div>)}
-            </div>
-            <SplitBar parts={[{ label: t('changed'), value: s.deleted + s.updated, className: 'bg-ok' }, { label: t('verified'), value: s.verified, className: 'bg-faint' }, { label: t('waiting'), value: s.waiting, className: 'bg-brand' }]} />
-            <p className="mt-4"><Link href="/portal/disputes" className="inline-flex items-center gap-1.5 text-sm font-medium text-brand-strong hover:underline">{t('disputes')} <ArrowRight size={14} aria-hidden /></Link></p>
-          </>
-        )}
-        <p className="mt-4 text-xs text-muted">{t('progressNote')}</p>
-      </Section>
-
-      {d.scores.length > 0 && <Section title={t('scoresTitle')}><ScoreHistory rows={d.scores} note={t('scoresNote')} lang={client.preferred_language} /></Section>}
-
-      <div className="grid gap-6 lg:grid-cols-2">
-        <Section title={t('latest')}>
-          {d.events.length === 0 && d.msgs.length === 0 ? <p className="text-sm text-muted">{t('noUpdates')}</p> : (
-            <ul className="space-y-3 text-sm">
-              {d.msgs.map((m) => <li key={m.id} className="rounded-xl bg-brand-soft/60 p-3"><div className="mb-0.5 text-xs text-muted">{t('team')} · {relTimeIn(m.created_at, lang)}</div><p className="whitespace-pre-wrap">{m.body}</p></li>)}
-              {d.events.map((e) => <li key={e.id} className="flex gap-3"><span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-brand" /><div><div>{e.kind === 'status_changed' ? stLabel(e.to_status) : e.note}</div><div className="text-xs text-muted">{fmtDate(e.created_at, lang)}</div></div></li>)}
-            </ul>)}
-        </Section>
-
-        <Section title={t('rightsTitle')} hint={t('rightsIntro')}>
-          <ul className="space-y-2.5 text-sm">
-            {(['r_free', 'r_diy', 'r_accurate', 'r_time', 'r_cancel'] as const).map((k) => <li key={k} className="flex gap-2.5"><Scale size={15} className="mt-0.5 shrink-0 text-brand" aria-hidden /><span>{t(k)}</span></li>)}
-          </ul>
-          <p className="mt-4 flex flex-wrap gap-x-4 gap-y-1 text-sm">
-            <a className="font-medium text-brand-strong hover:underline" href="https://www.annualcreditreport.com" target="_blank" rel="noopener noreferrer">AnnualCreditReport.com</a>
-            <a className="font-medium text-brand-strong hover:underline" href={lang === 'es' ? 'https://www.consumerfinance.gov/es/' : 'https://www.consumerfinance.gov/consumer-tools/credit-reports-and-scores/'} target="_blank" rel="noopener noreferrer">{t('rightsMore')}</a>
-          </p>
-        </Section>
+          <PortalBlock id="rights" title={t('rightsTitle')} hint={t('rightsIntro')} className="order-7">
+            <ul className="space-y-3.5 text-[0.9375rem]">
+              {(['r_free', 'r_diy', 'r_accurate', 'r_time', 'r_cancel'] as const).map((k) => <li key={k} className="flex gap-3"><Scale size={17} className="mt-0.5 shrink-0 text-brand" aria-hidden /><span>{t(k)}</span></li>)}
+            </ul>
+            <p className="mt-5 flex flex-col items-start gap-2 text-sm">
+              <a className="link" href="https://www.annualcreditreport.com" target="_blank" rel="noopener noreferrer">AnnualCreditReport.com</a>
+              <a className="link" href={lang === 'es' ? 'https://www.consumerfinance.gov/es/' : 'https://www.consumerfinance.gov/consumer-tools/credit-reports-and-scores/'} target="_blank" rel="noopener noreferrer">{t('rightsMore')}</a>
+            </p>
+          </PortalBlock>
+        </div>
       </div>
     </div>
   );

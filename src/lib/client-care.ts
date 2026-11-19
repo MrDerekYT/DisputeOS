@@ -22,7 +22,9 @@ export async function clientCare(db: Db) {
     db.rows<{ id: string; full_name: string; source: string | null; created_at: string; hours: number; n: number }>(
       `select c.id, c.full_name, c.source, c.created_at, (extract(epoch from now() - c.created_at) / 3600)::int as hours, count(*) over ()::int as n
          from public.clients c
-        where c.status = 'lead' and not exists (select 1 from public.communications o where o.client_id = c.id and o.direction = 'outbound')
+        where c.status = 'lead' and not exists (select 1 from public.communications o where o.client_id = c.id and o.direction = 'outbound'
+                -- an automatic follow-up email is not the team making contact
+                and not exists (select 1 from public.lead_outreach lo where lo.communication_id = o.id))
         order by c.created_at desc limit 5`),
   ]);
   const n = (r: { n: number }[]) => r[0]?.n ?? 0;

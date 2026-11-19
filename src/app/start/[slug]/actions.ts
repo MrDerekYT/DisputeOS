@@ -1,6 +1,7 @@
 'use server';
 
 import { redirect } from 'next/navigation';
+import { after } from 'next/server';
 import type { ActionState } from '@/components/forms';
 import { requestMeta } from '@/lib/auth/context';
 import { leadFormPath, submitLead } from '@/lib/leads';
@@ -12,7 +13,7 @@ export async function submitLeadAction(_: ActionState, fd: FormData): Promise<Ac
   const r = await submitLead(slug, {
     fullName: fd.get('fullName') ?? '', email: fd.get('email') ?? '', phone: fd.get('phone') ?? '', message: fd.get('message') ?? '',
     goal: fd.get('goal') || undefined, language: fd.get('language') === 'es' ? 'es' : 'en', consent: fd.get('consent') === 'on',
-  }, { ip: meta.ip, honeypot: String(fd.get('company_website') ?? '') });
+  }, { ip: meta.ip, honeypot: String(fd.get('company_website') ?? ''), src: String(fd.get('src') ?? ''), defer: after });
   // `lang` is the language the form was shown in (not the preferred-language answer): errors and the thank-you page follow it.
   const es = fd.get('lang') === 'es';
   if (!r.ok) return { error: es ? portalMessage('es', r.error) : r.error };

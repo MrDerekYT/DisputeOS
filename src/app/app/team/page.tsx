@@ -29,34 +29,34 @@ export default async function TeamPage({ searchParams }: { searchParams: Promise
       {sp.error && <div className="mb-4" role="alert"><Notice tone="warn" title="That did not go through">{refusalMessage(sp.error)}</Notice></div>}
       <div className="grid gap-6 lg:grid-cols-[1fr_22rem]">
         <div className="space-y-6">
-          <div className="table-wrap"><table className="table"><thead><tr><th>Member</th><th>Role</th><th>2-step</th><th className="text-right">Active clients</th><th className="text-right">Open tasks</th><th>Last sign-in</th>{manage && <th></th>}</tr></thead>
+          <div className="table-wrap"><table className="table table-stack"><thead><tr><th>Member</th><th>Role</th><th>2-step</th><th className="text-right">Active clients</th><th className="text-right">Open tasks</th><th>Last sign-in</th>{manage && <th></th>}</tr></thead>
             <tbody>{data.members.map((m) => {
               const t = byId.get(m.id);
               const editable = manage && m.role !== 'owner' && m.id !== ctx.userId && (m.role !== 'admin' || ctx.role === 'owner');
               return (
                 <tr key={m.id}>
-                  <td><div className="flex items-center gap-3"><Avatar name={m.name} size={32} /><div className="min-w-0"><div className="font-medium">{m.name}{m.id === ctx.userId && <span className="ml-1.5 text-xs text-muted">(you)</span>}</div><div className="truncate text-xs text-muted">{m.email}</div></div></div></td>
-                  <td>{editable ? (
+                  <td className="cell-main"><div className="flex items-center gap-3"><Avatar name={m.name} size={32} /><div className="min-w-0"><div className="font-medium">{m.name}{m.id === ctx.userId && <span className="ml-1.5 text-xs text-muted">(you)</span>}</div><div className="truncate text-xs text-muted">{m.email}</div></div></div></td>
+                  <td className={editable ? 'cell-full' : undefined}>{editable ? (
                     <form action={changeRoleAction} className="flex items-center gap-1.5"><input type="hidden" name="userId" value={m.id} />
-                      <select name="role" defaultValue={m.role} className="field !w-auto !py-1 text-xs" aria-label={`Role for ${m.name}`}>{[m.role, ...grant].filter((r, i, a) => a.indexOf(r) === i && r !== 'owner').map((r) => <option key={r} value={r}>{titleCase(r)}</option>)}</select>
-                      <button className="btn-ghost btn-sm">Set</button></form>) : <Badge tone={m.role === 'owner' ? 'brand' : 'neutral'}>{titleCase(m.role)}</Badge>}</td>
-                  <td>{m.totp ? <Badge tone="ok">On</Badge> : <Badge tone="warn">Not set up</Badge>}</td>
-                  <td className="text-right tabular-nums">{t?.activeClients ?? 0}</td><td className="text-right tabular-nums">{t?.tasksOpen ?? 0}</td>
-                  <td className="whitespace-nowrap text-muted">{m.last_login_at ? relTime(m.last_login_at) : 'Never'}</td>
-                  {manage && <td className="whitespace-nowrap text-right">{editable && (<div className="flex justify-end gap-1.5">
+                      <select name="role" defaultValue={m.role} className="field min-w-0 !py-1 text-xs max-sm:flex-1 sm:!w-auto" aria-label={`Role for ${m.name}`}>{[m.role, ...grant].filter((r, i, a) => a.indexOf(r) === i && r !== 'owner').map((r) => <option key={r} value={r}>{titleCase(r)}</option>)}</select>
+                      <button className="btn-quiet btn-sm">Set</button></form>) : <Badge tone={m.role === 'owner' ? 'brand' : 'neutral'}>{titleCase(m.role)}</Badge>}</td>
+                  <td data-label="2-step">{m.totp ? <Badge tone="ok">On</Badge> : <Badge tone="warn">Not set up</Badge>}</td>
+                  <td className="text-right tabular-nums" data-label="Active clients">{t?.activeClients ?? 0}</td><td className="text-right tabular-nums" data-label="Open tasks">{t?.tasksOpen ?? 0}</td>
+                  <td className="whitespace-nowrap text-muted" data-label="Last sign-in">{m.last_login_at ? relTime(m.last_login_at) : 'Never'}</td>
+                  {manage && <td className={editable ? 'cell-full whitespace-nowrap text-right' : 'cell-none'}>{editable && (<div className="flex gap-1.5 sm:justify-end">
                     {m.totp && <form action={resetMfaAction}><input type="hidden" name="userId" value={m.id} /><ConfirmButton className="btn-ghost btn-sm" message={`Reset two-step verification for ${m.name}? They will set it up again at next sign-in.`}>Reset 2-step</ConfirmButton></form>}
                     <form action={removeMemberAction}><input type="hidden" name="userId" value={m.id} /><ConfirmButton className="btn-ghost btn-sm text-bad" message={`Remove ${m.name} from the workspace? Their clients become unassigned.`}>Remove</ConfirmButton></form></div>)}</td>}
                 </tr>);
             })}</tbody></table></div>
 
           {data.invites.length > 0 && (
-            <Section title="Pending invitations"><ul className="divide-y divide-line text-sm">{data.invites.map((i) => <li key={i.id} className="flex items-center justify-between py-2.5"><span>{i.email} <Badge>{titleCase(i.role)}</Badge></span><span className="text-xs text-muted">expires {fmtDate(i.expires_at)}</span></li>)}</ul></Section>
+            <Section plain title="Pending invitations"><ul className="divide-y divide-line/70 text-sm">{data.invites.map((i) => <li key={i.id} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 py-2.5"><span>{i.email} <Badge>{titleCase(i.role)}</Badge></span><span className="text-xs text-muted">expires {fmtDate(i.expires_at)}</span></li>)}</ul></Section>
           )}
 
-          <Section title="Role permissions" hint="What each role can do. Clients have no staff access at all.">
-            <div className="table-wrap !shadow-none"><table className="table"><thead><tr><th>Capability</th><th>Specialist</th><th>Manager</th><th>Admin / Owner</th></tr></thead><tbody>
+          <Section plain title="Role permissions" hint="What each role can do. Clients have no staff access at all.">
+            <div className="table-wrap"><table className="table !min-w-0 max-sm:[&_td]:!px-2.5 max-sm:[&_th]:!px-2.5"><thead><tr><th>Capability</th><th>Specialist</th><th>Manager</th><th>Admin<span className="max-sm:hidden"> / Owner</span></th></tr></thead><tbody>
               {[['Manage clients, reports, documents', 1, 1, 1], ['Draft disputes & letters', 1, 1, 1], ['Approve disputes & letters', 0, 1, 1], ['Assign clients to teammates', 0, 1, 1], ['See billing & revenue', 0, 1, 1], ['Team performance', 0, 1, 1], ['Configure automations', 0, 0, 1], ['Invite & manage staff, delete clients, settings, audit log', 0, 0, 1]].map(([c, a, b, d]) => (
-                <tr key={c as string}><td>{c}</td>{[a, b, d].map((v, i) => <td key={i}>{v ? <span className="text-ok">✓</span> : <span className="text-faint">—</span>}</td>)}</tr>))}</tbody></table></div>
+                <tr key={c as string}><td>{c}</td>{[a, b, d].map((v, i) => <td key={i}>{v ? <span className="font-semibold text-ok"><span aria-hidden>✓</span><span className="sr-only">Yes</span></span> : <span className="text-faint"><span aria-hidden>—</span><span className="sr-only">No</span></span>}</td>)}</tr>))}</tbody></table></div>
           </Section>
         </div>
 
@@ -72,7 +72,7 @@ export default async function TeamPage({ searchParams }: { searchParams: Promise
             </Section>
           )}
           {ctx.can('clients:assign') && data.members.length > 1 && (
-            <Section title="Reassign clients" hint="Move every open client from one teammate to another — for example when someone leaves.">
+            <Section plain title="Reassign clients" hint="Move every open client from one teammate to another — for example when someone leaves.">
               <ActionForm action={reassignClientsAction} className="space-y-3">
                 <Select label="From" name="from" required options={data.members.map((m) => ({ value: m.id, label: m.name }))} placeholder="Choose…" />
                 <Select label="To" name="to" placeholder="Unassigned" options={data.members.map((m) => ({ value: m.id, label: m.name }))} />
