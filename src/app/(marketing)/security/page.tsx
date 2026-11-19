@@ -24,7 +24,7 @@ const GROUPS: { title: string; lede: string; items: [string, string][] }[] = [
     title: 'Signing in.',
     lede: 'Accounts are first-party: there is no third-party login to depend on.',
     items: [
-      ['Two-step verification', 'Authenticator-app codes (TOTP) for staff, required in production. A code cannot be used twice.'],
+      ['Two-step verification', 'Authenticator-app codes (TOTP) for any account; an agency can make them mandatory for staff. A code cannot be used twice.'],
       ['Passwords and lockout', 'Passwords are hashed with scrypt. An account locks after five failed attempts, and sign-in, sign-up and reset are rate limited per address and per email.'],
       ['Sessions you can end', 'Sessions are random tokens stored only as a hash, with idle and absolute expiry. Changing or resetting a password signs out every session.'],
     ],

@@ -146,7 +146,7 @@ export default function FeaturesPage() {
           ['Four staff roles', 'Owner, admin, manager and specialist, each with its own permissions. Clients are a fifth role that only reaches the portal.'],
           ['Audit log', 'An append-only record of actions. Entries cannot be edited or deleted, even by the application itself.'],
           ['Tenant isolation in the database', 'PostgreSQL row-level security separates one agency from another and one client from another.'],
-          ['Two-step verification', 'Authenticator-app codes for staff, required in production.'],
+          ['Two-step verification', 'Authenticator-app codes for any account; an agency can make them mandatory for staff.'],
           ['Export and deletion', 'Export one client’s data as JSON, or delete a client permanently after a typed confirmation.'],
           ['REST API', 'Scoped API keys, an OpenAPI description and idempotent report push for agencies that integrate their own tools.'],
         ]} />

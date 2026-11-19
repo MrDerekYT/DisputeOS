@@ -46,7 +46,7 @@ No local PostgreSQL? `docker compose up -d`, then use the URL in `docker-compose
 
 Demo logins after seeding (password `Demo-Passw0rd-2026!`): `owner@` / `manager@` / `specialist@demo.disputeos.test`;
 client portal at `/portal/login` as `jordan.rivera@example.test` (English) or `maria.gomez@example.test` (Spanish).
-Set `REQUIRE_STAFF_MFA=false` in `.env.local` to skip two-step verification locally; it is mandatory in staging/production.
+Two-step verification is optional by default (`REQUIRE_STAFF_MFA=false`); set it to `true` to make it mandatory for staff.
 
 ## Commands
 
