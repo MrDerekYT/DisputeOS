@@ -79,8 +79,7 @@ export async function requestProcedureDescription(db: Db, actor: DActor, id: str
   if (d.client_confirmed_accurate) throw new DisputeError(CONFIRMED_ACCURATE_STOP);
   const existing = await db.row<{ id: string }>("select id from public.letters where dispute_id = $1 and kind = $2 and status <> 'void'", [id, PROCEDURE_KIND]);
   if (existing) throw new LetterError('A request for the reinvestigation procedure already exists for this dispute.');
-  const client = await db.row<{ preferred_language: 'en' | 'es' }>('select preferred_language from public.clients where id = $1', [d.client_id]);
-  const letterId = await createLetter(db, actor, { clientId: d.client_id, disputeId: id, templateKey: procedureTemplateKey(client?.preferred_language === 'es' ? 'es' : 'en'), orgName });
+  const letterId = await createLetter(db, actor, { clientId: d.client_id, disputeId: id, templateKey: procedureTemplateKey(), orgName });
   await db.run('insert into public.dispute_events (org_id, dispute_id, actor_id, kind, note) values ($1, $2, $3, $4, $5)',
     [actor.orgId, id, actor.userId, 'note', 'Request for the description of the reinvestigation procedure drafted. It needs approval before it is mailed.']);
   return letterId;

@@ -10,6 +10,7 @@ import { loginAction } from '@/app/auth-actions';
 import { currentSession } from '@/lib/auth/context';
 import { orgBrandBySlug } from '@/lib/org-brand';
 import { fill, parseLang, qs, tr } from '@/lib/portal-i18n';
+import { requestAgencySlug } from '@/lib/request-host';
 import { portalLogoutAction } from '../actions';
 
 export const metadata: Metadata = { title: 'Client portal sign in' };
@@ -21,7 +22,9 @@ export default async function PortalLogin({ searchParams }: { searchParams: Prom
   // forever, so they stay on this page, see why, and can sign out.
   const noRecord = sp.error === 'no-record';
   if (s && !(noRecord && s.role === 'client')) redirect(s.role === 'client' ? '/portal' : '/app');
-  const brand = await orgBrandBySlug(sp.org);
+  // On an agency's own domain the sign-in page is that agency's, with no ?org= needed (and no other agency's by ?org=).
+  const hostSlug = await requestAgencySlug();
+  const brand = await orgBrandBySlug(hostSlug ?? sp.org);
   const lang = parseLang(sp.lang);
   const t = tr(lang);
   const other = lang === 'es' ? 'en' : 'es';
@@ -34,7 +37,7 @@ export default async function PortalLogin({ searchParams }: { searchParams: Prom
       subtitle={brand ? fill(t('li_subBrand'), { org: brand.name }) : t('li_sub')}
       footer={<>
         {!brand && <>{t('li_workHere')} <Link href="/login" className="link">{t('li_staff')}</Link> · </>}
-        <Link href={`/portal/login${qs({ org: brand?.slug, lang: other === 'es' && 'es' })}`} lang={other} hrefLang={other} className="link">{other === 'es' ? 'Español' : 'English'}</Link>
+        <Link href={`/portal/login${qs({ org: !hostSlug && brand?.slug, lang: other === 'es' && 'es' })}`} lang={other} hrefLang={other} className="link">{other === 'es' ? 'Español' : 'English'}</Link>
       </>}
     >
       {noRecord && (

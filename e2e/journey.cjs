@@ -192,7 +192,7 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
     });
 
     await check('letter: edit creates a version; approval requires a manager; PDF downloads', async () => {
-      await staff.locator('aside').getByRole('link', { name: /Bureau dispute/ }).click();
+      await staff.locator('aside').getByRole('link', { name: /Inaccurate balance/ }).click();
       await staff.waitForURL(/\/app\/letters\//);
       await expectText(staff, 'No unfilled fields or prohibited claims detected');
       const ta = staff.locator('textarea[name=body]');

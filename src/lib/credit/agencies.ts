@@ -63,6 +63,12 @@ export interface Agency {
    * screens then only link to the agency's instructions.
    */
   mailRequirements: { text: string; sourceUrl: string; verifiedOn: string } | null;
+  /**
+   * How long the agency says it keeps a reported record, quoted from its own page. Set ONLY with the page and the day
+   * it was read (the accuracy rule above); absent means nobody has confirmed it at its source, and the app then states
+   * no period and links to the agency instead.
+   */
+  recordRetention?: { text: string; sourceUrl: string; verifiedOn: string };
   /** What the letter itself must state for this agency, beyond name and address. Missing ones become [… NEEDED] lines a person completes. */
   letterNeeds: readonly LetterNeed[];
   /**
@@ -270,14 +276,19 @@ const NEED_LABEL: Record<LetterNeed, Record<Lang, string>> = {
 const NEED_MARK: Record<LetterNeed, string> = { consumer_id: '[CONSUMER ID NEEDED]', dob: '[DATE OF BIRTH NEEDED]', ssn: '[SOCIAL SECURITY NUMBER NEEDED]' };
 /**
  * The identification lines a specialty letter carries under the sender's address. A consumer ID that was entered is
- * printed. Anything else the agency's page says the letter must state is left as a [… NEEDED] line: the app never
- * fills in a date of birth or a Social Security number, a person types it, and the letter cannot be approved before.
+ * printed, and so is the date of birth when it is on the client's record (`known.dob`, already written out as the
+ * letter states dates). Anything else the agency's page says the letter must state is left as a [… NEEDED] line: the
+ * app never holds a full Social Security number in the clear, so a person types it, and the letter cannot be approved
+ * before.
  */
-export function agencyIdentityLines(agency: Agency | undefined, item: AgencyItem | null | undefined, lang: Lang): string[] {
+export function agencyIdentityLines(agency: Agency | undefined, item: AgencyItem | null | undefined, lang: Lang, known: { dob?: string | null } = {}): string[] {
   if (!agency) return [];
   const out: string[] = [];
   if (item?.consumerId) out.push(`${NEED_LABEL.consumer_id[lang]}: ${item.consumerId}`);
-  for (const n of agency.letterNeeds) if (!(n === 'consumer_id' && item?.consumerId)) out.push(`${NEED_LABEL[n][lang]}: ${NEED_MARK[n]}`);
+  for (const n of agency.letterNeeds) {
+    if (n === 'consumer_id' && item?.consumerId) continue;
+    out.push(`${NEED_LABEL[n][lang]}: ${n === 'dob' && known.dob ? known.dob : NEED_MARK[n]}`);
+  }
   return out;
 }
 

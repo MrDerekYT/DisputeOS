@@ -53,15 +53,25 @@ export const anyChannelOn = (s: UpdateSettings, event: UpdateEvent) => s.switche
  */
 export const QUIET_START_HOUR = 21;
 export const QUIET_END_HOUR = 8;
+/** The hours a message may go out in, local time: from `from`:00 up to, but not including, `until`:00. */
+export interface SendWindow { from: number; until: number }
+/** Service updates to clients: 8:00 to 21:00. */
+export const UPDATE_WINDOW: SendWindow = { from: QUIET_END_HOUR, until: QUIET_START_HOUR };
+/**
+ * Marketing texts (the follow-up to people who sent the enquiry form): 9:00 to 20:00, an hour inside the 8 a.m. to
+ * 9 p.m. that 47 CFR § 64.1200(c)(1) sets for telephone solicitations, so that an hour's doubt about where the person
+ * is never puts a text outside it.
+ */
+export const MARKETING_WINDOW: SendWindow = { from: 9, until: 20 };
 export function hourInZone(now: Date, tz: string): number {
   const h = new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: 'numeric', hourCycle: 'h23' }).format(now);
   return Number(h) % 24;
 }
-export function inQuietHours(now: Date, tz: string): boolean {
+export function inQuietHours(now: Date, tz: string, window: SendWindow = UPDATE_WINDOW): boolean {
   const h = hourInZone(now, tz);
-  return h >= QUIET_START_HOUR || h < QUIET_END_HOUR;
+  return h >= window.until || h < window.from;
 }
-export const inQuietHoursAnywhere = (now: Date, zones: string[]) => zones.some((z) => inQuietHours(now, z));
+export const inQuietHoursAnywhere = (now: Date, zones: string[], window: SendWindow = UPDATE_WINDOW) => zones.some((z) => inQuietHours(now, z, window));
 
 /** The zones a workspace can choose (Settings → Client updates). IANA names; daylight time is handled by the runtime. */
 export const US_ZONES: { value: string; label: string }[] = [
@@ -97,6 +107,16 @@ export const STATE_ZONES: Record<string, string[]> = {
 export function quietZones(orgTz: string, clientState: string | null | undefined): string[] {
   const st = (clientState ?? '').trim().toUpperCase();
   return [...new Set([orgTz, ...(STATE_ZONES[st] ?? [ET, PT])])];
+}
+/**
+ * The zones a text to a LEAD is judged in. The enquiry form collects no address, so the number is the only thing that
+ * says where the person may be: the zones of the state its area code belongs to (`areaState`, from src/lib/us-phone.ts)
+ * are added to the workspace's own zone and to Eastern and Pacific (or the state on the record, when there is one).
+ * A number keeps its area code when its owner moves, which is why the others stay in: the text goes out only when it is
+ * inside the window in every one of them.
+ */
+export function leadQuietZones(orgTz: string, recordState: string | null | undefined, areaState: string): string[] {
+  return [...new Set([...quietZones(orgTz, recordState), ...(STATE_ZONES[areaState] ?? [])])];
 }
 
 /** Most messages one client gets on one channel in any 24 hours. Anything past it is skipped, not saved up. */

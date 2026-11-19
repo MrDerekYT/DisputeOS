@@ -145,7 +145,7 @@ async function signUpAgency(browser, label) {
       await staff.getByRole('button', { name: 'Send for review' }).click(); await see(staff, 'Ready for review');
       await staff.getByRole('button', { name: 'Approve dispute' }).click(); await see(staff, 'Approve a letter for this dispute first');
       if (await staff.getByRole('button', { name: 'Record submission' }).count()) throw new Error('submission offered before a letter was approved');
-      await staff.locator('aside').getByRole('link', { name: /Bureau dispute/ }).click();
+      await staff.locator('aside').getByRole('link', { name: /Inaccurate balance/ }).click();
       await staff.waitForURL(/\/app\/letters\//); letterUrl = staff.url();
       const body = await staff.locator('textarea[name=body]').inputValue();
       if (!/SYNTHETIC BANK NA/.test(body) || !/\$2,450\.00/.test(body)) throw new Error('letter does not carry the disputed account and amount');

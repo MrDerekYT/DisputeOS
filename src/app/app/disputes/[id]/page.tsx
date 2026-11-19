@@ -19,7 +19,10 @@ import { intakeStateLabel, intakeSummary } from '@/lib/intake';
 import { loadIntake } from '@/lib/intake-load';
 import { agencyIdentityLines, agencyItemLines, parseAgencyItem, specialtyAgency } from '@/lib/credit/agencies';
 import { MailRequirements } from '@/components/mail-requirements';
+import { recommendLetter } from '@/lib/letters/brief';
+import { loadBrief } from '@/lib/letters/brief-load';
 import { ClockBlock } from './clock-block';
+import { RecommendLetter } from './recommend-letter';
 
 export const metadata: Metadata = { title: 'Dispute' };
 
@@ -64,10 +67,12 @@ export default async function DisputePage({ params }: { params: Promise<{ id: st
     const check = ['submitted', 'under_investigation', 'response_received'].includes(d.status) ? await loadRecheck(db, id) : null;
     // Only looked at when a bureau or specialty agency dispute is about to be recorded as sent.
     const idDocs = d.status === 'approved' && (d.target_type === 'bureau' || d.target_type === 'agency') ? intakeSummary(await loadIntake(db, d.client_id)).notAccepted : [];
-    return { d, events, evidence, letters, docs, consents, tasks, children, team, check, idDocs };
+    // The letter that fits this dispute, from what is on file (no AI). Only before it is sent: afterwards the legal clock block says what can follow.
+    const brief = !d.submitted_at && !d.client_confirmed_accurate && !['resolved', 'cancelled'].includes(d.status) && ctx.can('letters:write') ? await loadBrief(db, d.client_id, id) : null;
+    return { d, events, evidence, letters, docs, consents, tasks, children, team, check, idDocs, rec: brief ? recommendLetter(brief) : null };
   });
   if (!data) notFound();
-  const { d, events, evidence, letters, docs, consents, tasks, children, team, check, idDocs } = data;
+  const { d, events, evidence, letters, docs, consents, tasks, children, team, check, idDocs, rec } = data;
   const agency = specialtyAgency(d.agency);
   const item = parseAgencyItem(d.agency_item);
   const cs = consentStatus(consents);
@@ -316,6 +321,7 @@ export default async function DisputePage({ params }: { params: Promise<{ id: st
           </Section>
 
           <Section plain title="Letters" actions={open && !d.client_confirmed_accurate ? <Link href={`/app/letters/new?clientId=${d.client_id}&disputeId=${d.id}`} className="btn-secondary btn-sm">New</Link> : undefined}>
+            {rec && <RecommendLetter disputeId={d.id} clientId={d.client_id} rec={rec} canDraft={ctx.can('letters:write')} />}
             {letters.length === 0 ? <p className="text-sm text-muted">No letter yet.</p> : (
               <ul className="space-y-2">{letters.map((l) => (
                 <li key={l.id}><Link href={`/app/letters/${l.id}`} className="flex items-center justify-between gap-2 rounded-xl bg-raised p-3 text-sm transition-colors hover:bg-line">

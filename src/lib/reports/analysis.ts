@@ -40,6 +40,9 @@ export const FINDING_CATEGORIES = {
   old_inquiry: 'Older inquiry',
   client_statement: 'Client statement conflicts with report',
   possible_reinsertion: 'Possible reinsertion',
+  medical_collection: 'Medical collection and bureau policy',
+  bankruptcy_reporting: 'Reporting after a bankruptcy discharge',
+  collector_notice: 'Collector notice: validation period',
 } as const;
 export type FindingCategory = keyof typeof FINDING_CATEGORIES;
 

@@ -51,6 +51,17 @@ const schema = z.object({
   EMAIL_DRIVER: z.enum(['log', 'resend', 'disabled']).default('log'),
   EMAIL_FROM: z.string().default(`${PRODUCT.name} <no-reply@localhost>`),
   RESEND_API_KEY: z.string().optional(),
+  // Outreach to referral partners (src/lib/partner-outreach.ts). Optional but recommended: a separate sending address
+  // on its own subdomain, and its own API key, so that unsolicited business email cannot hurt the reputation of the
+  // address that carries password resets, invitations and client updates. Unset, partner emails use the two above.
+  OUTREACH_EMAIL_FROM: z.string().optional(),
+  OUTREACH_RESEND_API_KEY: z.string().optional(),
+  // The signing secret of the Resend webhook (whsec_...), for bounce and complaint reports (/api/webhooks/resend).
+  RESEND_WEBHOOK_SECRET: z.string().optional(),
+  // Most partner emails, and most lead follow-up texts, this whole deployment sends in any 24 hours, across every
+  // workspace. Each workspace has its own lower limit; these stop a deployment-wide run-away.
+  OUTREACH_PLATFORM_DAILY_EMAILS: z.coerce.number().int().min(0).max(100_000).default(500),
+  OUTREACH_PLATFORM_DAILY_TEXTS: z.coerce.number().int().min(0).max(100_000).default(300),
   // Text messages (src/lib/sms.ts)
   // disabled (default): no text is ever sent · twilio: sent through Twilio · log: written to a local file, nothing is
   // delivered (development/test only). Without the Twilio values below, twilio reads as "not connected" in Settings.
@@ -65,6 +76,11 @@ const schema = z.object({
   AI_BASE_URL: z.string().url().optional(),
   AI_API_KEY: z.string().optional(),
   ANTHROPIC_API_KEY: z.string().optional(),
+  // Custom domains for agency websites (src/lib/vercel-domains.ts). Without the first two, a domain an agency
+  // connects stays pending until the platform operator adds it by hand (docs/DEPLOY-VERCEL.md).
+  VERCEL_API_TOKEN: z.string().optional(),
+  VERCEL_PROJECT_ID: z.string().optional(),
+  VERCEL_TEAM_ID: z.string().optional(),
   // Scheduled jobs (automation runner endpoint)
   CRON_SECRET: z.string().min(24).optional(),
 });

@@ -1,5 +1,184 @@
 # Changelog
 
+## Referral partners, and text follow-up for people who asked to be contacted (unreleased, uncommitted)
+
+Migration `0028_partner_outreach.sql`: additive and safe to run again. Four new tables (`partners`, `partner_outreach`,
+`partner_events`, `partner_referrals`), one more source for an SMS consent (`enquiry_form`) and two text steps in the
+lead follow-up log. Nothing is on until an owner or admin switches it on. Details: docs/INTEGRATIONS.md, "Referral
+partners and lead text follow-up".
+
+- **Partners** (`/app/partners`, under Business; agencies only). Businesses that can refer clients, added by the agency
+  itself: one at a time or as a pasted or uploaded list (up to 200 rows; invalid rows are named and left out; repeated
+  and already-listed addresses are skipped). Whoever adds them confirms the contacts came from public business contact
+  details or the agency's own contacts, and that is stored on every row. Counts, search, status filter, and a page per
+  partner with the emails as sent and a timeline. Nothing is scraped, bought or looked up.
+- **Automatic email sequence** (`src/lib/partner-outreach.ts`): introduction, follow-up after 4 business days, last note
+  9 business days after the introduction, sent by the scheduled job with no approval of each message. Needs the switch
+  on, email connected and the postal and reply addresses the lead follow-up already uses. Business days only, at most
+  10 per run and 40 per agency in any 24 hours, each (partner, step) once even when runs overlap. Stops on an opt-out
+  (permanent for that address in that agency, enforced by the database), a recorded reply, "interested", "not
+  interested", a bounce, a pause, or a message the email service refuses. Two refusals in a row hold the whole
+  sequence for 24 hours (or until "Try again") and notify the owners and admins.
+- **Wording** (`src/lib/partner-emails.ts`): English and Spanish, per category, saying what the agency does and that no
+  result, score or approval can be promised. Each email says it is a business solicitation, shows the agency's name and
+  postal address and carries a one-click opt-out link. Optional AI wording (1 credit per email it rewords) goes through
+  the unchanged protected rewriting and a check that nothing is claimed about the reader; otherwise the standard
+  wording is sent.
+- **Replies and referrals.** Replies go to the agency's own mailbox, so staff record them: "They replied",
+  "Interested", "Not interested", "Bounced". A client can be marked as referred by a partner (client page), and each
+  partner shows how many.
+- **Text follow-up for leads** (`src/lib/lead-texts.ts`, `runLeadTexts` in `src/lib/lead-outreach.ts`). Off by default,
+  own switch on the Leads page. When on and a text service is connected, the enquiry forms show a second, unticked,
+  separately worded box; ticking it records an SMS consent (wording, number, time, IP). Only such a lead gets a welcome
+  text and one follow-up three days later; everyone else gets email only. Quiet hours and STOP apply, and the public
+  form cannot switch texts back on for a number that replied STOP.
+- **Not built, on purpose**: calls of any kind, auto-dialling, voicemail drops, and texts to partners.
+- **Not verified**: nothing here has been sent through the live Resend or Twilio services; tests use stand-ins.
+
+## Letters tailored to each client's file (unreleased, uncommitted)
+
+No migration. The setting lives in `organizations.settings.letter_auto_tailor`; everything else reads existing tables.
+
+- **Letter brief** (`src/lib/letters/brief.ts`, pure; rows read by `brief-load.ts`): one place assembles what a letter
+  is built from, from the client's own record: the recipient, the account as that bureau reports it, what is disputed
+  and why, the earlier round and what came back, the documents enclosed, and recorded circumstances (bankruptcy, an
+  identity theft report, a collector's notice date). `createLetter` now drafts from it.
+- **Optional paragraphs, each only when the fact is on file.** A line restating the reported values in dispute ("As it
+  appears on my Experian credit report dated ...", from an approved report of that bureau only), a paragraph on the
+  earlier round (only when one was sent) and its recorded result, a sentence naming the evidence attached and the
+  identity documents accepted (and nothing when there are none), and the collector's notice date on a validation
+  request while its 30-day period is open. Two short lines of connective wording (a linking sentence and a closing
+  courtesy) are picked by a style seed worked out from the client's id, so one client's letters keep one voice and
+  another client's read differently. New merge fields for an agency's own templates: `reported_text`, `history_text`,
+  `enclosed_text`, `notice_text`, `lead_in`, `courtesy`. Templates without them are unchanged.
+- **Recommended letter.** A dispute's page shows the letter that fits it with a one-line reason from the file and a
+  "Draft this letter" button, until a letter of that kind exists or the dispute is sent. The new-letter page preselects
+  and marks the same letter and says why; after sending it follows the record (nothing while the period runs, the
+  follow-up once it has ended with no response recorded, the method of verification after "verified"). The new-dispute
+  page names the letter the dispute will start with. No AI; staff can always choose another, and nothing is offered for
+  an item the client confirmed as accurate.
+- **AI wording is now tailoring** (`src/lib/letters/tailor.ts`, on top of the unchanged protected rewriting).
+  "Suggest better wording" rewords only the salutation, linking sentences, closing lines and sign-off, in the voice
+  kept for that client. On top of the standing rules, the client's name and address, the recipient, the creditor, every
+  sentence of the reason, every reported status and every enclosure line are locked and never sent. The result is
+  checked again (protected content unchanged, claims guard, no demand, legal claim, threat, deadline, promise or new
+  request, and the specificity check); if any check fails it is discarded and nothing is charged. Same price as before
+  (`letter_suggestion`, 5 credits), charged once per letter version. A letter that already fails the specificity check,
+  or has nothing but a salutation and sign-off to reword, is not sent to the model at all.
+- **Wording overlap.** A letter in draft or awaiting approval shows "Wording overlap with other recent letters: Low /
+  Medium / High": a word-shingle comparison of its connective wording with up to 30 letters for other clients from the
+  last 180 days, done on the server from stored text. No AI and nothing is sent anywhere. Facts, reasons and requests
+  are not compared.
+- **One optional setting**, AI assistant page, owners and admins: "Tailor wording automatically when a letter is
+  drafted". Off by default. On, each drafted letter goes through the same tailoring once (same checks, same charge) and
+  a safe result is saved as a new draft version marked "AI wording". The letter is still a draft that a person reads
+  and a manager approves; nothing about approval or sending changed.
+- **Not done.** A reason that exists only in the letter (a standalone letter, or one typed over the dispute's) is
+  locked by where the letter's template puts it. If that part of the letter was rewritten by hand, or an agency changed
+  its own template after the letter was drafted, only the standing rules and a reason heading protect it. A sentence
+  typed elsewhere in a letter that states a fact without a number, a name or a dispute word is still treated as
+  wording, as before. The overlap check looks at connective wording only: two letters with the same reason typed by
+  staff are not flagged. The AI path is tested against a fake provider only; no live provider was called. The new
+  screens were type-checked, linted and rendered in a unit test, not opened in a browser.
+
+## English letter library, personal information corrections, bank-account guide (unreleased, uncommitted)
+
+- **Letters are English only.** The Spanish letter templates and the language switch on letters are gone: a client's
+  preferred language no longer selects a letter language. The portal, texts and emails keep their languages. Letters
+  already stored are untouched (a stored Spanish letter keeps its text and its `language = 'es'`); an agency's own
+  templates keep whatever they were written in.
+- **Letter library** (`src/lib/letters/library.ts`, templates in `src/lib/letters/templates.ts`): one letter per
+  situation with the same heading, reference line, enclosure list and signature. To a bureau: general dispute, not my
+  account, inaccurate balance, inaccurate payment history or dates, inaccurate account status, duplicate account,
+  outdated item, account included in bankruptcy, identity theft block request, personal information correction,
+  re-dispute with new information, follow-up with no response recorded, method of verification. To a collector: debt
+  validation, stop communication. To the creditor: direct dispute (the client's own letter), goodwill request, request
+  to update a paid account (an accurate update; "pay for delete" is not offered). To a specialty agency: the
+  account-record dispute. The new-letter page shows them as a picker grouped by recipient with a one-line "use when".
+- **Letters follow the file.** A dispute's default letter is now the one written for its category. A situation letter
+  is refused, not padded, when a fact it rests on is not on file: an identity theft block without an FTC or police
+  report in the client's documents, a re-dispute with nothing new or without a recorded "verified" result, an outdated
+  letter when the reported date of first delinquency does not put the item past its reporting period, a bankruptcy
+  letter with no bankruptcy recorded, a follow-up before the period has ended or after a response was recorded.
+- **Three dispute types added**: account included in bankruptcy, identity theft block request, paid account (request
+  to update).
+- **Personal information on reports** (client record, Reports tab; portal Profile page in English and Spanish): staff
+  or the client mark names, addresses, employers, phone numbers or a date of birth on one bureau's report as wrong or
+  not theirs. Names, addresses and employers are offered to staff from the imported report; everything else is typed.
+  One button drafts the correction letter for a bureau as an ordinary dispute with a draft letter, with the identity
+  enclosures list. Migration 0026 (`personal_info_marks`, additive).
+- **Bank account sent to collections** (client record, Reports tab): a few plain questions about an overdrawn or
+  closed bank account, and the steps that follow, each linking to an existing tool. Only details the client says are
+  inaccurate are disputed; when the client says the record is accurate it says so and offers only the paid-account
+  update, the goodwill request and the consumer statement. No retention period is stated for ChexSystems or Early
+  Warning because none has been confirmed at its source (`Agency.recordRetention` is there for when one is).
+  Migration 0026 (`bank_collection_cases`, additive, staff only). Nothing is drafted or sent automatically.
+
+## Review fixes for setup, custom domains and case tools (unreleased, uncommitted)
+
+- **Test text**: sent to US and Canadian (+1) numbers only, and capped per workspace (3 a day) and for the whole
+  deployment (50 a day) as well as per person. Test email is also capped per workspace (10 an hour).
+- **Client sign-in on an agency's domain**: two-step verification (`/mfa`, `/mfa/setup`) and the password reset
+  request now stay on the agency's host instead of bouncing to the platform host, where the client has no session.
+- **Host rules apply to link prefetches** too (the middleware used to skip them).
+- **Enquiry form on an agency's domain**: the thank-you page is opened by the browser rather than by a server-side
+  redirect, which showed "page not found" under `next start` although the enquiry had been saved.
+- **Unverified domain claims no longer lock a name**: a claim that is more than a day old and never verified gives
+  way to the next workspace (and is removed from the hosting project if the app added it). A verified claim, or one
+  made in the last day, stands. Connect attempts are capped at 10 a day per workspace.
+- **HSTS**: `includeSubDomains; preload` is sent only on the platform's own host; agency domains get plain `max-age`.
+- **Validation period wording**: what counts is the day the consumer sends the written request (12 CFR 1006.38(c),
+  (d)(2): "submitted ... within the validation period"), not the day the collector receives it. EN and ES updated.
+- **Dashboard setup reminder** counts only what the workspace can do itself (its mailing address, reply address,
+  time zone, and its own test once the provider is connected), not the host's environment settings.
+
+## Case tools: collector validation clock, medical collection screen, bankruptcy audit (unreleased, uncommitted)
+
+- **Collector validation period** (client record, Reports tab, "Collections and bankruptcy"): staff record a debt
+  collector's notice (received date, or sent date with receipt presumed 5 days later, not counting Saturdays, Sundays
+  and legal public holidays, 12 CFR 1006.34(b)(5)). The page shows the end of the 30-day period and days left, apart
+  from the credit-report dispute clock. While it is open it links to the existing validation request letter to the
+  collector (drafted, reviewed and approved like any letter); after it, a plain note on what the end generally means.
+  The client sees the date and an explanation in the portal (EN/ES). Migration 0025 (`collector_notices`, additive).
+- **Medical collection screen**: collections the report describes as medical, or that staff tick as medical, and that
+  are paid, under $500 or under one year old get a "worth checking" finding. It says this is the three bureaus' own
+  policy (joint statements of March 18, 2022 and April 11, 2023), not law, and that the CFPB rule was vacated on
+  July 11, 2025.
+- **Bankruptcy discharge audit**: staff enter chapter, filing date and discharge date (three nullable columns on
+  `clients`). Accounts dated before the filing are listed per bureau with what is worth checking: a balance, a status
+  with no mention of the bankruptcy, a first delinquency dated after the filing. Shows how long the bankruptcy itself
+  is generally reportable (10 years by statute; 7 years for Chapter 13 by Experian's and TransUnion's own policy).
+- Findings from all three join the ordinary findings list (`generated_by = 'case_tools'`, created once, retired when
+  they stop applying, never recreated after a person dismisses them); an open validation period is a step in the
+  client plan. Credit guide: new "medical collections" entry, and the debt validation and bankruptcy entries updated.
+
+## Agency custom domains (unreleased, uncommitted)
+
+- **An agency can use its own domain** for its website (`/`), enquiry form (`/start`) and client sign-in
+  (`/portal/login`). The `/a/<workspace>` address keeps working. Staff routes on an agency's domain redirect to the
+  platform host. Migration 0023 (`agency_domains`, one domain per agency, additive).
+- **Connect, check, remove** on the Website page (settings:manage). With `VERCEL_API_TOKEN` and `VERCEL_PROJECT_ID`
+  the app adds the domain to the Vercel project and shows the DNS records Vercel asks for; without them the page says
+  the platform operator must add it, and `npm run domain:verify -- <domain>` confirms it.
+- **Never verified without evidence**: only Vercel reporting the domain verified and correctly configured, or the
+  operator's check, marks a domain connected. Tenant requests can read their row and cannot write it.
+- Canonical and Open Graph addresses use a site's verified domain, which serves its own `/sitemap.xml` and `/robots.txt`.
+- **Not built:** buying a domain, sending email from the agency's domain, automatic handling of the www/apex twin.
+  The Vercel API calls are tested against a mocked API only. Docs: docs/DEPLOY-VERCEL.md.
+
+## Get set up page (unreleased, uncommitted)
+
+- **`/app/setup`** (owners and admins): an ordered checklist for email, text messages and agency basics, built from the
+  real configuration by a pure function (`src/lib/setup/checklist.ts`). It shows environment variable names and
+  present/missing only: no secret and no value reaches the browser, except the Twilio webhook address built from APP_URL.
+- **Nothing is ticked on configuration alone.** Email is done once Resend has accepted a test email; the webhook step is
+  done once something from Twilio has reached the webhook. A2P 10DLC registration cannot be checked from the app and is
+  never ticked.
+- **"Send a test email to me" / "Send a test text to me"** (`src/lib/setup/test-send.ts`): need settings:manage, 5 emails
+  an hour and 3 texts a day per person, go only to the signed-in person, show the provider's own answer, and write no
+  communication, queue row or consent. An accepted test stores a timestamp in `organizations.settings`; a refused one removes it.
+- Linked from the dashboard (one line, only while a step is left) and from Settings → Integrations. No migration.
+
 ## Review fixes to the five new features (unreleased, uncommitted)
 
 Twelve reviewer findings on client updates, the dispute clock, the charge check and fall-off dates; all twelve were

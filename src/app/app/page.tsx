@@ -3,6 +3,7 @@ import type { Metadata } from 'next';
 import { AlertTriangle, ArrowRight, CheckCircle2, Circle, Clock, FileUp, HeartHandshake, MessageSquare, MessageSquareDashed, Pencil, ScanLine, UserPlus } from 'lucide-react';
 import { BarSeries, SplitBar } from '@/components/charts';
 import { WindowCalendar } from '@/components/dashboard-windows';
+import { SetupNudge } from '@/components/setup-nudge';
 import { aiUnapproved } from '@/components/staff-kit';
 import { AiTag, Badge, DayMeter, ListRow, Notice, PageHeader, RowList, Section, Stat } from '@/components/ui';
 import { getAnalytics } from '@/lib/analytics';
@@ -80,6 +81,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
       <PageHeader title={`Welcome back, ${first}`} subtitle={`${ctx.session.orgName} · live data from your workspace.`}
         actions={trialDays ? <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[0.8125rem] text-muted"><Badge tone="info"><Clock size={12} aria-hidden />Trial: {trialDays.d} day{trialDays.d === 1 ? '' : 's'} left</Badge>Billing is not connected in this build, so nothing is charged.</p> : undefined} />
       {sp.denied && <div className="mb-4"><Notice tone="warn" title="Not available for your role">Ask an admin if you need access to that area.</Notice></div>}
+      <SetupNudge ctx={ctx} />
 
       <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]">
         <div className="space-y-8">

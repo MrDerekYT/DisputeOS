@@ -97,17 +97,23 @@ describe('letter rendering', () => {
     const v = buildValues({ client: { full_name: 'X', address: {} }, language: 'en' });
     expect(unresolvedPlaceholders(`${v.client_address} ${v.item_label} ${v.reason}`).length).toBe(3);
   });
-  it('only includes the SSN last four when explicitly asked', () => {
-    const c = { ...ctx, client: { ...ctx.client, ssn_last4: '4321' } };
+  it('includes the SSN last four only when asked, except in a letter to a credit bureau, which states it and the date of birth', () => {
+    const c = { ...ctx, client: { ...ctx.client, ssn_last4: '4321', dob: '1985-03-03' } };
     expect(buildValues(c).ssn_last4_text).toBe('');
-    expect(buildValues({ ...c, includeSsnLast4: true }).ssn_last4_text).toContain('4321');
+    expect(buildValues({ ...c, includeSsnLast4: true }).ssn_last4_text).toBe('SSN (last 4): 4321\n');
+    const toBureau = { item_label: 'Acme ••1234 (Experian)', bureau: 'experian', recipient_name: 'Experian', reason: 'x', fields: [], round: 1 };
+    expect(buildValues({ ...c, dispute: toBureau }).ssn_last4_text).toBe('Date of birth: March 3, 1985\nSSN (last 4): 4321\n');
+    expect(buildValues({ ...c, dispute: toBureau, includeSsnLast4: false }).ssn_last4_text).toBe('Date of birth: March 3, 1985\n');
+    expect(buildValues({ ...ctx, dispute: toBureau }).ssn_last4_text).toBe('Date of birth: [DATE OF BIRTH NEEDED]\nSSN (last 4): [SOCIAL SECURITY NUMBER NEEDED]\n');
+    expect(buildValues({ ...c, dispute: { ...toBureau, bureau: null, recipient_name: 'Acme' } }).ssn_last4_text).toBe('');
   });
-  it('formats dates in the letter language', () => {
+  it('formats dates in English: letters are English only', () => {
     expect(buildValues(ctx).date).toBe('March 1, 2026');
-    expect(buildValues({ ...ctx, language: 'es' }).date).toBe('1 de marzo de 2026');
+    expect(buildValues({ client: ctx.client, now: ctx.now }).date).toBe('March 1, 2026');
   });
   it('every template merges completely when given a full context', () => {
-    const v = buildValues({ ...ctx, dispute: { item_label: 'Acme ••1234 (Experian)', bureau: 'experian', recipient_name: 'Experian', reason: 'Please verify.', fields: ['Balance'], round: 2, tradeline: { creditor_name: 'Acme', account_last4: '1234' }, prior_submitted_at: '2026-01-05T00:00:00Z' }, enclosures: ['Statement'] });
+    const v = buildValues({ ...ctx, client: { ...ctx.client, ssn_last4: '4321', dob: '1985-03-03' }, dispute: { item_label: 'Acme ••1234 (Experian)', bureau: 'experian', recipient_name: 'Experian', reason: 'Please verify.', fields: ['Balance'], round: 2, tradeline: { creditor_name: 'Acme', account_last4: '1234' }, prior_submitted_at: '2026-01-05T00:00:00Z' }, enclosures: ['Statement'],
+      facts: { today: '2026-03-01', fallOff: { kind: 'date', date: '2026-01-10', rule: 'seven_years_plus_180_days', from: '2018-07-14' }, bankruptcy: { chapter: '7', filedOn: '2024-02-01', dischargedOn: '2024-06-03' }, identityTheftReports: ['FTC identity theft report'] } });
     for (const t of TEMPLATES) expect(unresolvedPlaceholders(mergeTemplate(t.body, v)), t.key).toEqual([]);
   });
 });

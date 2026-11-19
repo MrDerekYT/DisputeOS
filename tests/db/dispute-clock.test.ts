@@ -272,15 +272,15 @@ describe('method-of-verification letter and its 15-day clock', () => {
     await expect(asUser(specialist.userId, (db) => transitionDispute(db, specialist, again, 'submitted'))).rejects.toThrow(/no approved letter/);
   });
 
-  it('a Spanish-speaking client gets the Spanish request', async () => {
+  it('a Spanish-speaking client still gets the request in English: letters are English only', async () => {
     const es = await addClient(A.orgId, 'Cliente Dos');
     await withSystem((db) => db.run(`update public.clients set preferred_language = 'es', address = '{"line1":"1 Calle Sol","city":"Miami","state":"FL","zip":"33101"}' where id = $1`, [es]));
     const id = await withSystem(async (db) => (await db.row<{ id: string }>(
       `insert into public.disputes (org_id, client_id, item_label, bureau, recipient_name, category, reason, status, outcome, submitted_at, due_at, response_at)
        values ($1, $2, 'Acme Bank ••1234 (Experian)', 'experian', 'Experian', 'incorrect_balance', $3, 'resolved', 'verified', now() - interval '40 days', now() - interval '10 days', now() - interval '12 days') returning id`, [A.orgId, es, REASON]))!.id);
     const l = await asUser(specialist.userId, (db) => requestProcedureDescription(db, specialist, id));
-    expect(await letter(l)).toMatchObject({ kind: 'method_of_verification', template_key: 'method_of_verification_es', language: 'es' });
-    expect((await withSystem((db) => currentBody(db, l)))!.body).toMatch(/Esta carta es una solicitud de esa descripción\. No es una nueva disputa\./);
+    expect(await letter(l)).toMatchObject({ kind: 'method_of_verification', template_key: 'method_of_verification_en', language: 'en' });
+    expect((await withSystem((db) => currentBody(db, l)))!.body).toMatch(/This letter is a request for that description\. It is not a new dispute\./);
   });
 });
 

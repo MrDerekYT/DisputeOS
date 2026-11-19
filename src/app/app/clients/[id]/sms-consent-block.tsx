@@ -6,7 +6,7 @@ import { toE164 } from '@/lib/sms';
 import { fmtDate } from '@/lib/util';
 import { recordSmsConsentAction, reviewSmsReplyAction, revokeSmsConsentAction } from '../sms-actions';
 
-const ENDED: Record<string, string> = { portal: 'turned off by the client in the portal', staff: 'turned off by staff', sms_stop: 'the client replied STOP' };
+const ENDED: Record<string, string> = { portal: 'turned off by the client in the portal', staff: 'turned off by staff', sms_stop: 'the client replied STOP', asked_to_stop: 'the client asked the team to stop' };
 
 /**
  * Whether this client has agreed to text messages, how, and for which number. Without a consent in force no text is
@@ -31,7 +31,7 @@ export async function SmsConsentBlock({ ctx, clientId, phone, lang }: { ctx: Ctx
         <div className="min-w-0">
           {active ? (
             <>
-              <div className="flex flex-wrap items-center gap-2"><Badge tone={mismatch ? 'warn' : 'ok'}>{mismatch ? 'Paused' : 'On'}</Badge><Badge>{active.source === 'portal' ? 'Given by the client in the portal' : 'Recorded by staff'}</Badge></div>
+              <div className="flex flex-wrap items-center gap-2"><Badge tone={mismatch ? 'warn' : 'ok'}>{mismatch ? 'Paused' : 'On'}</Badge><Badge>{active.source === 'portal' ? 'Given by the client in the portal' : active.source === 'enquiry_form' ? 'Given on the enquiry form' : 'Recorded by staff'}</Badge></div>
               <p className="mt-1.5 text-muted">{fmtDate(active.granted_at)} · for {active.phone}</p>
               {active.note && <p className="mt-1 [overflow-wrap:anywhere]"><span className="font-medium">Staff note: </span>{active.note}</p>}
               {mismatch && <p className="mt-1 text-muted">The number on the client’s record is different now, so nothing is sent. Consent is needed again for the new number.</p>}
@@ -40,7 +40,7 @@ export async function SmsConsentBlock({ ctx, clientId, phone, lang }: { ctx: Ctx
             <>
               <Badge tone="neutral">Off</Badge>
               {last?.revoked_at && <p className="mt-1.5 text-muted">Ended {fmtDate(last.revoked_at)}: {ENDED[last.revoked_via ?? ''] ?? 'withdrawn'}.</p>}
-              {stopped && <p className="mt-1.5 text-muted">{last?.revoked_via === 'sms_stop' ? '' : 'This number replied STOP. '}Only the client can turn texts back on, in their portal profile. A consent cannot be recorded here.</p>}
+              {stopped && <p className="mt-1.5 text-muted">{last?.revoked_via === 'sms_stop' || last?.revoked_via === 'asked_to_stop' ? '' : 'This number replied STOP. '}Only the client can turn texts back on, in their portal profile. A consent cannot be recorded here.</p>}
             </>
           )}
         </div>

@@ -3,6 +3,7 @@ import { appendFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { safeEqual } from './crypto';
 import { getEnv } from './env';
+import { usAreaCodeState } from './us-phone';
 
 export interface Sms {
   /** E.164, e.g. +15551234567. Anything else is refused before the provider is called. */
@@ -39,6 +40,17 @@ export function toE164(raw: string | null | undefined): string | null {
   // North American Numbering Plan: area code and exchange both start with 2-9.
   const nanp = digits.length === 11 && digits.startsWith('1') ? digits.slice(1) : digits;
   return /^[2-9]\d{2}[2-9]\d{6}$/.test(nanp) ? `+1${nanp}` : null;
+}
+
+// ---------------------------------------------------------------- US numbers (marketing texts go nowhere else)
+/**
+ * A number a marketing text may be sent to, in E.164, or null: a US number with an area code of a state, DC or Puerto
+ * Rico (./us-phone.ts). Used for the text-message box on the public enquiry form, which anyone can fill in with any
+ * number: without it the form could be used to make this deployment text any number in the world at its own cost.
+ */
+export function toUsE164(raw: string | null | undefined): string | null {
+  const n = toE164(raw);
+  return n && usAreaCodeState(n) ? n : null;
 }
 
 // ---------------------------------------------------------------- configuration

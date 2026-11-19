@@ -21,8 +21,10 @@ export const channelUsable = (ch: UpdateChannel) => (ch === 'sms' ? smsUsable() 
 
 // ================================================================ SMS consent (TCPA)
 export interface SmsConsentRow {
-  id: string; phone: string; language: UpdateLang; consent_text: string; source: 'portal' | 'staff'; note: string | null;
-  granted_at: string; revoked_at: string | null; revoked_via: 'portal' | 'staff' | 'sms_stop' | null;
+  /** 'enquiry_form': the person ticked the separate text-message box on the public enquiry form (src/lib/lead-outreach.ts). */
+  id: string; phone: string; language: UpdateLang; consent_text: string; source: 'portal' | 'staff' | 'enquiry_form'; note: string | null;
+  /** 'asked_to_stop': the person told the team to stop and a staff member recorded it; like a STOP reply, only they can undo it. */
+  granted_at: string; revoked_at: string | null; revoked_via: 'portal' | 'staff' | 'sms_stop' | 'asked_to_stop' | null;
 }
 const CONSENT_COLS = 'id, phone, language, consent_text, source, note, granted_at, revoked_at, revoked_via';
 
@@ -36,7 +38,7 @@ export function smsConsentText(lang: UpdateLang, orgName: string, phone: string)
 }
 
 export type ConsentOutcome = { ok: true; phone: string } | { ok: false; reason: 'no_phone' | 'not_found' | 'stopped' };
-export const SMS_STOPPED_MESSAGE = 'The client replied STOP by text. Only they can turn texts back on, in their portal profile.';
+export const SMS_STOPPED_MESSAGE = 'The client replied STOP by text, or asked the team to stop. Only they can turn texts back on, in their portal profile.';
 
 /**
  * Records that a client agreed to texts at the number on their record. Runs inside the caller's transaction, so
@@ -45,7 +47,8 @@ export const SMS_STOPPED_MESSAGE = 'The client replied STOP by text. Only they c
  * another number is revoked first; one for the same number is left as it is. The timeline entry is written by a
  * database trigger (app.on_sms_consent), because a portal user may not write timeline rows.
  *
- * A reply of STOP can only be undone by the person who sent it. When the client's last consent ended with STOP, or
+ * A reply of STOP can only be undone by the person who sent it, and so can a request to stop that the team recorded
+ * ('asked_to_stop'). When the client's last consent ended either way, or
  * the number has sent STOP since its owner last agreed in the portal, a staff-recorded consent is refused
  * ({ ok: false, reason: 'stopped' }); the database refuses it too (trigger sms_consents_stop_guard, 0018). 47 U.S.C.
  * § 227 and 47 CFR § 64.1200(a)(10): a revocation has to be honoured, and it is the called party's to withdraw.
@@ -72,7 +75,7 @@ export async function grantSmsConsent(db: Db, a: {
 }
 
 /** Withdraws the consent in force, if any. Texts stop at once: the send re-checks consent under a lock. */
-export async function revokeSmsConsent(db: Db, a: { orgId: string; clientId: string; userId: string; via: 'portal' | 'staff' | 'sms_stop'; ip?: string | null }): Promise<boolean> {
+export async function revokeSmsConsent(db: Db, a: { orgId: string; clientId: string; userId: string; via: 'portal' | 'staff' | 'sms_stop' | 'asked_to_stop'; ip?: string | null }): Promise<boolean> {
   const n = await db.run('update public.sms_consents set revoked_at = now(), revoked_via = $2 where client_id = $1 and org_id = $3 and revoked_at is null', [a.clientId, a.via, a.orgId]);
   if (!n) return false;
   await audit(db, { orgId: a.orgId, actorId: a.userId, action: 'sms_consent.revoked', entityType: 'client', entityId: a.clientId, ip: a.ip, meta: { via: a.via } });
@@ -296,7 +299,9 @@ export interface InboundResult { kind: InboundKind | 'status' | 'duplicate' | 'i
 
 /**
  * A delivery report for a text we sent (Twilio's StatusCallback). `delivered` upgrades the communication; `failed`
- * or `undelivered` marks it and its queue row failed with the provider's error code, so the failure is shown.
+ * or `undelivered` marks it and its queue row failed with the provider's error code, so the failure is shown. A lead
+ * follow-up text the carrier did not deliver is marked failed on the lead's follow-up log too, which stops the texts to
+ * that number: a failed step is never followed by another one (decideLeadText).
  */
 export async function recordSmsStatus(sid: string, status: string, errorCode?: string | null): Promise<InboundResult> {
   const st = status.toLowerCase();
@@ -305,6 +310,9 @@ export async function recordSmsStatus(sid: string, status: string, errorCode?: s
     if (st === 'delivered') return db.run("update public.communications set status = 'delivered' where provider_ref = $1 and channel = 'sms' and direction = 'outbound' and status = 'sent'", [sid]);
     const why = `The carrier did not deliver it${errorCode ? ` (Twilio error ${String(errorCode).slice(0, 12)})` : ''}`;
     await db.run("update public.client_updates set status = 'failed', error = $2 where provider_ref = $1 and channel = 'sms' and status = 'sent'", [sid, why]);
+    await db.run(
+      `update public.lead_outreach set status = 'failed', error = $2
+        where status = 'sent' and communication_id in (select id from public.communications where provider_ref = $1 and channel = 'sms' and direction = 'outbound')`, [sid, why]);
     return db.run("update public.communications set status = 'failed' where provider_ref = $1 and channel = 'sms' and direction = 'outbound' and status in ('sent', 'delivered')", [sid]);
   });
   return { kind: 'status', matched: n };
@@ -322,9 +330,13 @@ export async function recordSmsStatus(sid: string, status: string, errorCode?: s
  *  - Anything else: saved as an inbound message on the client when exactly one client has that number. When several
  *    do (the same person in two workspaces, or one workspace typing another's client's number), it goes to the one
  *    whose consent is in force for exactly this number; if that is still more than one, to the one this deployment
- *    texted most recently. A record that merely carries the number, or once had a consent, cannot pull the message
- *    away from the client who is actually being texted. If it is still ambiguous it is kept unmatched, never guessed;
- *    rows with no workspace are counted in the scheduled job's result (unmatchedInboundCount) so they are not lost.
+ *    texted most recently, whatever the text was (a client update or a follow-up to their enquiry). A record that
+ *    merely carries the number, or once had a consent, cannot pull the message away from the client who is actually
+ *    being texted. When even that does not decide it (two workspaces texted the same person at the same time, or
+ *    neither text was recorded), the reply is filed on EVERY record that holds a consent in force for the number:
+ *    each of those workspaces was told it may text this person, and a reply nobody can see would leave the follow-up
+ *    running. Only when no record holds a consent is it kept unmatched, never guessed; rows with no workspace are
+ *    counted in the scheduled job's result (unmatchedInboundCount) so they are not lost.
  *    A matched free-text reply stays unreviewed: texts to that client pause until staff have read it (it may be a
  *    request to stop in the client's own words).
  */
@@ -359,32 +371,41 @@ export async function recordInboundSms(m: { sid: string; from: string; to?: stri
 
     // Read before the STOP above revoked anything, so a STOP is still filed with the client it came from.
     const inForce = new Set(byConsent.map((c) => c.id));
-    let narrowed = candidates;
+    let targets = candidates;
     if (candidates.length > 1) {
       const consenting = candidates.filter((c) => inForce.has(c.id));
       const pool = consenting.length ? consenting : candidates;
       if (pool.length > 1) {
+        // Whoever this deployment texted last: every text it sends, update or lead follow-up, is a message on the record.
         const texted = await db.rows<{ client_id: string; last: string }>(
-          "select client_id, max(sent_at) as last from public.client_updates where client_id = any($1::uuid[]) and channel = 'sms' and status = 'sent' and sent_at is not null group by client_id order by last desc limit 2",
+          `select client_id, max(created_at) as last from public.communications
+            where client_id = any($1::uuid[]) and channel = 'sms' and direction = 'outbound' and status <> 'failed' group by client_id order by last desc limit 2`,
           [pool.map((c) => c.id)]);
         const latest = texted[0] && (!texted[1] || new Date(texted[0].last).getTime() > new Date(texted[1].last).getTime()) ? pool.filter((c) => c.id === texted[0]!.client_id) : [];
-        narrowed = latest.length === 1 ? latest : pool;
-      } else narrowed = pool;
+        // Still undecided: everyone who holds a consent for this number gets the reply; with no consent, nobody is guessed at.
+        targets = latest.length === 1 ? latest : consenting;
+      } else targets = pool;
     }
     const orgs = [...new Set(candidates.map((c) => c.org_id))];
-    const one = narrowed.length === 1 ? narrowed[0]! : null;
+    const first = targets[0] ?? null;
     // A keyword reply needs no reading. A free-text one stays unreviewed until a person has read it.
     await db.run('update public.sms_inbound set org_id = $2, client_id = $3, reviewed_at = case when $3::uuid is null or $4 then null else now() end where id = $1',
-      [row.id, one?.org_id ?? (orgs.length === 1 ? orgs[0]! : null), one?.id ?? null, kind === 'message']);
-    if (one) {
+      [row.id, first?.org_id ?? (orgs.length === 1 ? orgs[0]! : null), first?.id ?? null, kind === 'message']);
+    for (const [i, t] of targets.entries()) {
+      // Filed on more than one record: each gets its own row to review (the first keeps the provider's id, which is what makes a retried webhook a no-op).
+      if (i > 0) {
+        await db.run(
+          `insert into public.sms_inbound (provider_ref, org_id, client_id, from_phone, to_phone, kind, body, reviewed_at) values ($1, $2, $3, $4, $5, $6, $7, case when $8 then null else now() end)
+           on conflict (provider_ref) do nothing`, [`${m.sid.slice(0, 64)}:${i + 1}`, t.org_id, t.id, (from ?? m.from).slice(0, 30), m.to?.slice(0, 40) ?? null, kind, body, kind === 'message']);
+      }
       await db.run(
         "insert into public.communications (org_id, client_id, direction, channel, body, status, provider_ref) values ($1, $2, 'inbound', 'sms', $3, 'received', $4)",
-        [one.org_id, one.id, body.trim() || '(empty message)', m.sid.slice(0, 64)]);
+        [t.org_id, t.id, body.trim() || '(empty message)', m.sid.slice(0, 64)]);
       if (kind === 'start') {
-        await db.run("insert into public.client_events (org_id, client_id, kind, summary) values ($1, $2, 'sms_consent', 'Client replied START by text. Texts stay off until they turn them on again in the portal.')", [one.org_id, one.id]);
+        await db.run("insert into public.client_events (org_id, client_id, kind, summary) values ($1, $2, 'sms_consent', 'Client replied START by text. Texts stay off until they turn them on again in the portal.')", [t.org_id, t.id]);
       }
     }
-    return { kind, matched: narrowed.length === 1 ? 1 : 0 };
+    return { kind, matched: targets.length };
   });
 }
 

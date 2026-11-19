@@ -11,11 +11,31 @@ import { findBlockedClaims } from '@/lib/compliance/claims';
 import { createDispute, createSpecialtyDispute, draftDisputesFromFindings, recordResponse, startNextRound, transitionDispute, addEvidence, type DActor } from '@/lib/disputes/service';
 import { CATEGORIES, DISPUTE_STATUSES, FIELD_OPTIONS, OUTCOMES } from '@/lib/disputes/workflow';
 import { confirmIdentityDocs } from '@/lib/intake-load';
-import { createLetter } from '@/lib/letters/service';
+import { createLetter, LetterError } from '@/lib/letters/service';
+import type { Db } from '@/lib/db';
+import { autoTailorDraft } from '@/lib/letters/tailor-load';
 import { BUREAUS } from '@/lib/util';
 import { SPECIALTY_KEYS } from '@/lib/credit/agencies';
 
 const actorOf = (ctx: Ctx): DActor => ({ orgId: ctx.orgId, userId: ctx.userId, role: ctx.role, meta: ctx.meta });
+
+/**
+ * "Also draft the letter" for a dispute created a moment ago in the same transaction. When the letter cannot be
+ * drafted yet (a fact it rests on is not on file) the dispute is kept and '' comes back: the dispute page then names
+ * what is missing under "Recommended letter". Losing the dispute the person just typed would help nobody.
+ */
+async function draftFirstLetter(db: Db, ctx: Ctx, clientId: string, disputeId: string): Promise<string> {
+  await db.run('savepoint first_letter');
+  try {
+    const id = await createLetter(db, actorOf(ctx), { clientId, disputeId, orgName: ctx.session.orgName });
+    await db.run('release savepoint first_letter');
+    return id;
+  } catch (e) {
+    await db.run('rollback to savepoint first_letter');
+    if (e instanceof LetterError) return '';
+    throw e;
+  }
+}
 
 export async function createDisputeAction(_: ActionState, fd: FormData): Promise<ActionState> {
   const ctx = await requireStaff('disputes:write');
@@ -32,13 +52,16 @@ export async function createDisputeAction(_: ActionState, fd: FormData): Promise
     const warn = findBlockedClaims(d.reason);
     if (warn.length) throw new UserError(`The reason contains a claim we cannot allow: “${warn[0]!.excerpt}” — ${warn[0]!.why}`);
     let newId = '';
+    let letterId = '';
     await ctx.tx(async (db) => {
       newId = await createDispute(db, actorOf(ctx), {
         clientId: d.clientId, tradelineId: d.tradelineId || null, findingId: d.findingId || null, category: d.category, reason: d.reason, fields: d.fields,
         bureau: d.bureau || null, recipientName: d.recipientName,
       });
-      if (d.makeLetter) await createLetter(db, actorOf(ctx), { clientId: d.clientId, disputeId: newId, orgName: ctx.session.orgName });
+      if (d.makeLetter) letterId = await draftFirstLetter(db, ctx, d.clientId, newId);
     });
+    // Only when the agency turned it on (off by default): the AI wording step, saved as a new draft version.
+    if (letterId) await autoTailorDraft(actorOf(ctx), letterId, ctx.tx);
     revalidatePath('/app/disputes');
     redirect(`/app/disputes/${newId}`);
   });
@@ -60,13 +83,15 @@ export async function createSpecialtyDisputeAction(_: ActionState, fd: FormData)
     const warn = findBlockedClaims(d.reason);
     if (warn.length) throw new UserError(`The reason contains a claim we cannot allow: “${warn[0]!.excerpt}” — ${warn[0]!.why}`);
     let newId = '';
+    let letterId = '';
     await ctx.tx(async (db) => {
       newId = await createSpecialtyDispute(db, actorOf(ctx), {
         clientId: d.clientId, agency: d.agency, reason: d.reason, recipientAddress: d.recipientAddress,
         item: { name: d.itemName, reference: d.itemReference, date: d.itemDate, amount: d.itemAmount, consumerId: d.consumerId },
       });
-      if (d.makeLetter) await createLetter(db, actorOf(ctx), { clientId: d.clientId, disputeId: newId, orgName: ctx.session.orgName });
+      if (d.makeLetter) letterId = await draftFirstLetter(db, ctx, d.clientId, newId);
     });
+    if (letterId) await autoTailorDraft(actorOf(ctx), letterId, ctx.tx);
     revalidatePath('/app/disputes');
     redirect(`/app/disputes/${newId}`);
   });

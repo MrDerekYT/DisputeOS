@@ -87,9 +87,10 @@ describe('specialty dispute lifecycle (ChexSystems)', () => {
     expect(body).not.toMatch(/delete|remove|§/i);
     // ChexSystems says the letter must state these. The app never fills them in: they are marked for a person.
     expect(body.match(/\[[A-Z ]+NEEDED\]/g)).toEqual(['[DATE OF BIRTH NEEDED]', '[SOCIAL SECURITY NUMBER NEEDED]']);
-    // Choosing the picker's default bureau template for a specialty dispute still gives the specialty letter, in that language.
-    const es = await asUser(specialist.userId, (db) => createLetter(db, specialist, { clientId, disputeId, templateKey: 'bureau_dispute_es' }));
-    expect(await withSystem((db) => db.row('select template_key, language from public.letters where id = $1', [es]))).toEqual({ template_key: 'specialty_bank_account_es', language: 'es' });
+    // Choosing the picker's general bureau letter for a specialty dispute still gives the specialty letter. The Spanish templates are gone.
+    await expect(asUser(specialist.userId, (db) => createLetter(db, specialist, { clientId, disputeId, templateKey: 'bureau_dispute_es' }))).rejects.toThrow(/Template not found/);
+    const es = await asUser(specialist.userId, (db) => createLetter(db, specialist, { clientId, disputeId, templateKey: 'bureau_dispute_en' }));
+    expect(await withSystem((db) => db.row('select template_key, language from public.letters where id = $1', [es]))).toEqual({ template_key: 'specialty_bank_account_en', language: 'en' });
     await asUser(specialist.userId, (db) => setLetterStatus(db, specialist, es, 'void'));
   });
 

@@ -85,7 +85,7 @@ export function ClockBlock({ d, letters, lang, today, tz, canLetter }: { d: Cloc
       ) : null;
     }
     if (s.key === 'results_request') {
-      return <p className="mt-2 text-sm"><Link className="link" href={`/app/letters/new?clientId=${d.client_id}&disputeId=${d.id}&templateKey=follow_up_${lang}`}>Draft a follow-up letter</Link></p>;
+      return <p className="mt-2 text-sm"><Link className="link" href={`/app/letters/new?clientId=${d.client_id}&disputeId=${d.id}&templateKey=follow_up_en`}>Draft a follow-up letter</Link></p>;
     }
     if (s.key === 'cfpb_complaint') {
       return summary ? (

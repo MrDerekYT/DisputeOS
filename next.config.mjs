@@ -18,7 +18,9 @@ const nextConfig = {
           { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
           { key: 'Permissions-Policy', value: 'camera=(), microphone=(), geolocation=(), payment=()' },
           { key: 'Cross-Origin-Opener-Policy', value: 'same-origin' },
-          { key: 'Strict-Transport-Security', value: 'max-age=63072000; includeSubDomains; preload' },
+          // Plain max-age here, because this rule also answers on agencies' own domains. The middleware adds
+          // "includeSubDomains; preload" on the platform's own host only (hstsFor in src/lib/domain-rules.ts).
+          { key: 'Strict-Transport-Security', value: 'max-age=63072000' },
         ],
       },
     ];

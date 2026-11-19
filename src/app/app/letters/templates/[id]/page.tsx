@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
-import { ActionForm, Field, Select, SubmitButton, TextArea } from '@/components/forms';
+import { ActionForm, Check, Field, Select, SubmitButton, TextArea } from '@/components/forms';
 import { Notice, PageHeader } from '@/components/ui';
 import { requireStaff } from '@/lib/auth/context';
 import { KIND_LABEL, MERGE_FIELDS, templateByKey, type LetterKind } from '@/lib/letters/templates';
@@ -14,12 +14,12 @@ export default async function TemplateEditor({ params, searchParams }: { params:
   const { id } = await params;
   const { base } = await searchParams;
   const ctx = await requireStaff('letters:approve');
-  let t: { id?: string; name: string; kind: LetterKind; language: 'en' | 'es'; body: string; baseKey?: string } | null = null;
+  let t: { id?: string; name: string; kind: LetterKind; language: string; body: string; baseKey?: string } | null = null;
   if (id === 'new') {
     const b = base ? templateByKey(base) : undefined;
     t = b ? { name: `${b.name.split(' — ')[0]} (our version)`, kind: b.kind, language: b.language, body: b.body, baseKey: b.key } : { name: '', kind: 'bureau_dispute', language: 'en', body: '' };
   } else if (isUuid(id)) {
-    const r = await ctx.tx((db) => db.row<{ id: string; name: string; kind: LetterKind; language: 'en' | 'es'; body: string; base_key: string | null }>('select id, name, kind, language, body, base_key from public.letter_templates where id = $1', [id]));
+    const r = await ctx.tx((db) => db.row<{ id: string; name: string; kind: LetterKind; language: string; body: string; base_key: string | null }>('select id, name, kind, language, body, base_key from public.letter_templates where id = $1', [id]));
     if (r) t = { id: r.id, name: r.name, kind: r.kind, language: r.language, body: r.body, baseKey: r.base_key ?? undefined };
   }
   if (!t) notFound();
@@ -33,11 +33,14 @@ export default async function TemplateEditor({ params, searchParams }: { params:
         <ActionForm action={saveTemplateAction} className="card card-pad space-y-5">
           {t.id && <input type="hidden" name="id" value={t.id} />}{t.baseKey && <input type="hidden" name="baseKey" value={t.baseKey} />}
           <Field label="Name" name="name" defaultValue={t.name} required />
-          <div className="grid gap-4 sm:grid-cols-2">
-            <Select label="Type" name="kind" defaultValue={t.kind} options={Object.entries(KIND_LABEL).map(([k, v]) => ({ value: k, label: v }))} />
-            <Select label="Language" name="language" defaultValue={t.language} options={[{ value: 'en', label: 'English' }, { value: 'es', label: 'Español' }]} />
-          </div>
+          <Select label="Type" name="kind" defaultValue={t.kind} options={Object.entries(KIND_LABEL).map(([k, v]) => ({ value: k, label: v }))} hint="Letters are written in English." />
           <TextArea label="Body" name="body" rows={22} defaultValue={t.body} required />
+          {t.id && t.language !== 'en' && (
+            <div className="rounded-xl bg-raised p-3.5">
+              <p className="mb-2 text-sm">This template was saved as Spanish. Letters go to US bureaus, creditors and collectors and are written in English, so no letter is drafted from it until it is in English.</p>
+              <Check name="nowEnglish">The body above is now written in English</Check>
+            </div>
+          )}
           <div className="flex justify-end"><SubmitButton>Save template</SubmitButton></div>
         </ActionForm>
       </div>

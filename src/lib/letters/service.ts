@@ -6,86 +6,87 @@ import { audit } from '../audit';
 import { findBlockedClaims } from '../compliance/claims';
 import { logEvent } from '../crm';
 import { can, PermissionError, type Role } from '../rbac';
-import { buildValues, mergeTemplate, unresolvedPlaceholders, type LetterContext } from './render';
-import { kindForWorkflow, specialtyTemplateKey, templateByKey, templatesFor, type LetterKind } from './templates';
+import { buildValues, mergeTemplate, unresolvedPlaceholders } from './render';
+import { buildBrief, contextFor, disputeLetterKey } from './brief';
+import { loadBriefRecord } from './brief-load';
+import { missingFacts, missingFactsForOwnTemplate } from './library';
+import { specialtyTemplateKey, templateByKey, templatesFor, type LetterKind } from './templates';
 import { parseAgencyItem, specialtyAgency } from '../credit/agencies';
 import { procedureDescriptionDue } from '../disputes/clock';
-import { INTAKE_REQUIRED, intakeStatus } from '../intake';
-import { loadIntakeDocs } from '../intake-load';
-import { SPECIFICITY_KINDS, specificityIssues, statesEnclosures } from './specificity';
+import { CONTENT_KINDS, contentIssues, SPECIFICITY_KINDS, specificityIssues, statesEnclosures, type SpecificityInput } from './specificity';
 
 export interface LActor { orgId: string; userId: string; role: Role; meta?: { ip?: string | null } }
 export class LetterError extends UserError {}
+/** Said when someone tries to draft from an agency template that is marked as written in Spanish. */
+export const SPANISH_TEMPLATE = 'This template is written in Spanish. Letters go to US bureaus, creditors and collectors and are written in English: open it under Letters, Templates, put it into English and mark it as English, or pick another letter.';
 
-type ClientRow = { id: string; full_name: string; preferred_language: 'en' | 'es'; address: LetterContext['client']['address']; ssn_last4: string | null };
-
+/**
+ * Drafts a letter from a template through the normal pipeline: a DRAFT that a person edits, sends for approval and
+ * mails. Letters are English only, whatever language the client reads the portal in.
+ *
+ * Everything the letter states comes from the letter brief (./brief.ts), assembled from what is on file for the client
+ * and the dispute: the account as the bureau reports it, the earlier round, what is enclosed. With a dispute and no
+ * template named, the letter written for the dispute's situation is used (disputeLetterKey), falling back to the
+ * general letter of the dispute's kind when the facts that situation letter rests on are not on file. A template named
+ * by the caller is never swapped that way: if its facts are missing, or it was not written for this dispute, the letter
+ * is refused. An agency's own template is held to the same rules as the letter it was copied from.
+ */
 export async function createLetter(
   db: Db, actor: LActor,
   input: { clientId: string; disputeId?: string | null; templateKey?: string; kind?: LetterKind; reasonOverride?: string; includeSsnLast4?: boolean; orgName?: string; recipientName?: string; recipientAddress?: string },
 ): Promise<string> {
   if (!can(actor.role, 'letters:write')) throw new PermissionError('letters:write');
-  const client = await db.row<ClientRow>('select id, full_name, preferred_language, address, ssn_last4 from public.clients where id = $1', [input.clientId]);
-  if (!client) throw new LetterError('Client not found.');
+  const record = await loadBriefRecord(db, input.clientId, input.disputeId ?? null);
+  if (!record) throw new LetterError('Client not found.');
+  if (input.disputeId && !record.dispute) throw new LetterError('That dispute does not belong to this client.');
+  // 15 U.S.C. § 1679b(a)(1): once the client has confirmed the item is reported accurately, no further letter is drafted about it.
+  if (record.dispute?.client_confirmed_accurate) throw new LetterError('The client confirmed this item is reported accurately, so no further letter or round is offered for it.');
+  const brief = buildBrief(record, { reasonOverride: input.reasonOverride, recipientName: input.recipientName, recipientAddress: input.recipientAddress, includeSsnLast4: input.includeSsnLast4, orgName: input.orgName });
+  const base = brief.context;
+  const dispute = base.dispute ?? null;
 
-  let dispute: LetterContext['dispute'] = null;
-  let kind: LetterKind = input.kind ?? 'bureau_dispute';
-  let enclosures: string[] = [];
-  let specialtyKey: string | null = null;
-  let toAgency = false; // a credit bureau or a specialty agency
-  if (input.disputeId) {
-    const d = await db.row<{ client_id: string; item_label: string; bureau: string | null; recipient_name: string; reason: string; fields: string[]; round: number; workflow: string; tradeline_id: string | null; parent_dispute_id: string | null; agency: string | null; agency_item: unknown; recipient_address: string | null; target_type: string; submitted_at: string | null; response_at: string | null; client_confirmed_accurate: boolean }>(
-      'select client_id, item_label, bureau, recipient_name, reason, fields, round, workflow, tradeline_id, parent_dispute_id, agency, agency_item, recipient_address, target_type, submitted_at, response_at, client_confirmed_accurate from public.disputes where id = $1', [input.disputeId]);
-    if (!d || d.client_id !== input.clientId) throw new LetterError('That dispute does not belong to this client.');
-    // 15 U.S.C. § 1679b(a)(1): once the client has confirmed the item is reported accurately, no further letter is drafted about it.
-    if (d.client_confirmed_accurate) throw new LetterError('The client confirmed this item is reported accurately, so no further letter or round is offered for it.');
-    // The day a dispute was sent is the sent date staff recorded on its letter; the stored instant is only a fallback.
-    const sentDay = async (disputeId: string, fallback: string | null) =>
-      (await db.row<{ sent_on: string | null }>("select sent_on::text from public.letters where dispute_id = $1 and status = 'sent' and kind <> 'method_of_verification' and sent_on is not null order by created_at desc limit 1", [disputeId]))?.sent_on ?? fallback;
-    const tl = d.tradeline_id ? await db.row<{ creditor_name: string; account_last4: string | null }>('select creditor_name, account_last4 from public.tradelines where id = $1', [d.tradeline_id]) : null;
-    const prior = d.parent_dispute_id ? await db.row<{ submitted_at: string | null }>('select submitted_at from public.disputes where id = $1', [d.parent_dispute_id]) : null;
-    enclosures = (await db.rows<{ label: string }>('select label from public.dispute_evidence where dispute_id = $1 order by created_at', [input.disputeId])).map((e) => e.label);
-    dispute = {
-      item_label: d.item_label, bureau: d.bureau, recipient_name: input.recipientName || d.recipient_name, reason: input.reasonOverride ?? d.reason, fields: d.fields, round: d.round, tradeline: tl, prior_submitted_at: prior && d.parent_dispute_id ? await sentDay(d.parent_dispute_id, prior.submitted_at) : null,
-      agency: d.agency, agency_item: parseAgencyItem(d.agency_item), recipient_address: d.recipient_address,
-      submitted_at: await sentDay(input.disputeId, d.submitted_at), response_at: d.response_at,
-    };
-    toAgency = d.target_type === 'bureau' || d.target_type === 'agency';
-    if (!input.templateKey && !input.kind) kind = kindForWorkflow(d.workflow);
-    // A specialty agency dispute uses the template for that agency's kind of file. The built-in bureau template (the
-    // picker's default) is written for the three bureaus, so choosing it for a specialty dispute gives the specialty one in the same language.
-    const agency = specialtyAgency(d.agency);
-    const builtInBureau = input.templateKey ? templateByKey(input.templateKey) : undefined;
-    if (agency && !input.templateKey && kind === 'specialty_dispute') specialtyKey = specialtyTemplateKey(agency.kind, client.preferred_language);
-    else if (agency && builtInBureau?.kind === 'bureau_dispute') specialtyKey = specialtyTemplateKey(agency.kind, builtInBureau.language);
-  }
-  let tpl = specialtyKey ? templateByKey(specialtyKey) : input.templateKey ? templateByKey(input.templateKey) : templatesFor(kind, client.preferred_language);
+  // Which letter. A specialty agency dispute uses the template for that agency's kind of file: the picker's bureau and
+  // specialty entries are written for one kind of recipient, so choosing either for a specialty dispute gives the right one.
+  const agency = specialtyAgency(dispute?.agency);
+  const picked = input.templateKey ? templateByKey(input.templateKey) : undefined;
+  let tpl = dispute && !input.templateKey && !input.kind ? templateByKey(disputeLetterKey(brief) ?? '')
+    : agency && (picked?.key === 'bureau_dispute_en' || picked?.kind === 'specialty_dispute' || (!input.templateKey && input.kind === 'specialty_dispute')) ? templateByKey(specialtyTemplateKey(agency.kind))
+      : input.templateKey ? picked : templatesFor(input.kind ?? 'bureau_dispute');
+  // The built-in letter whose facts this one rests on: itself, or for an agency's own template the letter it was copied
+  // from (failing that, the general letter of its kind).
+  let gateKey = tpl?.key ?? '';
+  let own: { baseKey: string | null; fallbackKey: string; kind: LetterKind; body: string } | null = null;
   if (input.templateKey?.startsWith('org:')) {
-    const o = await db.row<{ id: string; name: string; kind: LetterKind; language: 'en' | 'es'; body: string }>('select id, name, kind, language, body from public.letter_templates where id = $1 and active', [input.templateKey.slice(4)]);
-    if (o) tpl = { key: `org:${o.id}`, kind: o.kind, language: o.language, name: o.name, description: '', recipient: 'bureau', body: o.body };
+    const o = await db.row<{ id: string; name: string; kind: LetterKind; body: string; base_key: string | null; language: string }>(
+      'select id, name, kind, body, base_key, language from public.letter_templates where id = $1 and active', [input.templateKey.slice(4)]);
+    // Letters are English only. A template saved in Spanish before that was decided is kept for the agency to translate, not drafted from.
+    if (o && o.language !== 'en') throw new LetterError(SPANISH_TEMPLATE);
+    tpl = o ? { key: `org:${o.id}`, kind: o.kind, language: 'en', name: o.name, description: '', recipient: 'bureau', body: o.body } : undefined;
+    if (o) {
+      own = { baseKey: o.base_key, fallbackKey: templatesFor(o.kind)?.key ?? `org:${o.id}`, kind: o.kind, body: o.body };
+      gateKey = own.baseKey && templateByKey(own.baseKey) ? own.baseKey : own.fallbackKey;
+    }
   }
   if (!tpl) throw new LetterError('Template not found.');
-  if (tpl.kind === 'validation_request' && dispute) {
-    const isCollection = input.disputeId ? await db.row("select 1 from public.disputes d join public.tradelines t on t.id = d.tradeline_id where d.id = $1 and t.item_type = 'collection'", [input.disputeId]) : null;
-    if (!isCollection) throw new LetterError('Debt validation requests apply to collection accounts only. This item is not marked as a collection.');
-  }
+  const missing = own ? missingFactsForOwnTemplate(own, base) : missingFacts(tpl.key, base);
+  if (missing.length) throw new LetterError(missing.join(' '));
 
-  // A dispute letter to a bureau or a specialty agency always says what is in the envelope (see specificity.ts): the
-  // evidence on the dispute, then copies of the identity documents that are accepted and on file, or an explicit "none".
-  const disputeLetter = toAgency && SPECIFICITY_KINDS.includes(tpl.kind);
-  if (disputeLetter) {
-    const onFile = intakeStatus(await loadIntakeDocs(db, input.clientId), businessToday(), INTAKE_REQUIRED).filter((x) => x.state === 'accepted');
-    enclosures = [...enclosures, ...onFile.map((x) => `${tpl.language === 'es' ? 'Copia' : 'Copy'}: ${x.item.label[tpl.language]}`)];
-  }
-  const values = buildValues({ client, language: tpl.language, dispute, enclosures, enclosuresNone: disputeLetter, includeSsnLast4: input.includeSsnLast4, orgName: input.orgName, recipientAddress: input.recipientAddress, tz: getEnv().APP_TIMEZONE });
+  // What this letter encloses and the optional paragraphs the brief adds to it (contextFor). A dispute letter to a
+  // bureau or a specialty agency always says what is in the envelope, or an explicit "none".
+  const context = contextFor(brief, { key: gateKey, kind: tpl.kind });
+  const values = buildValues(context);
   if (!dispute) { values.reason = input.reasonOverride ?? '[REASON NEEDED]'; if (input.recipientName) values.recipient_name = input.recipientName; }
+  // A follow-up or a reply about a result is about THIS dispute. An agency's own copy made from the earlier wording
+  // prints {{prior_date}}, which on a later round is the round before: it gets this dispute's sent date instead.
+  if (tpl.kind === 'follow_up' || tpl.kind === 'investigation_response') values.prior_date = values.dispute_date!;
   let body = mergeTemplate(tpl.body, values);
   // An agency's own template may have no {{enclosures}} field. The section is added at the end rather than blocking the letter later.
-  if (disputeLetter && !statesEnclosures(body)) body = `${body.trimEnd()}\n\n${values.enclosures}`;
+  if (context.enclosuresNone && !statesEnclosures(body)) body = `${body.trimEnd()}\n\n${values.enclosures}`;
 
   const letter = await db.row<{ id: string }>(
     `insert into public.letters (org_id, client_id, dispute_id, template_key, kind, title, recipient_name, recipient_address, language, created_by, checks_version)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,${LETTER_CHECKS_VERSION}) returning id`,
-    [actor.orgId, input.clientId, input.disputeId ?? null, tpl.key, tpl.kind, `${tpl.name.split(' — ')[0]}${dispute ? ` — ${dispute.item_label}` : ''}`.slice(0, 200), values.recipient_name, values.recipient_address, tpl.language, actor.userId],
+     values ($1,$2,$3,$4,$5,$6,$7,$8,'en',$9,${LETTER_CHECKS_VERSION}) returning id`,
+    [actor.orgId, input.clientId, input.disputeId ?? null, tpl.key, tpl.kind, `${tpl.name.split(' — ')[0]}${dispute ? ` — ${dispute.item_label}` : ''}`.slice(0, 200), values.recipient_name, values.recipient_address, actor.userId],
   );
   await db.run("insert into public.letter_versions (org_id, letter_id, version, body, source, author_id, change_note) values ($1,$2,1,$3,'template',$4,'Generated from template')", [actor.orgId, letter!.id, body, actor.userId]);
   await logEvent(db, actor, input.clientId, 'letter_created', `Letter drafted: ${tpl.name.split(' — ')[0]}`, { letter_id: letter!.id });
@@ -135,18 +136,35 @@ export const LETTER_CHECKS_VERSION = 1;
 /**
  * Everything that blocks approval of one letter: the text checks above and, for a dispute letter to a credit bureau or
  * a specialty agency created since the check was introduced, the specificity check (which account, what about it, why,
- * and what is enclosed).
+ * and what is enclosed). A request to update a paid account and a personal information correction are held to a lighter
+ * check: the section a person fills in has to state the payment, or list the entries.
  */
 export async function letterBlockers(db: Db, letterId: string, body: string): Promise<string[]> {
   const out = approvalBlockers(body);
+  const s = await specificityInputFor(db, letterId);
+  if (s) out.push(...specificityIssues({ ...s, body }).map((i) => i.message));
+  const c = await db.row<{ kind: string; checks_version: number | null; reason: string | null; creditor_name: string | null; account_last4: string | null }>(
+    `select l.kind, l.checks_version, d.reason, t.creditor_name, t.account_last4
+       from public.letters l left join public.disputes d on d.id = l.dispute_id left join public.tradelines t on t.id = d.tradeline_id where l.id = $1`, [letterId]);
+  if (c && CONTENT_KINDS.includes(c.kind) && (c.checks_version ?? 0) >= LETTER_CHECKS_VERSION) {
+    out.push(...contentIssues({ kind: c.kind, body, reason: c.reason ?? '', account: { name: c.creditor_name, reference: c.account_last4 } }).map((i) => i.message));
+  }
+  return out;
+}
+
+/**
+ * What the specificity check reads for one letter, apart from its text. Null when the letter is not held to the check:
+ * it is not a dispute letter to a bureau or a specialty agency, or it was drafted before the check existed.
+ */
+export async function specificityInputFor(db: Db, letterId: string): Promise<Omit<SpecificityInput, 'body'> | null> {
   const d = await db.row<{ kind: string; checks_version: number | null; category: string; reason: string; fields: string[]; agency_item: unknown; creditor_name: string | null; account_last4: string | null }>(
     `select l.kind, l.checks_version, d.category, d.reason, d.fields, d.agency_item, t.creditor_name, t.account_last4
        from public.letters l join public.disputes d on d.id = l.dispute_id left join public.tradelines t on t.id = d.tradeline_id
       where l.id = $1 and d.target_type in ('bureau', 'agency')`, [letterId]);
-  if (!d || !SPECIFICITY_KINDS.includes(d.kind) || (d.checks_version ?? 0) < LETTER_CHECKS_VERSION) return out;
+  if (!d || !SPECIFICITY_KINDS.includes(d.kind) || (d.checks_version ?? 0) < LETTER_CHECKS_VERSION) return null;
   const item = parseAgencyItem(d.agency_item);
   const account = item ? { name: item.name, reference: item.reference ?? null } : d.creditor_name ? { name: d.creditor_name, reference: d.account_last4 } : null;
-  return [...out, ...specificityIssues({ body, category: d.category, reason: d.reason, fields: d.fields, account }).map((i) => i.message)];
+  return { category: d.category, reason: d.reason, fields: d.fields, account };
 }
 
 export async function setLetterStatus(db: Db, actor: LActor, letterId: string, to: 'pending_approval' | 'approved' | 'draft' | 'void'): Promise<void> {

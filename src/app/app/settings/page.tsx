@@ -14,6 +14,7 @@ import { ShareLink } from '@/components/staff-kit';
 import { portalLoginPath } from '@/lib/org-brand';
 import { leadFormPath } from '@/lib/leads';
 import { changePasswordAction, signOutEverywhereAction, updateOrgAction } from './actions';
+import { SETUP_ANCHOR } from '@/lib/setup/checklist';
 import { ClientUpdatesSection } from './client-updates';
 
 export const metadata: Metadata = { title: 'Settings' };
@@ -116,10 +117,11 @@ export default async function SettingsPage() {
                 <span className="flex flex-wrap items-center gap-2"><Badge tone={s.tone}>{s.label}</Badge>{i.verified ? <Badge tone="ok">Verified</Badge> : (i.status === 'active' || i.status === 'needs_credentials') && <Badge>Not verified live</Badge>}</span>
                 <ChevronDown size={16} aria-hidden className="shrink-0 text-muted transition-transform group-open:rotate-180" />
               </summary>
-              <div className="pb-4 pl-7 text-sm"><p className="text-muted">{i.detail}</p>{i.manualPath && <p className="mt-1"><span className="font-medium">How to do it today: </span>{i.manualPath}</p>}{i.needs && <p className="mt-1 text-xs text-muted"><span className="font-medium">To connect it: </span>{i.needs}</p>}</div>
+              <div className="pb-4 pl-7 text-sm"><p className="text-muted">{i.detail}</p>{i.manualPath && <p className="mt-1"><span className="font-medium">How to do it today: </span>{i.manualPath}</p>}{i.needs && <p className="mt-1 text-xs text-muted"><span className="font-medium">To connect it: </span>{i.needs}</p>}{SETUP_ANCHOR[i.key] && <p className="mt-2"><Link href={`/app/setup#${SETUP_ANCHOR[i.key]}`} className="link">Set it up step by step</Link></p>}</div>
             </details>
           </li>); })}</ul>
-        <p className="mt-4"><Link href="/app/settings/developers" className="link inline-flex items-center gap-1">Developers &amp; connections: API keys, automatic report import and provider status <ChevronRight size={15} aria-hidden /></Link></p>
+        <p className="mt-4"><Link href="/app/setup" className="link inline-flex items-center gap-1">Get set up: finish email and text messages, and send yourself a test <ChevronRight size={15} aria-hidden /></Link></p>
+        <p className="mt-2"><Link href="/app/settings/developers" className="link inline-flex items-center gap-1">Developers &amp; connections: API keys, automatic report import and provider status <ChevronRight size={15} aria-hidden /></Link></p>
       </Section>
 
       <div id="records" className="mt-8 grid scroll-mt-28 gap-x-8 gap-y-6 xl:grid-cols-2">

@@ -158,6 +158,21 @@ const EN = {
   pf_noLink: 'We have not confirmed an official page for this step. Ask {name} directly how to do it.',
   pf_placed: 'I placed this on', pf_save: 'Save', pf_clear: 'Clear', pf_badDate: 'Enter the day you placed it. It cannot be in the future.',
   pf_sources: 'Links and phone numbers on this page were read on each organization’s own website or on ftc.gov or consumerfinance.gov. Agencies change their pages; follow the instructions the agency gives you. This is general information, not legal advice.',
+  cn_title: 'Debt collector notices',
+  cn_intro: 'When a debt collector first writes to you, you generally have 30 days from the day you receive its notice to ask it, in writing, to validate the debt. This is separate from a dispute with a credit bureau.',
+  cn_received: 'Notice received {date}', cn_sent: 'Notice sent {date} · receipt presumed {received}',
+  cn_ends: 'Validation period ends {date}', cn_ended: 'Validation period ended {date}', cn_left: 'Days left: {n}', cn_lastDay: 'Last day today',
+  cn_open: 'If you question this debt, a written request sent to the collector by that date generally means it must pause collection until it answers. The collector’s notice shows the exact date it uses: go by the notice if it differs. If the debt is yours and the amount is right, there is nothing to send. Your specialist can prepare the letter with you.',
+  cn_closed: 'Once the 30 days have passed you can still write to the collector, but it is generally not required to pause collection while it answers. Not writing in time does not mean you admitted the debt. For advice about a specific debt, you can speak with an attorney.',
+  lettersEnglish: 'Letters are written in English because they go to companies in the United States.',
+  pi_title: 'Personal information on your credit reports',
+  pi_intro: 'If a credit report shows a name, address, employer, phone number or date of birth that is wrong or is not yours, list it here exactly as the report shows it. Your specialist uses your list to prepare a correction letter, in English, for you to review. List only what is really wrong: correct information stays as it is.',
+  pi_none: 'Nothing listed yet.', pi_add: 'Add an entry', pi_bureau: 'Which report shows it?', pi_kind: 'What is it?',
+  pi_value: 'Exactly as the report shows it', pi_issue: 'What is wrong?', pi_notMine: 'It is not mine', pi_incorrect: 'It is mine, but it is not correct',
+  pi_correct: 'What it should say (optional)', pi_remove: 'Remove', pi_byTeam: 'Added by your specialist',
+  pi_saidNotMine: 'not mine', pi_saidIncorrect: 'not correct', pi_shouldBe: 'should be',
+  pi_k_name: 'Name', pi_k_address: 'Address', pi_k_employer: 'Employer', pi_k_phone: 'Phone number', pi_k_date_of_birth: 'Date of birth',
+  pi_bad: 'Please choose the report and type the entry as it appears.',
 } as const;
 
 export type PortalKey = keyof typeof EN;
@@ -304,6 +319,21 @@ const ES: Record<PortalKey, string> = {
   pf_noLink: 'No hemos confirmado una página oficial para este paso. Pregunte directamente a {name} cómo hacerlo.',
   pf_placed: 'Lo solicité el', pf_save: 'Guardar', pf_clear: 'Borrar', pf_badDate: 'Indique el día en que lo solicitó. No puede ser una fecha futura.',
   pf_sources: 'Los enlaces y teléfonos de esta página se leyeron en el sitio web de cada organización o en ftc.gov o consumerfinance.gov. Las agencias cambian sus páginas; siga las instrucciones que le dé la agencia. Esto es información general, no asesoría legal.',
+  cn_title: 'Avisos de cobradores de deudas',
+  cn_intro: 'Cuando un cobrador de deudas le escribe por primera vez, generalmente usted tiene 30 días desde que recibe el aviso para pedirle, por escrito, que valide la deuda. Esto es distinto de una disputa con una agencia de crédito.',
+  cn_received: 'Aviso recibido el {date}', cn_sent: 'Aviso enviado el {date} · se presume recibido el {received}',
+  cn_ends: 'El período de validación termina el {date}', cn_ended: 'El período de validación terminó el {date}', cn_left: 'Días restantes: {n}', cn_lastDay: 'Hoy es el último día',
+  cn_open: 'Si usted cuestiona esta deuda, una solicitud por escrito enviada al cobrador a más tardar en esa fecha generalmente lo obliga a pausar el cobro hasta que responda. El aviso del cobrador indica la fecha exacta que utiliza: guíese por el aviso si es distinta. Si la deuda es suya y el monto es correcto, no hay nada que enviar. Su especialista puede preparar la carta con usted.',
+  cn_closed: 'Una vez pasados los 30 días usted todavía puede escribirle al cobrador, pero generalmente este no está obligado a pausar el cobro mientras responde. No escribir a tiempo no significa que usted haya reconocido la deuda. Para asesoría sobre una deuda específica, puede consultar a un abogado.',
+  lettersEnglish: 'Las cartas se escriben en inglés porque van dirigidas a empresas de Estados Unidos. Si quiere que le expliquemos alguna, escríbale a su equipo.',
+  pi_title: 'Información personal en sus informes de crédito',
+  pi_intro: 'Si un informe de crédito muestra un nombre, una dirección, un empleador, un teléfono o una fecha de nacimiento que está mal o que no es suyo, anótelo aquí tal como aparece en el informe. Su especialista usa su lista para preparar una carta de corrección, en inglés, que usted revisará. Anote solo lo que de verdad está mal: la información correcta se queda como está.',
+  pi_none: 'Todavía no hay nada anotado.', pi_add: 'Agregar un dato', pi_bureau: '¿Qué informe lo muestra?', pi_kind: '¿Qué es?',
+  pi_value: 'Tal como aparece en el informe', pi_issue: '¿Qué está mal?', pi_notMine: 'No me pertenece', pi_incorrect: 'Me pertenece, pero tiene un error',
+  pi_correct: 'Lo que debería decir (opcional)', pi_remove: 'Quitar', pi_byTeam: 'Agregado por su especialista',
+  pi_saidNotMine: 'no me pertenece', pi_saidIncorrect: 'tiene un error', pi_shouldBe: 'debería decir',
+  pi_k_name: 'Nombre', pi_k_address: 'Dirección', pi_k_employer: 'Empleador', pi_k_phone: 'Teléfono', pi_k_date_of_birth: 'Fecha de nacimiento',
+  pi_bad: 'Elija el informe y escriba el dato tal como aparece.',
 };
 
 export const tr = (lang: Lang) => (k: PortalKey): string => (lang === 'es' ? ES[k] : EN[k]);

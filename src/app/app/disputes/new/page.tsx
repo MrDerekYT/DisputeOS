@@ -5,8 +5,9 @@ import { Avatar, Badge, EmptyState, Notice, PageHeader, Section } from '@/compon
 import { ActionForm, Check, Field, Select, SubmitButton, TextArea } from '@/components/forms';
 import { requireStaff } from '@/lib/auth/context';
 import { consentStatus } from '@/lib/compliance/disclosures';
-import { draftReason } from '@/lib/disputes/reasons';
+import { draftReason, REASON_PROMPT } from '@/lib/disputes/reasons';
 import { CATEGORIES, FIELD_OPTIONS, FINDING_TO_CATEGORY } from '@/lib/disputes/workflow';
+import { letterForCategory } from '@/lib/letters/brief';
 import type { Evidence } from '@/lib/reports/analysis';
 import { BUREAU_LABEL, BUREAUS, isUuid, type Bureau } from '@/lib/util';
 import { createDisputeAction } from '../actions';
@@ -98,6 +99,8 @@ export default async function NewDisputePage({ searchParams }: { searchParams: P
   const cat = CATEGORIES[category]!;
   const evidence: Evidence[] = finding?.evidence ?? [];
   const reason = draftReason({ category, creditor: tl?.creditor_name ?? 'the account', last4: tl?.account_last4, bureau: tl?.bureau ?? null, evidence });
+  // The letter a dispute of this kind starts with. Once the dispute exists, its page recommends from the whole file.
+  const fits = letterForCategory(category);
 
   return (
     <>
@@ -121,10 +124,16 @@ export default async function NewDisputePage({ searchParams }: { searchParams: P
             <div className="grid gap-2 sm:grid-cols-2">{FIELD_OPTIONS.map((f) => <Check key={f} name="fields" value={f} defaultChecked={f === 'Balance' && category === 'incorrect_balance'}>{f}</Check>)}</div>
           </fieldset>
 
-          <TextArea label="Reason" name="reason" rows={8} required defaultValue={reason}
-            hint="Drafted from the report data and phrased as a request to verify. Edit it so it reflects what is true for this client — and only dispute what you believe is inaccurate or unverifiable." />
+          {reason ? (
+            <TextArea label="Reason" name="reason" rows={8} required defaultValue={reason}
+              hint="Drafted from the report data and phrased as a request to verify. Edit it so it reflects what is true for this client — and only dispute what you believe is inaccurate or unverifiable." />
+          ) : (
+            <TextArea label="Reason" name="reason" rows={8} required placeholder={REASON_PROMPT[category]}
+              hint="Nothing is drafted for this kind of request: the letter states only what the client told you. Write it in the client’s words, as they would say it to the recipient." />
+          )}
           <p className="text-[0.8125rem] text-muted">{cat.hint}</p>
           <Check name="makeLetter" defaultChecked>Also draft the letter (you will review and edit it before anything can be approved)</Check>
+          {fits && <p className="text-[0.8125rem] text-muted">Recommended letter: <span className="font-medium text-ink">{fits.name}</span>. {fits.useWhen} You can choose another from the dispute.</p>}
           <div className="flex justify-end gap-3"><SubmitButton pendingText="Creating…">Create dispute draft</SubmitButton></div>
         </ActionForm>
 

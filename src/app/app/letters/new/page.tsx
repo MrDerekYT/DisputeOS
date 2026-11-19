@@ -2,10 +2,14 @@ import Link from 'next/link';
 import type { Metadata } from 'next';
 import { Avatar, EmptyState, PageHeader } from '@/components/ui';
 import { ActionForm, Check, Field, Select, SubmitButton, TextArea } from '@/components/forms';
+import { recommendLetter } from '@/lib/letters/brief';
+import { loadBrief } from '@/lib/letters/brief-load';
+import { LETTER_LIBRARY, missingFacts, missingFactsForOwnTemplate, SPECIALTY_PICK, templateForEntry, templateKeyForCategory } from '@/lib/letters/library';
 import { requireStaff } from '@/lib/auth/context';
-import { KIND_LABEL, TEMPLATES, type LetterKind } from '@/lib/letters/templates';
+import { kindForWorkflow, templatesFor, type LetterKind } from '@/lib/letters/templates';
 import { isUuid } from '@/lib/util';
 import { createLetterAction } from '../actions';
+import { TemplatePicker } from './template-picker';
 
 export const metadata: Metadata = { title: 'New letter' };
 
@@ -16,7 +20,7 @@ export default async function NewLetterPage({ searchParams }: { searchParams: Pr
   const PICK_LIMIT = 80;
   // A client linked from their own page or a dispute is loaded directly, so it works however many clients the workspace has.
   const client = sp.clientId && isUuid(sp.clientId)
-    ? await ctx.tx((db) => db.row<{ id: string; full_name: string; preferred_language: string }>('select id, full_name, preferred_language from public.clients where id = $1', [sp.clientId]))
+    ? await ctx.tx((db) => db.row<{ id: string; full_name: string }>('select id, full_name from public.clients where id = $1', [sp.clientId]))
     : null;
 
   if (!client) {
@@ -44,21 +48,42 @@ export default async function NewLetterPage({ searchParams }: { searchParams: Pr
       </>
     );
   }
-  const org = await ctx.tx((db) => db.rows<{ id: string; name: string; kind: LetterKind; language: string }>('select id, name, kind, language from public.letter_templates where active order by name'));
-  const disputes = await ctx.tx((db) => db.rows<{ id: string; item_label: string; status: string }>("select id, item_label, status from public.disputes where client_id = $1 and status <> 'cancelled' order by created_at desc", [client.id]));
-  const options = [
-    ...TEMPLATES.map((t) => ({ value: t.key, label: `${KIND_LABEL[t.kind]} — ${t.language === 'es' ? 'Español' : 'English'}` })),
-    ...org.map((t) => ({ value: `org:${t.id}`, label: `★ ${t.name}` })),
-  ];
+  // Letters are English only: a template still marked as Spanish is not offered (the Templates tab says why).
+  const org = await ctx.tx((db) => db.rows<{ id: string; name: string; kind: LetterKind; base_key: string | null; body: string }>("select id, name, kind, base_key, body from public.letter_templates where active and language = 'en' order by name"));
+  const disputes = await ctx.tx((db) => db.rows<{ id: string; item_label: string; status: string; category: string; workflow: string }>("select id, item_label, status, category, workflow from public.disputes where client_id = $1 and status <> 'cancelled' order by created_at desc", [client.id]));
+  // Preselect the letter the file points to for the linked dispute (src/lib/letters/brief.ts: no AI, and staff can pick
+  // any other); failing that the letter written for its category; otherwise the general bureau dispute.
+  const linked = disputes.find((d) => d.id === sp.disputeId);
+  const offered = new Set([...LETTER_LIBRARY.map((e) => e.templateKey), ...org.map((t) => `org:${t.id}`)]);
+  const brief = linked ? await ctx.tx((db) => loadBrief(db, client.id, linked.id)) : null;
+  const rec = brief ? recommendLetter(brief) : null;
+  const recommended = rec?.templateKey ? (rec.templateKey.startsWith('specialty_') ? SPECIALTY_PICK : rec.templateKey) : null;
+  // With a dispute linked, the letters that were not written for it (another recipient, another kind of item) or that
+  // rest on a fact not on file are shown but cannot be picked, each with the reason. createLetter applies the same rules.
+  const unavailable: Record<string, string> = {};
+  if (brief) {
+    for (const e of LETTER_LIBRARY) {
+      const tpl = templateForEntry(e, brief.context);
+      const why = tpl ? missingFacts(tpl.key, brief.context) : ['This letter is not available.'];
+      if (why.length) unavailable[e.templateKey] = why.join(' ');
+    }
+    for (const t of org) {
+      const why = missingFactsForOwnTemplate({ baseKey: t.base_key, fallbackKey: templatesFor(t.kind)?.key ?? `org:${t.id}`, kind: t.kind, body: t.body }, brief.context);
+      if (why.length) unavailable[`org:${t.id}`] = why.join(' ');
+    }
+  }
+  const usable = (k: string | null | undefined): k is string => !!k && offered.has(k) && !(k in unavailable);
+  const wanted = sp.templateKey ?? recommended ?? (linked ? (linked.workflow === 'specialty' ? SPECIALTY_PICK : templateKeyForCategory(linked.category) ?? templatesFor(kindForWorkflow(linked.workflow))?.key) : null);
+  const selected = usable(wanted) ? wanted : usable(recommended) ? recommended : [...offered].find((k) => usable(k)) ?? 'bureau_dispute_en';
   return (
     <>
       <PageHeader title="New letter" subtitle={`For ${client.full_name}`} back={{ href: '/app/letters', label: 'Letters' }} />
       <ActionForm action={createLetterAction} className="card card-pad mx-auto max-w-2xl space-y-5">
         <input type="hidden" name="clientId" value={client.id} />
-        <Select label="Template" name="templateKey" required defaultValue={sp.templateKey ?? (client.preferred_language === 'es' ? 'bureau_dispute_es' : 'bureau_dispute_en')} options={options}
-          hint={`${client.full_name} prefers ${client.preferred_language === 'es' ? 'Spanish' : 'English'}.`} />
+        <TemplatePicker selected={selected} own={org.map((t) => ({ id: t.id, name: t.name }))} unavailable={unavailable}
+          advice={rec && linked ? { value: recommended && offered.has(recommended) ? recommended : null, item: linked.item_label, reason: rec.reason, missing: rec.missing } : undefined} />
         <Select label="Related dispute" name="disputeId" defaultValue={sp.disputeId ?? ''} placeholder="None — a standalone letter" options={disputes.map((d) => ({ value: d.id, label: `${d.item_label} (${d.status.replace(/_/g, ' ')})` }))}
-          hint="Linking a dispute fills in the account, reason, bureau address and enclosures automatically." />
+          hint="Linking a dispute fills in the account, reason, bureau address and enclosures from what is on file. Most letters need one. A letter that was not written for the dispute you link is refused." />
         <details className="border-t border-line pt-4">
           <summary className="link cursor-pointer text-sm">Standalone letter details</summary>
           <div className="mt-4 space-y-4">
@@ -67,7 +92,7 @@ export default async function NewLetterPage({ searchParams }: { searchParams: Pr
             <TextArea label="Reason / message" name="reason" rows={4} />
           </div>
         </details>
-        <Check name="includeSsn">Include the last four digits of the client’s SSN (some bureaus ask for it)</Check>
+        <Check name="includeSsn" defaultChecked>State the last four digits of the client’s SSN. A letter to a credit bureau also states the date of birth: the bureaus ask for both to find the file.</Check>
         <p className="text-xs text-muted">The letter is created as a draft. You will review and edit it, then a manager approves it before it can be downloaded as final.</p>
         <div className="flex justify-end"><SubmitButton pendingText="Creating…">Create draft</SubmitButton></div>
       </ActionForm>

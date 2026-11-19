@@ -9,6 +9,7 @@ import { portalContext } from '@/lib/portal';
 import type { PortalKey } from '@/lib/portal-i18n';
 import { fmtDate } from '@/lib/util';
 import { portalChangePasswordAction, portalSignConsentAction, portalUpdateProfileAction } from '../../actions';
+import { PersonalInfoCard } from './personal-info';
 import { SmsConsentCard } from './sms-consent';
 
 export const metadata: Metadata = { title: 'Profile' };
@@ -44,6 +45,8 @@ export default async function PortalProfile() {
           <SmsConsentCard ctx={ctx} clientId={client.id} phone={client.phone} lang={lang} t={t} />
         </div>
       </div>
+
+      <PersonalInfoCard ctx={ctx} clientId={client.id} t={t} />
 
       <Section title={t('agreements')} id="agreements">
         {lang === 'es' && <p className="mb-2 text-sm text-muted">{t('agreementLangNote')}</p>}

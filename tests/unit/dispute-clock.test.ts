@@ -292,13 +292,15 @@ describe('summary for the client’s own CFPB complaint', () => {
 });
 
 // ---------------------------------------------------------------- the request for the reinvestigation procedure
-describe('method-of-verification templates (EN/ES)', () => {
-  const client = { full_name: 'Jordan Rivera', address: { line1: '123 Main St', city: 'Tampa', state: 'FL', zip: '33602' } };
+describe('method-of-verification template (English only)', () => {
+  // The date of birth and SSN digits a bureau letter states are on this client's record.
+  const client = { full_name: 'Jordan Rivera', address: { line1: '123 Main St', city: 'Tampa', state: 'FL', zip: '33602' }, ssn_last4: '4321', dob: '1985-03-03' };
   const dispute = { item_label: 'Acme Bank ••1234 (Experian)', bureau: 'experian', recipient_name: 'Experian', reason: 'Experian reports a balance of $1,200.00.', fields: ['Balance'], round: 1, submitted_at: '2026-01-02T12:00:00Z', response_at: '2026-02-01T12:00:00Z' };
 
-  it('exist in both languages, outside the pickers', () => {
-    expect(PROCEDURE_TEMPLATES.map((x) => [x.key, x.language, x.kind])).toEqual([['method_of_verification_en', 'en', 'method_of_verification'], ['method_of_verification_es', 'es', 'method_of_verification']]);
-    expect(templateByKey(procedureTemplateKey('es'))!.language).toBe('es');
+  it('exists in English only, outside the general template list', () => {
+    expect(PROCEDURE_TEMPLATES.map((x) => [x.key, x.language, x.kind])).toEqual([['method_of_verification_en', 'en', 'method_of_verification']]);
+    expect(templateByKey(procedureTemplateKey())!.language).toBe('en');
+    expect(templateByKey('method_of_verification_es')).toBeUndefined();
     expect(TEMPLATES.some((x) => x.kind === 'method_of_verification')).toBe(false);
     expect(KIND_LABEL.method_of_verification).toBe('Request for the reinvestigation procedure');
   });
@@ -312,6 +314,7 @@ describe('method-of-verification templates (EN/ES)', () => {
       expect(body, tpl.key).toContain('15 U.S.C. § 1681i(a)(7)');
       expect(body, tpl.key).toContain('Acme Bank ••1234 (Experian)');
       expect(body, tpl.key).toContain('P.O. Box 4500, Allen, TX 75013');
+      expect(body, tpl.key).toContain('Tampa, FL 33602\nDate of birth: March 3, 1985\nSSN (last 4): 4321\n\nExperian'); // identified the way the bureau asks
       // No demand, no threat, no deadline stated to the agency, no request to change the file, and the dispute reason is not repeated.
       expect(body, tpl.key).not.toMatch(/delet|remov|elimin|borr|correct|corrij|\b15\s+(days|d[ií]as)|\b(must|shall|demand|fail|otherwise|violat|lawsuit|attorney|sue)\b|\b(deben|exij|demand|de lo contrario|abogad)\w*/i);
       expect(body, tpl.key).not.toContain(dispute.reason);
@@ -319,9 +322,6 @@ describe('method-of-verification templates (EN/ES)', () => {
     const en = mergeTemplate(PROCEDURE_TEMPLATES[0]!.body, buildValues({ client, language: 'en', dispute }));
     expect(en).toMatch(/On January 2, 2026 I sent you a dispute about the item above\. Your results, which I received on February 1, 2026, state that the information was verified\./);
     expect(en).toMatch(/This letter is a request for that description\. It is not a new dispute\./);
-    const es = mergeTemplate(PROCEDURE_TEMPLATES[1]!.body, buildValues({ client, language: 'es', dispute }));
-    expect(es).toMatch(/El 2 de enero de 2026 les envié una disputa/);
-    expect(es).toMatch(/Esta carta es una solicitud de esa descripción\. No es una nueva disputa\./);
   });
 
   it('leaves the dates for a person when they are not on record', () => {
@@ -334,19 +334,19 @@ describe('method-of-verification templates (EN/ES)', () => {
 describe('specificity check', () => {
   const client = { full_name: 'Jordan Rivera', address: { line1: '123 Main St', city: 'Tampa', state: 'FL', zip: '33602' } };
   const reason = 'Experian reports a balance of $1,200.00. My January statement shows a balance of $900.00.';
-  const letter = (lang: 'en' | 'es', over: Partial<{ label: string; reason: string; fields: string[]; enclosures: string[]; none: boolean }> = {}) =>
-    mergeTemplate(templateByKey(`bureau_dispute_${lang}`)!.body, buildValues({
-      client, language: lang, enclosures: over.enclosures ?? [], enclosuresNone: over.none ?? true,
+  const letter = (_lang: 'en', over: Partial<{ label: string; reason: string; fields: string[]; enclosures: string[]; none: boolean }> = {}) =>
+    mergeTemplate(templateByKey('bureau_dispute_en')!.body, buildValues({
+      client, enclosures: over.enclosures ?? [], enclosuresNone: over.none ?? true,
       dispute: { item_label: over.label ?? 'Acme Bank ••1234 (Experian)', bureau: 'experian', recipient_name: 'Experian', reason: over.reason ?? reason, fields: over.fields ?? ['Balance'], round: 1 },
     }));
   const input = (over: Partial<SpecificityInput> = {}): SpecificityInput => ({ body: letter('en'), category: 'incorrect_balance', reason, fields: ['Balance'], account: { name: 'Acme Bank', reference: '1234' }, ...over });
   const found = (over: Partial<SpecificityInput> = {}) => specificityIssues(input(over)).map((i) => i.key);
 
-  it('passes the letter the app drafts from a complete dispute, in English and Spanish', () => {
+  it('passes the letter the app drafts from a complete dispute, in English', () => {
     expect(specificityIssues(input())).toEqual([]);
-    expect(specificityIssues(input({ body: letter('es') }))).toEqual([]);
+    expect(templateByKey('bureau_dispute_es')).toBeUndefined();
     expect(letter('en')).toContain('Enclosures: none');
-    expect(letter('es')).toContain('Anexos: ninguno');
+    expect(letter('en')).not.toMatch(/Anexos|Atentamente|Asunto/);
     expect(specificityIssues(input({ body: letter('en', { enclosures: ['Copy: Government-issued photo ID', 'January statement'] }) }))).toEqual([]);
   });
 
@@ -393,7 +393,7 @@ describe('specificity check', () => {
     expect(issues.map((i) => i.key)).toEqual(['reason']);
     // The dispute's reason cannot be edited, the letter can: what is checked is the reason as the letter states it.
     expect(reasonInLetter(letter('en', { reason: stock }), stock)).toBe(stock);
-    expect(reasonInLetter(letter('es'), reason)).toBe(reason);
+    expect(reasonInLetter(letter('en'), reason)).toBe(reason);
     expect(found({ reason: stock, body: letter('en', { reason: stock }).replace(stock, reason) })).toEqual([]);
     expect(found({ body: letter('en').replace(reason, stock) })).toEqual(['reason']);
     expect(reasonInLetter(`Dear Sir,\n\n${reason}\n\nSincerely`, reason)).toBe(reason); // no heading: the dispute's reason, when the letter carries it
@@ -423,8 +423,8 @@ describe('dates written into a letter', () => {
     // Recorded at 8:30 p.m. Eastern on November 19 (01:30 UTC on the 20th); the response the same way on December 14.
     const v = buildValues({ client, language: 'en', tz: 'America/New_York', now: new Date('2026-11-20T01:30:00Z'), dispute: { ...d, submitted_at: '2026-11-20T01:30:00Z', response_at: '2026-12-15T02:10:00Z' } });
     expect([v.date, v.dispute_date, v.prior_date, v.response_date]).toEqual(['November 19, 2026', 'November 19, 2026', 'November 19, 2026', 'December 14, 2026']);
-    const es = buildValues({ client, language: 'es', tz: 'America/Los_Angeles', now: new Date('2026-11-20T01:30:00Z'), dispute: { ...d, submitted_at: '2026-11-20T01:30:00Z', response_at: '2026-12-15T02:10:00Z' } });
-    expect([es.date, es.dispute_date, es.response_date]).toEqual(['19 de noviembre de 2026', '19 de noviembre de 2026', '14 de diciembre de 2026']);
+    const west = buildValues({ client, tz: 'America/Los_Angeles', now: new Date('2026-11-20T01:30:00Z'), dispute: { ...d, submitted_at: '2026-11-20T01:30:00Z', response_at: '2026-12-15T02:10:00Z' } });
+    expect([west.date, west.dispute_date, west.response_date]).toEqual(['November 19, 2026', 'November 19, 2026', 'December 14, 2026']);
   });
   it('use the sent date staff recorded on the letter, as it is, when one is given', () => {
     const v = buildValues({ client, language: 'en', tz: 'America/New_York', dispute: { ...d, submitted_at: '2026-11-19', prior_submitted_at: '2026-10-01', response_at: '2026-12-14T17:00:00Z' } });

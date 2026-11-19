@@ -11,14 +11,14 @@ third-party service from this codebase. None of the paid third-party integration
 | Email — none (`EMAIL_DRIVER=disabled`) | **Manual**, verified by tests | The explicit way to run staging/production without an email provider. Nothing is sent or logged; invitations show a one-time link to pass on; client emails are recorded as not delivered; lead follow-up stays off; **password reset by email is unavailable** and the reset page says so. |
 | AI — Anthropic / OpenAI-compatible | Implemented, **verified against a mocked API only** | `AI_PROVIDER=anthropic` + `ANTHROPIC_API_KEY` (model via `AI_MODEL`, default `claude-sonnet-5-5`), or `AI_PROVIDER=openai` + `AI_BASE_URL` + `AI_API_KEY` + `AI_MODEL`. The deterministic engine is complete without them. |
 | AI credits (metering) | **Works, tested; buying online is not connected** | Every AI result that is returned costs credits from the workspace's balance (`src/lib/ai/credits.ts` holds the price list; ledger in `ai_credit_ledger`, migration 0012). A workspace with no credits, or with no AI provider, gets the standard non-AI wording. There is no checkout: the platform operator adds credits with `npm run credits:grant -- <org-slug> <amount> [note]`. Selling credits in the app needs a payment processor (e.g. Stripe), a checkout and a webhook that writes `purchase` rows. |
-| Text messages — Twilio | Implemented, **verified against a mocked API only**; off by default (`SMS_DRIVER=disabled`) | Short “there is an update, sign in to see it” texts to clients who agreed to them, for the events an agency switches on under Settings → Client updates. Needs `SMS_DRIVER=twilio`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` and `TWILIO_MESSAGING_SERVICE_SID` or `TWILIO_FROM_NUMBER`, plus the provider-side registration. See “Client updates by text message and email” below. Until then Settings shows “Not connected” and staff log calls and texts by hand. |
+| Text messages — Twilio | Implemented, **verified against a mocked API only**; off by default (`SMS_DRIVER=disabled`) | Short “there is an update, sign in to see it” texts to clients who agreed to them, for the events an agency switches on under Settings → Client updates. Needs `SMS_DRIVER=twilio`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` and `TWILIO_MESSAGING_SERVICE_SID` or `TWILIO_FROM_NUMBER`, plus the provider-side registration. See “Client updates by text message and email” below. The same driver sends the two follow-up texts to leads who ticked the text-message box on the enquiry form (“Referral partners and lead text follow-up”). Until then Settings shows “Not connected” and staff log calls and texts by hand. |
 | Payment processing (Stripe etc.) | **Manual** (no processor integration) | Payments are recorded manually; there are no Stripe settings. Also constrained by the CROA advance-fee rule. |
 | Credit Connect (consent-gated import pipeline) | **Pipeline works, tested; no live provider** | Upload, inbound REST API, and an adapter framework with a dev-only sandbox. Nothing is imported automatically from a real provider, so Settings shows "Test stand-in only" in development and "Manual path in use" in staging/production. See `docs/CREDIT_CONNECT.md` |
 | Public REST API + API keys | **Works, tested** | `/api/v1/*`, OpenAPI at `/api/v1/openapi.json` |
 | Live provider adapters (Array, IDIQ, bureaus) | **Manual** (no adapter; needs partner approval) | Provider APIs are partner-gated and require a permissible purpose and client authorization; there is no legitimate unauthenticated access. Import by upload/CSV today. |
 | Electronic signatures (external provider) | **Manual** (no provider integration) | Typed-name e-signature in the portal with timestamp/IP/text hash is provided. |
 | Certified mail (Lob, etc.) | **Manual** (no provider integration) | The approved PDF is produced; a person mails it and records tracking. |
-| Custom domains for agency websites | **Manual** (not automated) | Every agency website is served at `/a/<workspace-slug>` on the app's own domain. Connecting an agency's own domain is done by the platform operator at the hosting provider (add the domain, route it to that site's path); nothing in the app verifies a domain or issues a certificate. |
+| Custom domains for agency websites | **Automatic** with `VERCEL_API_TOKEN` + `VERCEL_PROJECT_ID` (`VERCEL_TEAM_ID` for a team project); otherwise **manual** | An agency connects a domain it already owns on its Website page; its `/a/<workspace-slug>` address keeps working. With the Vercel variables set, the app adds the domain to the project, shows the DNS records and marks it connected only when Vercel reports it verified and correctly configured. Without them the domain stays "not connected yet" until the platform operator adds it in Vercel and runs `npm run domain:verify -- <domain>`. Buying a domain is not built in. Steps: docs/DEPLOY-VERCEL.md. Tested against a mocked API only. |
 | Specialty reporting agencies (ChexSystems, Early Warning, LexisNexis, Innovis, NCTUE, TeleCheck, Clarity) | **Manual** (no data feed, no integration) | Disputes with these agencies go through the normal pipeline, but nothing is connected to them. See "Specialty reporting agencies" below. |
 | External CRM sync | **Manual** (no sync integration) | Per-client JSON export exists. |
 | Error monitoring (Sentry) | **Not wired** | A PII scrubber is ready (`src/lib/scrub.ts`). |
@@ -70,7 +70,7 @@ Settings → Integrations labels every integration by what happens **in the conf
 | Live credit pulls | Development/test: sandbox with SYNTHETIC data only. Staging/production: manual | Upload the report (PDF, HTML, text, CSV template) or push it through `POST /api/v1/clients/{id}/reports`. Needs the client's FCRA authorization; a person approves every report | Signed partner/reseller agreement and issued API credentials from a report provider; then one adapter file (docs/CREDIT_CONNECT.md) |
 | Certified mail | Manual | Download the approved PDF, mail it, record method + date sent + optional tracking. Stored as `delivery_source = staff_recorded` and shown as "Recorded by staff" | A print-and-mail account (e.g. Lob), API key, sender address, and an integration that sends approved letters and reads delivery events. Only that integration may set `carrier_confirmed` |
 | Payments | Manual | Record payments collected elsewhere on the client's Billing tab (requires the CROA "service already performed" confirmation) | Stripe (or similar) account, API keys, webhook secret, Checkout + webhook integration |
-| SMS | Manual until Twilio is connected (the default) | Text/call from your own phone and log it on the client's Messages tab ("nothing is sent") | A Twilio account with a sending number registered for US messaging and the four variables in “Client updates by text message and email”; each client's own agreement to texts. Two-way texting from the Messages tab is not built: the integration only sends the automatic updates and records replies |
+| SMS | Manual until Twilio is connected (the default) | Text/call from your own phone and log it on the client's Messages tab ("nothing is sent") | A Twilio account with a sending number registered for US messaging and the four variables in “Client updates by text message and email”; each client's own agreement to texts. Two-way texting from the Messages tab is not built: the integration only sends the automatic client updates and the consented lead follow-up texts, and records replies |
 | External e-signature | Manual | Typed-name signature in the portal (name, time, IP, hash of the text shown), or staff record a paper consent | Only if counsel requires a third-party signing service: an account with it and the integration |
 
 ## Leads follow-up and the credit guide: what they need
@@ -79,7 +79,76 @@ Settings → Integrations labels every integration by what happens **in the conf
 | --- | --- | --- | --- |
 | Leads page, enquiry form, tagged links, counts | Yes | Nothing | — |
 | Automatic follow-up email to leads | **No.** With the `log` driver nothing is sent and nothing is recorded as sent; the Leads page says "Email is not connected" | `EMAIL_DRIVER=resend` + `RESEND_API_KEY` + a verified sending domain for `EMAIL_FROM`; the agency's postal address and reply address saved on the Leads page; the switch on. The welcome is sent right after the enquiry; the follow-up and last note need the scheduled job below to be running | **Replies are not read.** They go to the agency's reply address; staff press "They replied" or "Asked to stop". Reading them needs an inbound-email webhook, which does not exist. The From line is `"<Agency name>" <address from EMAIL_FROM>`; the Resend driver, including this, is not verified against the live service. A step whose result was never recorded stays "not confirmed" and is not re-sent |
+| Text follow-up to leads | **No.** Off by default, and nothing is texted or offered on the form until a text service is connected | The lead follow-up switch on, the text switch on (Leads page), `SMS_DRIVER=twilio` with its credentials, and **the lead's own tick** in the separate text-message box on the enquiry form. See “Referral partners and lead text follow-up” | No tick, no text: that lead gets email only. Two texts at most (welcome, follow-up after 3 days). Not verified against live Twilio |
+| Referral partner email sequence | **No.** Off by default; with the `log` driver nothing is sent and nothing is recorded as sent | The switch on (Partners page), the same postal and reply addresses as the lead follow-up, `EMAIL_DRIVER=resend`, and the scheduled job running on business days | **Email only: partners are never texted or called.** Replies and bounces are not read: staff press “They replied”, “Interested”, “Not interested” or “Bounced”. No scraping, bought lists or directory import: the agency adds partners itself. Not verified against live Resend |
 | Credit guide (chat box) | Yes — answers come from the vetted knowledge base by keyword match | Nothing. Optional: `AI_PROVIDER` (same settings as the AI row above) lets a model re-phrase the retrieved entries | With AI on, the question (names, numbers, amounts and addresses masked) is sent to the provider. Output is discarded and the vetted text shown when a pattern rule matches a promise, an unknown number or web address, or a prompt marker; the rules are patterns, not a proof. Tested against a fake provider only |
+
+## Referral partners and lead text follow-up
+
+Code: `src/lib/partner-emails.ts` (wording, timing, the familiarity check), `src/lib/partner-import.ts` (reading a list),
+`src/lib/partner-outreach.ts` (sending, opt-out), `src/lib/partners.ts` (what staff record), `src/lib/lead-texts.ts` and
+`src/lib/lead-outreach.ts` (lead texts), the pages under `/app/partners`, migration `0028_partner_outreach.sql`.
+
+**Who is on the list.** Businesses that can refer clients (real estate agents, loan officers, mortgage brokers, car
+dealerships, tax preparers, property managers), added by the agency itself: one at a time, or as a list pasted or
+uploaded as CSV (a header line with an `email` column; up to 200 rows per import; invalid rows are left out and named;
+an address repeated in the list or already on file is skipped). The person adding them confirms the contacts came from
+public business contact details or the agency's own contacts, and who confirmed it and when is stored on every row.
+Nothing is scraped, bought, looked up or imported from a directory.
+
+**What is sent.** Three plain-text emails per partner: an introduction, a follow-up 4 business days later and a last
+note 9 business days after the introduction, in English or Spanish, with wording per category. They say what the agency
+does (helps consumers review their credit reports and dispute inaccurate information), say plainly that no result, score
+or loan approval can be promised, state nothing about the partner beyond the category and city on the record, and link to
+the agency's published website when there is one. Every email says it is a business solicitation from the agency,
+shows the agency's name and postal address and carries a one-click opt-out link (CAN-SPAM, 15 U.S.C. § 7704). Subject
+lines name the agency and say what the email is. All of it passes the marketing claims guard.
+
+**What has to be true before anything goes out.** An owner or admin switched the sequence on (Partners page; off by
+default); the mailing address and reply address are saved (the same two the lead follow-up uses); email is really
+connected; and the agency's own name does not read as a prohibited claim. Then the scheduled job sends with **no
+approval of each message**: on business days in the workspace's time zone, at most 10 per run and 40 per agency in any 24
+hours, each (partner, step) once. A step is claimed through a unique key before the email is handed over, under a
+per-agency lock that also makes the 24-hour limit exact when runs overlap. A run spends at most about 20 seconds on one
+agency; what is left goes out with the next run. With the two runs a day scheduled in `vercel.json` that is at most 20
+emails a day (one of them in the early morning, US time); schedule more runs during the day to reach the limit.
+
+**When it stops.** The opt-out link (at once, and for good: the database refuses to undo it, to change the address, or
+to add that address to the agency's list again); staff recording a reply, "interested", "not interested" or a bounce; a
+manual pause; and a message the email service refuses (that partner stops until someone presses "Try again", three
+attempts at most). Two refusals in a row mean the sending side is probably broken, so the whole sequence then holds for
+24 hours, or until someone presses "Try again" on one of them, and the owners and admins get an in-app notification
+with the reason: a domain that is not verified stops two partners, not the list. A send whose result was never
+recorded is never repeated.
+
+**Replies and bounces are not read.** A reply goes to the agency's reply address and a bounce shows in the email
+service's own dashboard; neither reaches this app (there is no inbound-email or bounce webhook). Staff record them on
+the partner's page. A mail security scanner that opens the opt-out link counts as an opt-out: it errs towards stopping.
+
+**Optional AI wording** (off by default; 1 credit per email it rewords; introduction and follow-up only). It goes
+through the same protected rewriting as letters (`rewriteSafely`): every sentence that names the agency, the reader or
+the place, or says what the agency does or cannot promise, is hidden from the model and put back unchanged; the model
+is told only the partner's category and place and one line of the agency's own website text. The result must also keep
+its paragraphs, stay under the length cap, link nowhere new, pass the marketing claims guard and say nothing about the
+reader that is not on file ("I saw your recent listing…", "as we discussed", praise, a mutual contact, a track record).
+Otherwise the standard wording is sent and the credit is returned. The footer never reaches the model. Tested against a
+fake provider only.
+
+**Referred by.** A client can be linked to the partner who sent them (client page → Referred by); each partner shows
+how many clients are linked.
+
+**Text follow-up to leads.** Off by default, with its own switch on the Leads page. When it is on and a text service is
+connected, the public enquiry forms (`/start/<slug>` and the agency website) show a second box for text messages:
+unticked, optional and worded on its own. Ticking it stores a consent in `sms_consents` with source `enquiry_form`: the
+exact wording shown, the number, the time, the IP address and the browser. Only such a lead is texted: a welcome text
+and one follow-up three days later, to that number, outside quiet hours, naming the agency and ending with STOP and
+HELP. No tick means email only, and a consent recorded by staff or given in the portal (for file updates) never unlocks
+these texts. STOP withdraws the consent, and the public form cannot switch texts back on for a number that replied STOP.
+Have your attorney review the consent wording, and note that a carrier registration made for account notifications
+(A2P 10DLC) does not cover marketing follow-up: the campaign has to describe this use.
+
+**Not verified.** No partner email has gone through the live Resend service and no lead text through live Twilio from
+this codebase. They are tested against stand-ins, and once through the real drivers with the providers' HTTP mocked.
 
 ## Client updates by text message and email
 
@@ -144,6 +213,14 @@ shared by all workspaces of a deployment, so a reply that matches clients in two
 and is visible only in the database (`sms_inbound` where `org_id` is null); the scheduled job reports how many such
 rows are unreviewed (`unmatchedInboundTexts`) and logs a warning.
 
+### The Get set up page
+
+Owners and admins can follow these steps in the app at `/app/setup` (linked from Settings → Integrations). It reads the
+real configuration, names the environment variables still missing (names only, never values), shows the webhook
+address to paste into Twilio and whether Twilio has reached it, and has "Send a test email to me" and "Send a test
+text to me" buttons that show the provider's own answer. A step is ticked only when its check passes; A2P 10DLC
+registration cannot be checked from the app and is never ticked.
+
 ### Twilio setup
 
 1. Create a Twilio account (twilio.com) and upgrade it from trial; a trial account can only text numbers you verified.
@@ -206,6 +283,12 @@ AI-generated voices, needs the called person's prior express consent, and prior 
 telemarketing. That is a different and stricter consent than the text consent recorded here, and it is out of scope.
 Staff who phone a client log the call by hand on the Messages tab.
 
+Not built, on purpose:
+
+- **Calls of any kind, auto-dialling and voicemail drops.** A dialled, prerecorded or AI-voice call generally needs the called person's prior express consent under the TCPA, in writing when it is marketing, and nothing here records one.
+- **Texts to partners.** A marketing text needs the recipient's prior express written consent, and a business found through public contact details has given none; partners are emailed only and their phone number is kept for the agency's own use.
+- **Texts to anyone else without a recorded consent.** The only automatic texts go to a client who agreed in the portal (file updates) or a lead who ticked the text box on the enquiry form (follow-up), at the number that consent names, until they reply STOP.
+
 ## Scheduled jobs
 
 One code path (`src/lib/automation/jobs.ts`) runs the automation sweeps for every active organization and cleans expired
@@ -228,7 +311,7 @@ Call it every 15–60 minutes from your host's scheduler.
 AI wording is metered so the platform operator can charge for it. Nothing about AI is free.
 
 - **Prices** (one place: `AI_COSTS` in `src/lib/ai/credits.ts`): letter wording suggestion 5, client progress note polish 2,
-  credit guide answer worded by AI 1. These are credits, not money; what a credit costs is the operator's decision and is
+  credit guide answer worded by AI 1, partner email reworded by AI 1. These are credits, not money; what a credit costs is the operator's decision and is
   not stored in the app.
 - **When credits are taken.** At the moment the model is called, and only kept if an AI result passes the safety checks and
   is returned. If the provider fails, or its output is discarded, the same amount is written back as a `refund` row that
@@ -244,6 +327,17 @@ AI wording is metered so the platform operator can charge for it. Nothing about 
   migration 0013) and shown again from the letter page, so a reload or a lost response does not lose it and asking again for
   the same version is not charged again. It is not shown once the letter has a newer version; that is not refunded. The
   polished progress note is **not** stored: if its response is lost, pressing the button again is charged again.
+- **What a letter suggestion is.** Tailoring (`src/lib/letters/tailor.ts`): the model rewords only the connective wording
+  of a letter (salutation, linking sentences, closing lines, sign-off) in a voice picked by a seed worked out from the
+  client's id, so a client's letters keep one voice. Everything else is replaced by markers before it leaves the server:
+  the standing protected-rewriting rules, plus the client's name and address, the recipient, the creditor, every sentence
+  of the reason, every reported status and every enclosure line. The instruction to the model is made of fixed phrases. The
+  result is discarded, and not charged, unless the protected content is unchanged, the claims guard passes, the wording
+  makes no demand, legal claim, threat, deadline, promise or new request, and a dispute letter still passes the
+  specificity check.
+- **Automatic tailoring is an agency setting, off by default** ("Tailor wording automatically when a letter is drafted",
+  AI assistant → AI credits, stored as `settings.letter_auto_tailor`, audited). On, each drafted letter is tailored once at
+  the normal price and a safe result is saved as a new draft version marked as AI wording. Approval by a person is unchanged.
 - **With no credits or no provider** the app behaves exactly as it does without AI: the deterministic text is used. Staff see
   "AI wording is off: no AI credits left" or "…no AI provider connected". Portal clients see the normal vetted answer and
   nothing about credits.

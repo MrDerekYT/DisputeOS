@@ -110,6 +110,9 @@ checks.
 | `TWILIO_AUTH_TOKEN` | unset | With `SMS_DRIVER=twilio`: the primary Auth Token. Also verifies Twilio's webhooks | **Yes** |
 | `TWILIO_MESSAGING_SERVICE_SID` | unset | With `SMS_DRIVER=twilio`: `MG…` of the Messaging Service (recommended) | No |
 | `TWILIO_FROM_NUMBER` | unset | Only without a Messaging Service: the sending number as `+15551234567` | No |
+| `VERCEL_API_TOKEN` | unset | Lets agencies connect their own domain without you. See [Custom domains for agencies](#custom-domains-for-agencies) | **Yes** |
+| `VERCEL_PROJECT_ID` | unset | With `VERCEL_API_TOKEN`: this project's ID (Project Settings → General) | No |
+| `VERCEL_TEAM_ID` | unset | With `VERCEL_API_TOKEN`, when the project belongs to a team: the team's ID (Team Settings → General) | No |
 
 ### What production refuses to start with
 
@@ -264,6 +267,83 @@ jobs route. A very large workspace count could outgrow one 60-second jobs run; t
 ### Connections
 Each function instance holds at most 3 database connections (`DB_POOL_MAX`) and releases idle ones after 5 seconds.
 
+## The platform's own domain
+
+To serve the app from your own domain (for example `disputeos.com`) instead of `<project>.vercel.app`:
+
+1. Vercel → the project → Settings → Domains → add the domain, and create the DNS records Vercel shows at your
+   registrar. Add both `disputeos.com` and `www.disputeos.com` and let Vercel redirect one to the other.
+2. Set `APP_URL` to the address people should use (`https://disputeos.com`, no trailing slash), for Production.
+3. Redeploy. Environment variables only reach a new deployment.
+
+Do the three steps together. `APP_URL` is what tells the app which host is the platform: its host (with or without
+`www.`), `*.vercel.app` deployment addresses and `localhost` are the platform, and **any other host is treated as an
+agency's domain**. So a new domain that is in Vercel but not yet in `APP_URL` shows "page not found" at `/` and sends
+`/login` to the old address until you finish step 2 and 3. The `<project>.vercel.app` address keeps working.
+
+What else follows `APP_URL`, and must be updated when it changes:
+
+- **Twilio webhook.** The inbound-message and status address is `APP_URL` + `/api/webhooks/twilio`, and Twilio's
+  signature is checked against exactly that address. Change it in the Twilio Console (Messaging Service → Integration,
+  or the number's Messaging settings) to the new domain, or text replies (including STOP) are refused.
+- **Links in email and text messages**: invitations, password resets, unsubscribe links and the portal link in client
+  updates are written with `APP_URL`. Links already sent keep the old host, which still works as long as the old
+  address stays on the project.
+- **Canonical addresses, the sitemap and robots.txt** of the product's own pages and of agency sites without their
+  own domain.
+- **Sessions are per host.** Nobody is signed out on the old address, but signing in on the new one is a new session.
+- Email sending is separate: the sending domain is whatever you verified in Resend (`EMAIL_FROM`), not `APP_URL`.
+
+## Custom domains for agencies
+
+An agency can use a domain it already owns for its public website (`https://www.youragency.com/`), its enquiry form
+(`/start`) and its clients' sign-in (`/portal/login`). Its address on the platform (`/a/<workspace>`) keeps working.
+Staff tools stay on the platform: `/app`, `/login`, `/signup` and every other path on an agency's domain redirect to
+`APP_URL`. Buying a domain is not built in, and email is not sent from the agency's domain.
+
+A domain serves an agency only when its row in `agency_domains` is `verified`. That happens in two ways.
+
+### Automatic (recommended)
+
+Set `VERCEL_API_TOKEN` (Account Settings → Tokens; scope it to the team that owns the project) and
+`VERCEL_PROJECT_ID`, plus `VERCEL_TEAM_ID` when the project belongs to a team, then redeploy. Settings → Integrations
+then lists custom domains as connected. From then on, on the agency's **Website** page:
+
+1. The agency types its domain and presses **Connect domain**. The app adds it to this Vercel project
+   (`POST /v10/projects/{id}/domains`).
+2. The page shows the DNS records to create at the registrar, using the values Vercel recommends for this project:
+   an `A` record on `@` for a root domain (Vercel's general value is `76.76.21.21`), or a `CNAME` for a subdomain such
+   as `www` (general value `cname.vercel-dns.com`). If the domain is already in use on another Vercel account, Vercel
+   also asks for a `TXT` record on `_vercel` to prove ownership, and the page shows it.
+3. **Check now** asks Vercel again. The domain is marked connected only when Vercel reports it verified (ownership)
+   and not misconfigured (DNS points at Vercel and a certificate can be issued). Vercel issues the certificate itself.
+4. **Remove domain** removes it from the Vercel project too.
+
+One agency cannot connect a domain, or the `www` twin of a domain, that another agency has. A domain that is already
+on the project but was not added by the app (for example your own) is refused. Only the exact name is connected; the
+page tells the agency to forward the other form (`youragency.com` → `www.youragency.com`) at its registrar.
+
+### By hand (no API token)
+
+Without the token the agency can still save its domain; the page says plainly that it is not live until you add it.
+
+1. The agency saves the domain on its Website page (it shows as "Not connected yet").
+2. You add it in Vercel → the project → Settings → Domains, and send the agency the DNS records Vercel shows.
+3. When Vercel shows the domain as valid, run, with the production `DATABASE_URL` in your environment:
+
+   ```
+   npm run domain:verify -- www.youragency.com
+   ```
+
+   It requests `https://www.youragency.com/api/domain-check` and marks the domain verified only if this deployment
+   answers there for that domain over a valid certificate. Otherwise it says what it saw and changes nothing.
+4. To disconnect: the agency presses **Remove domain**, and you remove the domain in Vercel.
+
+Running servers pick up a newly verified or removed domain within a minute.
+
+Not verified here: the number of domains a project may hold on your Vercel plan (see Vercel's limits page), and
+wildcard domains, which this feature does not use.
+
 ## What has not been verified
 
 Verified locally: all 14 migrations apply as a non-superuser role with `CREATEROLE`/`CREATEDB` on a fresh PostgreSQL 16
@@ -283,5 +363,8 @@ Not verified, because it needs the real services:
   the cron frequency allowed on your plan, and that multi-line `DATABASE_CA_CERT` survives the dashboard unchanged
   (a single line with `\n` in place of line breaks is also accepted).
 - Resend delivery.
+- Custom domains: the Vercel domains API (adding, verifying, removing) is implemented to its documentation and tested
+  against a mocked API only; routing by `Host` is tested as a pure function and against the database, not behind
+  Vercel's edge with a real domain. Check the first agency domain by hand after connecting it.
 - Twilio: sending, delivery reports and the inbound webhook. Tested against a mocked API and Twilio's documented
   signature example only. Also not verified: that your Vercel plan accepts two cron entries for the same path.

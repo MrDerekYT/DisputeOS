@@ -9,6 +9,8 @@ import { requireStaff } from '@/lib/auth/context';
 import { fmtDate } from '@/lib/util';
 import { analyzeReplyAction } from '../disputes/actions';
 import { setPortalGuideAiAction } from '../settings/actions';
+import { autoTailorOn } from '@/lib/letters/tailor-load';
+import { LetterTailoringSetting } from './letter-tailoring';
 
 export const metadata: Metadata = { title: 'AI assistant' };
 
@@ -35,8 +37,8 @@ export default async function AssistantPage() {
             (select count(*)::int from public.findings f where f.client_id = c.id and f.status = 'suggested') as findings
        from public.clients c where c.status <> 'cancelled' order by c.last_activity_at desc limit 12`));
   const manage = ctx.can('settings:manage');
-  const { balance, ledger, portalAi } = await ctx.tx(async (db) => ({
-    balance: await getBalance(ctx.orgId, db), ledger: manage ? await recentLedger(db, ctx.orgId, 20) : [],
+  const { balance, ledger, portalAi, autoTailor } = await ctx.tx(async (db) => ({
+    balance: await getBalance(ctx.orgId, db), ledger: manage ? await recentLedger(db, ctx.orgId, 20) : [], autoTailor: await autoTailorOn(db, ctx.orgId),
     portalAi: (await db.row<{ on: boolean | null }>("select settings->>'portal_ai_guide' = 'true' as on from public.organizations where id = $1", [ctx.orgId]))?.on === true,
   }));
   const prices = Object.entries(AI_COSTS) as [AiFeature, number][];
@@ -73,6 +75,7 @@ export default async function AssistantPage() {
               <form action={setPortalGuideAiAction}><input type="hidden" name="on" value={portalAi ? 'false' : 'true'} />
                 <button type="submit" className="btn-secondary btn-sm">{portalAi ? 'Turn off AI wording in the portal' : `Turn on (up to ${PORTAL_GUIDE_DAILY_CAP * AI_COSTS.guide_answer} credits per client in 24 hours)`}</button></form>
             </div>)}
+          {manage && <LetterTailoringSetting on={autoTailor} />}
           {manage && (
             <div className="mt-5 border-t border-line pt-4">
               <h3 className="mb-2 text-sm font-semibold">Last 20 entries</h3>

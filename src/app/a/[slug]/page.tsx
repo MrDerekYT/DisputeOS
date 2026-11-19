@@ -4,16 +4,18 @@ import { notFound } from 'next/navigation';
 import { CheckCircle2 } from 'lucide-react';
 import { ActionForm } from '@/components/forms';
 import { LeadFields } from '@/components/lead-form';
+import { leadTextsOfferedBySlug } from '@/lib/lead-outreach';
 import { JsonLd } from '@/components/marketing-site';
 import { InlineMessage } from '@/components/portal-kit';
 import { OrgMark } from '@/components/ui';
-import { publicSiteBySlug, siteLd, sitePath } from '@/lib/agency-site';
+import { publicSiteBySlug, siteHome, siteLd, sitePath } from '@/lib/agency-site';
 import { siteCopy, type SiteKey } from '@/lib/agency-site-copy';
 import { brandCss } from '@/lib/brand';
 import { portalLoginPath } from '@/lib/org-brand';
 import { fill, parseLang, qs, tr } from '@/lib/portal-i18n';
 import { PRODUCT } from '@/lib/product';
-import { abs, faqLd, siteUrl } from '@/lib/site';
+import { resolveSlugParam } from '@/lib/request-host';
+import { faqLd } from '@/lib/site';
 import { submitSiteLeadAction } from './actions';
 
 type Props = { params: Promise<{ slug: string }>; searchParams: Promise<{ lang?: string; sent?: string }> };
@@ -23,16 +25,17 @@ const H2 = 'display text-[1.625rem] sm:text-[2rem]';
 
 /** Title, description, canonical address and link preview come from the agency's own content; a site that is not published is not indexed. */
 export async function generateMetadata({ params, searchParams }: Props): Promise<Metadata> {
-  const site = await publicSiteBySlug((await params).slug);
+  const site = await publicSiteBySlug((await resolveSlugParam((await params).slug)).slug);
   if (!site) return { title: 'Page not found', robots: { index: false } };
   const lang = parseLang((await searchParams).lang);
   const { brand, content: c } = site;
   const title = c.headline ? `${brand.name}: ${c.headline}` : brand.name;
   const description = c.intro || fill(siteCopy(lang)('description'), { org: brand.name });
-  const en = abs(sitePath(brand.slug));
+  // The agency's own verified domain when it has one, whichever address this request came in on.
+  const en = siteHome(site);
   const url = lang === 'es' ? `${en}?lang=es` : en;
   return {
-    metadataBase: new URL(siteUrl()),
+    metadataBase: new URL(en),
     title: { absolute: title },
     description,
     alternates: { canonical: url, languages: { en, es: `${en}?lang=es` } },
@@ -46,7 +49,9 @@ export async function generateMetadata({ params, searchParams }: Props): Promise
  * and its enquiry form. Server-rendered; the menu, the questions and the form all work without JavaScript.
  */
 export default async function AgencySitePage({ params, searchParams }: Props) {
-  const site = await publicSiteBySlug((await params).slug);
+  // On an agency's own domain the middleware rewrites "/" here with the internal slug "_host" (src/lib/request-host.ts).
+  const { slug, onDomain } = await resolveSlugParam((await params).slug);
+  const site = await publicSiteBySlug(slug);
   if (!site) notFound();
   const sp = await searchParams;
   const lang = parseLang(sp.lang);
@@ -55,8 +60,8 @@ export default async function AgencySitePage({ params, searchParams }: Props) {
   const t = tr(lang);
   const css = brandCss(brand.color);
   const other = lang === 'es' ? 'en' : 'es';
-  const here = sitePath(brand.slug);
-  const signIn = `${portalLoginPath(brand.slug)}${lang === 'es' ? '&lang=es' : ''}`;
+  const here = onDomain ? '/' : sitePath(brand.slug);
+  const signIn = onDomain ? `/portal/login${qs({ lang: lang === 'es' && 'es' })}` : `${portalLoginPath(brand.slug)}${lang === 'es' ? '&lang=es' : ''}`;
   const contact: [SiteKey, string, string | null][] = [
     ['phone', c.phone, c.phone ? `tel:${c.phone.replace(/[^0-9+]/g, '')}` : null], ['email', c.email, c.email ? `mailto:${c.email}` : null], ['hours', c.hours, null], ['area', c.area, null],
   ];
@@ -174,8 +179,8 @@ export default async function AgencySitePage({ params, searchParams }: Props) {
                   <InlineMessage tone="ok" role="status" icon={<CheckCircle2 size={18} />} className="mt-4">{t('lead_thanksNote')}</InlineMessage>
                 </div>
               ) : (
-                <ActionForm action={submitSiteLeadAction} className="space-y-4">
-                  <LeadFields slug={brand.slug} orgName={brand.name} lang={lang} />
+                <ActionForm action={submitSiteLeadAction} className="space-y-4" onSuccessHref={onDomain ? `/?sent=1${lang === 'es' ? '&lang=es' : ''}#contact` : undefined}>
+                  <LeadFields slug={brand.slug} orgName={brand.name} lang={lang} offerTexts={await leadTextsOfferedBySlug(brand.slug)} />
                 </ActionForm>
               )}
             </div>

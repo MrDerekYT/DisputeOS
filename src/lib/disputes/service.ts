@@ -12,7 +12,7 @@ import {
 import { parseAgencyItem, specialtyAgency, type AgencyItem } from '../credit/agencies';
 import { findBlockedClaims } from '../compliance/claims';
 import type { Evidence } from '../reports/analysis';
-import { draftReason } from './reasons';
+import { draftReason, reasonIsClientsOwn } from './reasons';
 import { businessToday, checkSentOn } from '../letters/service';
 import { queueClientUpdate } from '../client-updates/service';
 
@@ -23,6 +23,8 @@ export const CONFIRMED_ACCURATE_STOP = 'The client confirmed this item is report
 export interface NewDispute {
   clientId: string; tradelineId?: string | null; findingId?: string | null; category: string; reason: string; fields?: string[];
   bureau?: Bureau | null; recipientName?: string; assignedTo?: string | null; parentId?: string | null; round?: number;
+  /** What the dispute is about when it is not an account on a report (for example “Personal information”). */
+  itemLabel?: string;
 }
 
 export async function createDispute(db: Db, actor: DActor, d: NewDispute): Promise<string> {
@@ -36,7 +38,7 @@ export async function createDispute(db: Db, actor: DActor, d: NewDispute): Promi
   const client = await db.row<{ id: string; assigned_to: string | null }>('select id, assigned_to from public.clients where id = $1', [d.clientId]);
   if (!client) throw new DisputeError('Client not found.');
 
-  let label = '';
+  let label = d.itemLabel?.trim().slice(0, 120) ?? '';
   let bureau: Bureau | null = d.bureau ?? null;
   let recipient = d.recipientName?.trim() ?? '';
   if (d.tradelineId) {
@@ -255,6 +257,8 @@ export async function draftDisputesFromFindings(db: Db, actor: DActor, clientId:
     if (!category || !cat) { skip('This kind of finding needs a dispute type chosen by hand.'); continue; }
     const tl = tradelines.find((t) => f.tradeline_ids.includes(t.id));
     if (!tl) { skip('No account from an approved report is linked to it — start this one by hand.'); continue; }
+    // No reason is drafted where it can only be the client's own account (a debt a collector asks about, personal information).
+    if (reasonIsClientsOwn(category)) { skip('This kind of dispute needs the client’s own words for its reason. Start it by hand.'); continue; }
     const reason = draftReason({ category, creditor: tl.creditor_name, last4: tl.account_last4, bureau: tl.bureau, evidence: f.evidence });
     if (findBlockedClaims(reason).length) { skip('The drafted wording needs a person to write it.'); continue; }
     try {

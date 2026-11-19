@@ -10,6 +10,14 @@ export interface Email {
   replyTo?: string;
   /** Display name for the From line (the agency that is writing). The sending address stays the platform's. */
   fromName?: string;
+  /** Extra headers, for example List-Unsubscribe on an email a recipient must be able to stop with one click. */
+  headers?: Record<string, string>;
+  /**
+   * 'outreach': unsolicited business email (the partner sequence). It leaves through OUTREACH_EMAIL_FROM and
+   * OUTREACH_RESEND_API_KEY when those are set, so its reputation is kept apart from the address that carries password
+   * resets, invitations and client updates.
+   */
+  stream?: 'outreach';
 }
 
 /**
@@ -53,10 +61,13 @@ export async function sendEmail(mail: Email): Promise<SendResult> {
   const env = getEnv();
   if (env.EMAIL_DRIVER === 'resend') {
     try {
+      const outreach = mail.stream === 'outreach';
+      const key = (outreach && env.OUTREACH_RESEND_API_KEY) || env.RESEND_API_KEY;
+      const from = (outreach && env.OUTREACH_EMAIL_FROM) || env.EMAIL_FROM;
       const res = await fetch('https://api.resend.com/emails', {
         method: 'POST',
-        headers: { authorization: `Bearer ${env.RESEND_API_KEY}`, 'content-type': 'application/json' },
-        body: JSON.stringify({ from: fromHeader(env.EMAIL_FROM, mail.fromName), to: [mail.to], subject: mail.subject, text: mail.text, ...(mail.replyTo ? { reply_to: mail.replyTo } : {}) }),
+        headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ from: fromHeader(from, mail.fromName), to: [mail.to], subject: mail.subject, text: mail.text, ...(mail.replyTo ? { reply_to: mail.replyTo } : {}), ...(mail.headers ? { headers: mail.headers } : {}) }),
         signal: AbortSignal.timeout(15_000),
       });
       const body = (await res.json().catch(() => ({}))) as { id?: string; message?: string };
