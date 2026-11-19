@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { currentSession } from '@/lib/auth/context';
+import { apiSession } from '@/lib/auth/context';
 import { withTenant } from '@/lib/db';
 import { currentBody } from '@/lib/letters/service';
 import { renderPdf } from '@/lib/letters/pdf';
@@ -11,7 +11,7 @@ export const dynamic = 'force-dynamic';
 /** PDF of a letter's current version. Row-level security decides visibility: staff see their org's letters, clients only approved/sent letters of their own. */
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const s = await currentSession();
+  const s = await apiSession();
   if (!s || !isUuid(id)) return new NextResponse('Not found', { status: 404 });
   const wantVersion = Number(new URL(req.url).searchParams.get('version')) || null;
 

@@ -1,5 +1,7 @@
 import type { Db } from '../db';
+import { getEnv } from '../env';
 import { UserError } from '../errors';
+import { dayInZone } from '../util';
 import { audit } from '../audit';
 import { findBlockedClaims } from '../compliance/claims';
 import { logEvent } from '../crm';
@@ -116,13 +118,25 @@ export async function setLetterStatus(db: Db, actor: LActor, letterId: string, t
   await audit(db, { orgId: actor.orgId, actorId: actor.userId, action: `letter.${to}`, entityType: 'letter', entityId: letterId, ip: actor.meta?.ip, meta: { version: cur?.version ?? 0 } });
 }
 
+/**
+ * Today's calendar date (YYYY-MM-DD) where the agency works (APP_TIMEZONE, default America/New_York) — not the UTC
+ * date, which is already "tomorrow" every US evening. The one definition of "today" on the server: sent-on dates, task
+ * due days (dueDay) and the analytics overdue count all use this zone.
+ */
+export function businessToday(now = new Date(), tz: string = getEnv().APP_TIMEZONE): string {
+  return dayInZone(tz, now);
+}
+
 /** Records that a person mailed/delivered an approved letter. The app never sends correspondence by itself. */
 /** The date a letter was sent, as typed by staff: a real calendar date, not in the future and not absurdly old. */
 export function checkSentOn(sentOn: string | null | undefined, today = new Date()): string {
-  const t = today.toISOString().slice(0, 10);
+  const t = businessToday(today);
   if (!sentOn) return t;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(sentOn) || Number.isNaN(new Date(`${sentOn}T00:00:00Z`).getTime())) throw new LetterError('Enter the date it was sent as a valid date.');
-  if (sentOn > t) throw new LetterError('The sent date cannot be in the future.');
+  // "Future" is judged against the later of the agency's date and the UTC date, so nobody west or east of the
+  // configured zone is refused their own today.
+  const utc = today.toISOString().slice(0, 10);
+  if (sentOn > (utc > t ? utc : t)) throw new LetterError('The sent date cannot be in the future.');
   if (new Date(`${t}T00:00:00Z`).getTime() - new Date(`${sentOn}T00:00:00Z`).getTime() > 366 * 86_400_000) throw new LetterError('The sent date is more than a year ago. Check it.');
   return sentOn;
 }

@@ -63,6 +63,27 @@ into one codebase. Both branches are untouched. See `docs/ENGINEERING_ASSESSMENT
 - **Fixed:** the "Record submission" form was offered before a letter was approved or consents were recorded.
 - New browser test `e2e/dispute-workflow.cjs` (11 steps, synthetic data) and 19 more automated tests (248 total).
 
+### Client plan, monitoring link, read-as-report and audit fixes
+- **Client plan:** a short action plan on the client profile, built only from that client's own records (reports, consents,
+  findings, disputes, reported balances and limits). No AI and no score or outcome predictions.
+- **Monitoring referral link:** an agency can set an https link to a paid credit-monitoring service in Settings; clients see it
+  in the portal as a paid option, with the note that the agency may earn a commission. It is only a link — nothing is imported.
+- **Read an uploaded document as a report:** a credit-report file already in the client's vault (for example one the client
+  uploaded in the portal) can be read as a report without uploading it again. It goes through the same review and approval.
+- **Audit fixes:**
+  - One definition of "today": `APP_TIMEZONE` (default `America/New_York`) now decides sent-on dates, the "Date sent" default
+    on the dispute and letter pages, task Overdue/Today grouping and the analytics overdue count. A sent date that is not in
+    the past is recorded as now, never as a future time.
+  - `x-forwarded-for` is read from the right (`TRUSTED_PROXY_HOPS`); staging/production refuse the `log` email driver;
+    `/api/health` probe; error pages for the app and the portal.
+  - A specialist's ordinary action no longer fails when it fires an automation (migration `0010`). The new insert policy is
+    limited to the specialist's own organization's automations, undecided runs and the two states the engine writes.
+    A specialist can still, at the database level, log a pending run that a manager must approve — approval remains the gate.
+  - Refusals after a redirect (Team page, restoring a letter version) use fixed messages chosen by a short code; text from
+    the URL is no longer shown. `?page=` on Disputes and Letters is limited to a whole number from 1 to 100,000.
+  - Portal messages reach clients in their saved language; changing the language confirms in the new one.
+- 302 automated tests in 21 files.
+
 ### Finishing pass
 - **Enquiry form for new leads:** each agency gets a public, branded form at `/start/<slug>` (link in Settings). A submission becomes
   a lead with a follow-up task and appears under "New leads to contact" on the dashboard. Contact details only; consent to be

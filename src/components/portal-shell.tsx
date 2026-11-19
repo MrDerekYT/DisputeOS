@@ -23,7 +23,7 @@ export function PortalShell({ lang, orgName, name, children }: { lang: Lang; org
     { href: '/portal/profile', label: t('profile'), short: t('n_profile'), icon: 'profile' },
   ];
   return (
-    <div className="min-h-screen">
+    <div className="min-h-screen" lang={lang}>
       <header className="no-print sticky top-0 z-30 border-b border-line bg-canvas/90 backdrop-blur">
         <div className="mx-auto flex max-w-5xl items-center justify-between gap-3 px-4 py-3 sm:px-6">
           <Link href="/portal" className="min-w-0" aria-label={`${orgName} — ${t('home')}`}><OrgMark name={orgName} /></Link>

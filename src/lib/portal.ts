@@ -19,3 +19,9 @@ export async function specialistFirstName(clientId: string): Promise<string | nu
   const r = await withSystem((db) => db.row<{ n: string }>("select split_part(coalesce(nullif(u.full_name, ''), u.email), ' ', 1) as n from public.clients c join public.users u on u.id = c.assigned_to where c.id = $1", [clientId]));
   return r?.n ?? null;
 }
+
+/** The portal language of a signed-in client, for the pages they see outside the portal frame (two-step verification). */
+export async function portalLangForUser(userId: string): Promise<Lang> {
+  const r = await withSystem((db) => db.row<{ l: string }>('select preferred_language as l from public.clients where portal_user_id = $1', [userId]));
+  return r?.l === 'es' ? 'es' : 'en';
+}

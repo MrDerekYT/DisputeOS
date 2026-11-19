@@ -21,10 +21,11 @@ describe('integration status reflects the configured environment', () => {
     expect(s.reports!.status).toBe('dev_only');
     expect(s.reports!.detail).toMatch(/SYNTHETIC/);
     for (const k of ['mail', 'payments', 'sms', 'esign']) expect(s[k]!.status, k).toBe('manual');
+    expect(s.connect).toMatchObject({ status: 'dev_only', verified: false });
   });
 
   it('in production, nothing is presented as connected: all five are manual, with a manual path and the exact dependency', () => {
-    useEnv({ APP_ENV: 'production', APP_URL: 'https://app.example.test', DATABASE_URL: 'postgres://x', PII_ENCRYPTION_KEY: randomBytes(32).toString('base64'), REQUIRE_STAFF_MFA: 'true' });
+    useEnv({ APP_ENV: 'production', APP_URL: 'https://app.example.test', DATABASE_URL: 'postgres://x', PII_ENCRYPTION_KEY: randomBytes(32).toString('base64'), REQUIRE_STAFF_MFA: 'true', EMAIL_DRIVER: 'resend', RESEND_API_KEY: 're_test_key' });
     const s = byKey();
     for (const k of PILOT_FIVE) {
       expect(s[k]!.status, k).toBe('manual');
@@ -33,7 +34,10 @@ describe('integration status reflects the configured environment', () => {
       expect(s[k]!.needs, k).toMatch(/\S{3}/);
     }
     expect(s.reports!.detail).toMatch(/switched off/);
-    expect(integrationStatus().filter((i) => i.status === 'active').map((i) => i.key).sort()).toEqual(['api', 'connect', 'db', 'storage']);
+    // Credit Connect has no live provider: it must not read as active or verified anywhere.
+    expect(s.connect).toMatchObject({ status: 'manual', verified: false });
+    expect(s.connect!.manualPath).toMatch(/\S{3}/);
+    expect(integrationStatus().filter((i) => i.status === 'active').map((i) => i.key).sort()).toEqual(['api', 'db', 'email', 'storage']);
   });
 
   it('email is only "active" with the driver and a key; otherwise it says nothing is delivered', () => {

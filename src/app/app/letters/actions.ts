@@ -2,6 +2,7 @@
 
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
+import { refusalCode } from '@/lib/refusals';
 import { z } from 'zod';
 import type { ActionState } from '@/components/forms';
 import { parseForm, run, UserError, zBool, zDate, zOpt, zText, zUuid } from '@/lib/action';
@@ -69,12 +70,19 @@ export async function markSentAction(_: ActionState, fd: FormData): Promise<Acti
 export async function restoreVersionAction(fd: FormData) {
   const ctx = await requireStaff('letters:write');
   const d = parseForm(z.object({ id: zUuid, version: z.coerce.number().int().min(1) }), fd);
-  await ctx.tx(async (db) => {
-    const v = await db.row<{ body: string }>('select body from public.letter_versions where letter_id = $1 and version = $2', [d.id, d.version]);
-    if (!v) throw new UserError('Version not found.');
-    await saveVersion(db, actorOf(ctx), d.id, v.body, 'manual_edit', `Restored version ${d.version}`);
-  });
+  let error = '';
+  try {
+    await ctx.tx(async (db) => {
+      const v = await db.row<{ body: string }>('select body from public.letter_versions where letter_id = $1 and version = $2', [d.id, d.version]);
+      if (!v) throw new UserError('Version not found.');
+      await saveVersion(db, actorOf(ctx), d.id, v.body, 'manual_edit', `Restored version ${d.version}`);
+    });
+  } catch (e) {
+    if (!(e instanceof UserError)) throw e;
+    error = e.message;
+  }
   revalidatePath(`/app/letters/${d.id}`);
+  if (error) redirect(`/app/letters/${d.id}?error=${refusalCode(error)}`);
 }
 
 /** Names that must never be editable by the model for this letter: the client, the recipient and the creditor. */

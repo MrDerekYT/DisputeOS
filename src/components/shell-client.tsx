@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Fragment, useEffect, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   BarChart3, Bell, CheckSquare, CreditCard, FileText, Gavel, Home, Inbox, Menu, Moon, ScrollText, Settings, Sparkles, Sun, Users, UsersRound, X, Zap,
 } from 'lucide-react';
@@ -69,23 +69,40 @@ export function MobileDrawer({ items, children }: { items: NavItem[]; children?:
   const [open, setOpen] = useState(false);
   const path = usePathname();
   useEffect(() => setOpen(false), [path]);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const panel = useRef<HTMLDivElement>(null);
+  const wasOpen = useRef(false);
   useEffect(() => {
     document.body.style.overflow = open ? 'hidden' : '';
-    const esc = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false);
-    window.addEventListener('keydown', esc);
-    return () => window.removeEventListener('keydown', esc);
+    // Hand focus back to the menu button when the drawer closes (it moves in via autoFocus on open).
+    if (!open && wasOpen.current) trigger.current?.focus();
+    wasOpen.current = open;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+      if (!open || e.key !== 'Tab' || !panel.current) return;
+      // Keep Tab inside the open drawer.
+      const els = Array.from(panel.current.querySelectorAll<HTMLElement>('a[href], button:not([disabled]), input, select, textarea'));
+      const first = els[0], last = els[els.length - 1];
+      if (!first || !last) return;
+      const active = document.activeElement;
+      if (!panel.current.contains(active)) { e.preventDefault(); first.focus(); }
+      else if (e.shiftKey && active === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && active === last) { e.preventDefault(); first.focus(); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
   }, [open]);
   return (
     <>
-      <button type="button" className="btn-ghost !px-2 lg:hidden" aria-label="Open menu" aria-expanded={open} onClick={() => setOpen(true)}>
+      <button ref={trigger} type="button" className="btn-ghost !px-2 lg:hidden" aria-label="Open menu" aria-expanded={open} onClick={() => setOpen(true)}>
         <Menu size={22} />
       </button>
       {open && (
         <div className="fixed inset-0 z-50 lg:hidden" role="dialog" aria-modal="true" aria-label="Menu">
-          <button type="button" className="absolute inset-0 bg-black/40" aria-label="Close menu" onClick={() => setOpen(false)} />
-          <div className="absolute inset-y-0 left-0 flex w-72 max-w-[85%] animate-rise flex-col bg-surface p-4 shadow-pop">
+          <button type="button" tabIndex={-1} className="absolute inset-0 bg-black/40" aria-label="Close menu" onClick={() => setOpen(false)} />
+          <div ref={panel} className="absolute inset-y-0 left-0 flex w-72 max-w-[85%] animate-rise flex-col bg-surface p-4 shadow-pop">
             <div className="mb-3 flex justify-end">
-              <button type="button" className="btn-ghost !px-2" aria-label="Close menu" onClick={() => setOpen(false)}><X size={20} /></button>
+              <button type="button" autoFocus className="btn-ghost !px-2" aria-label="Close menu" onClick={() => setOpen(false)}><X size={20} /></button>
             </div>
             <div className="flex-1 overflow-y-auto"><NavLinks items={items} onNavigate={() => setOpen(false)} /></div>
             {children}

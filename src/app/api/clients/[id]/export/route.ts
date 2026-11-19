@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { audit } from '@/lib/audit';
-import { currentSession } from '@/lib/auth/context';
+import { apiSession } from '@/lib/auth/context';
 import { withTenant } from '@/lib/db';
 import { can } from '@/lib/rbac';
 import { isUuid } from '@/lib/util';
@@ -13,7 +13,7 @@ export const dynamic = 'force-dynamic';
  */
 export async function GET(_: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const s = await currentSession();
+  const s = await apiSession();
   if (!s || !isUuid(id) || !can(s.role, 'clients:delete')) return new NextResponse('Not found', { status: 404 });
   const out = await withTenant(s.userId, async (db) => {
     const client = await db.row('select id, full_name, email, phone, preferred_language, status, stage, source, address, ssn_last4, tags, goals, created_at from public.clients where id = $1', [id]);

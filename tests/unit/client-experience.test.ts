@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { findBlockedClaims } from '@/lib/compliance/claims';
-import { CLIENT_VISIBLE_STATUSES, tr, type PortalKey } from '@/lib/portal-i18n';
+import { CONSENT_DOCS } from '@/lib/compliance/disclosures';
+import { DOC_KINDS } from '@/lib/crm';
+import { LEAD_GOALS } from '@/lib/leads';
+import { CLIENT_VISIBLE_STATUSES, fill, parseLang, portalMessage, qs, tr, type PortalKey } from '@/lib/portal-i18n';
 import { nextStep } from '@/lib/portal-next-step';
 import { PRODUCT, wordmarkParts } from '@/lib/product';
 import { fmtDate, relTime, relTimeIn } from '@/lib/util';
@@ -72,5 +75,65 @@ describe('dates in the client’s language', () => {
     expect(relTime('2026-03-10T12:00:00.400Z', now)).toBe('just now');
     expect(relTime('2026-03-10T11:59:30Z', now)).toBe('just now');
     expect(relTime('2026-03-10T11:57:00Z', now)).toBe('3m ago');
+  });
+});
+
+describe('client-facing messages follow the client’s language', () => {
+  it('translates the messages shared server code produces, taken from the real sources', async () => {
+    const { passwordProblem } = await import('@/lib/auth/password');
+    const { readUpload, UploadError } = await import('@/lib/upload');
+    const uploadMessage = async (file: File | null) => {
+      try { await readUpload(file, ['application/pdf', 'image/png', 'image/jpeg']); } catch (e) { if (e instanceof UploadError) return e.message; throw e; }
+      throw new Error('expected the upload to be refused');
+    };
+    const sources = [
+      passwordProblem('short')!, passwordProblem('aaaaaaaaaaaa')!, passwordProblem('ababababababab')!, passwordProblem('janedoe-Correct-7', 'janedoe@example.com')!,
+      await uploadMessage(null), await uploadMessage(new File(['plain text'], 'notes.txt')),
+      await uploadMessage({ size: 11 * 1024 * 1024, name: 'big.pdf' } as File),
+      'Something went wrong. Please try again.', 'Incorrect email or password.', 'Too many attempts. Try again in 3 minute(s).',
+    ];
+    for (const m of sources) {
+      expect(m, 'source message').toMatch(/\S/);
+      const es = portalMessage('es', m);
+      expect(es, m).not.toBe(m);
+      expect(es, m).not.toMatch(/^[a-z]+: /);
+    }
+    expect(portalMessage('es', 'Too many attempts. Try again in 3 minute(s).')).toContain('3');
+    expect(portalMessage('en', 'That file is larger than 10 MB.')).toBe('That file is larger than 10 MB.');
+  });
+
+  it('drops the internal field name from a validation message, in both languages', () => {
+    expect(portalMessage('en', 'zip: Use a 5-digit ZIP')).toBe('Use a 5-digit ZIP');
+    expect(portalMessage('es', 'zip: Use a 5-digit ZIP')).toBe(tr('es')('e_zip'));
+    expect(portalMessage('en', 'body: required')).toBe(tr('en')('e_required'));
+    expect(portalMessage('es', 'kind: Invalid option')).toBe(tr('es')('e_checkForm'));
+    // A message it does not know is passed through untouched rather than replaced.
+    expect(portalMessage('es', 'Unrecognised message')).toBe('Unrecognised message');
+  });
+
+  it('has a Spanish title for every agreement and every document type, and English titles match the documents', () => {
+    for (const d of CONSENT_DOCS) {
+      expect(tr('en')(`consent_${d.kind}_title` as PortalKey)).toBe(d.title);
+      expect(tr('es')(`consent_${d.kind}_title` as PortalKey)).toMatch(/\S/);
+    }
+    for (const k of DOC_KINDS) expect(tr('es')(`kind_${k}` as PortalKey), k).toMatch(/\S/);
+    for (const g of Object.keys(LEAD_GOALS)) {
+      expect(tr('en')(`goal_${g}` as PortalKey)).toBe(LEAD_GOALS[g as keyof typeof LEAD_GOALS]);
+      expect(tr('es')(`goal_${g}` as PortalKey), g).toMatch(/\S/);
+    }
+  });
+
+  it('new public copy never promises an outcome', () => {
+    for (const k of ['lead_title', 'lead_sub', 'al_tagline', 'al_p1', 'li_subBrand', 'err_body'] as PortalKey[]) expect(findBlockedClaims(tr('en')(k)), k).toEqual([]);
+  });
+
+  it('builds links and fills placeholders safely', () => {
+    expect(parseLang('es')).toBe('es');
+    expect(parseLang('fr')).toBe('en');
+    expect(parseLang(undefined)).toBe('en');
+    expect(qs({ org: 'acme', lang: false, x: undefined })).toBe('?org=acme');
+    expect(qs({ lang: false })).toBe('');
+    expect(fill(tr('es')('inv_sub'), { org: 'Acme & Co' })).toContain('Acme & Co');
+    expect(fill('{a} {b}', { a: 1 })).toBe('1 {b}');
   });
 });

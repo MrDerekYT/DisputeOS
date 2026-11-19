@@ -1,44 +1,54 @@
 import Link from 'next/link';
 import type { Metadata } from 'next';
 import { FilePlus2, FileText } from 'lucide-react';
-import { Badge, EmptyState, PageHeader, StatusBadge, Tabs } from '@/components/ui';
+import { Badge, EmptyState, PageHeader, Pagination, StatusBadge, Tabs } from '@/components/ui';
 import { requireStaff } from '@/lib/auth/context';
 import { KIND_LABEL, TEMPLATES, type LetterKind } from '@/lib/letters/templates';
-import { fmtDate, relTime } from '@/lib/util';
+import { fmtDate, pageParam, relTime } from '@/lib/util';
 import { toggleTemplateAction } from './actions';
 
 export const metadata: Metadata = { title: 'Letters' };
 
-export default async function LettersPage({ searchParams }: { searchParams: Promise<{ tab?: string; status?: string }> }) {
+const PAGE_SIZE = 50;
+const STATUSES = ['draft', 'pending_approval', 'approved', 'sent', 'void'];
+
+export default async function LettersPage({ searchParams }: { searchParams: Promise<{ tab?: string; status?: string; page?: string }> }) {
   const sp = await searchParams;
   const ctx = await requireStaff('clients:read');
   const tab = sp.tab === 'templates' ? 'templates' : 'history';
+  const status = sp.status && STATUSES.includes(sp.status) ? sp.status : '';
+  const page = pageParam(sp.page);
   const data = await ctx.tx(async (db) => {
-    const w = sp.status ? 'where l.status = $1' : '';
+    const w = status ? 'where l.status = $1' : '';
     const letters = await db.rows<{ id: string; title: string; status: string; current_version: number; kind: string; client_id: string; client_name: string; created_at: string; language: string }>(
-      `select l.id, l.title, l.status, l.current_version, l.kind, l.client_id, c.full_name as client_name, l.created_at, l.language from public.letters l join public.clients c on c.id = l.client_id ${w} order by l.created_at desc limit 200`, sp.status ? [sp.status] : []);
+      `select l.id, l.title, l.status, l.current_version, l.kind, l.client_id, c.full_name as client_name, l.created_at, l.language from public.letters l join public.clients c on c.id = l.client_id ${w} order by l.created_at desc, l.id limit ${PAGE_SIZE} offset ${(page - 1) * PAGE_SIZE}`, status ? [status] : []);
     const counts = await db.rows<{ status: string; n: number }>('select status, count(*)::int as n from public.letters group by status');
     const org = await db.rows<{ id: string; name: string; kind: LetterKind; language: string; active: boolean; version: number }>('select id, name, kind, language, active, version from public.letter_templates order by name');
     return { letters, counts: Object.fromEntries(counts.map((c) => [c.status, c.n])) as Record<string, number>, org };
   });
   const canTemplate = ctx.can('letters:approve');
+  // Totals come from the per-status counts, not from the page of rows on screen.
+  const allCount = Object.values(data.counts).reduce((a, n) => a + n, 0);
+  const total = status ? data.counts[status] ?? 0 : allCount;
+  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   return (
     <>
       <PageHeader title="Letter center" subtitle="Templates, drafts, approvals and history — every letter is reviewed by a person before it can be sent."
         actions={<Link href="/app/letters/new" className="btn-primary"><FilePlus2 size={16} /> New letter</Link>} />
-      <Tabs active={tab} tabs={[{ key: 'history', label: 'History', href: '/app/letters', count: data.letters.length }, { key: 'templates', label: 'Templates', href: '/app/letters?tab=templates' }]} />
+      <Tabs active={tab} tabs={[{ key: 'history', label: 'History', href: '/app/letters', count: allCount }, { key: 'templates', label: 'Templates', href: '/app/letters?tab=templates' }]} />
 
       {tab === 'history' ? (
         <>
-          <div className="mb-4 flex flex-wrap gap-2">
+          <nav aria-label="Letter status" className="mb-4 flex flex-wrap gap-2">
             {[['', 'All'], ['draft', 'Drafts'], ['pending_approval', 'Awaiting approval'], ['approved', 'Approved'], ['sent', 'Sent']].map(([k, l]) => (
-              <Link key={k} href={k ? `/app/letters?status=${k}` : '/app/letters'} className={`rounded-full border px-3 py-1 text-sm ${(sp.status ?? '') === k ? 'border-brand bg-brand-soft text-brand-strong' : 'border-line bg-surface text-muted hover:text-ink'}`}>
+              <Link key={k} href={k ? `/app/letters?status=${k}` : '/app/letters'} aria-current={status === k ? 'page' : undefined} className={`rounded-full border px-3.5 py-1.5 text-sm font-medium ${status === k ? 'border-brand bg-brand-soft text-brand-strong' : 'border-line bg-surface text-muted hover:text-ink'}`}>
                 {l}{k && data.counts[k] ? <span className="ml-1.5 text-xs tabular-nums opacity-70">{data.counts[k]}</span> : null}
               </Link>
             ))}
-          </div>
-          {data.letters.length === 0 ? <EmptyState title="No letters yet" body="Letters are created from a dispute, or from any template." action={<Link href="/app/letters/new" className="btn-primary">Create a letter</Link>} /> : (
+          </nav>
+          {data.letters.length === 0 && (status || page > 1) ? <EmptyState title={status ? 'No letters with this status' : 'No more letters'} body="Choose a different status, or go back to all letters." action={<Link href="/app/letters" className="btn-secondary">All letters</Link>} />
+          : data.letters.length === 0 ? <EmptyState title="No letters yet" body="Letters are created from a dispute, or from any template." action={<Link href="/app/letters/new" className="btn-primary">Create a letter</Link>} /> : (
             <div className="table-wrap"><table className="table">
               <thead><tr><th>Letter</th><th>Client</th><th>Status</th><th>Version</th><th>Created</th><th></th></tr></thead>
               <tbody>{data.letters.map((l) => (
@@ -52,6 +62,7 @@ export default async function LettersPage({ searchParams }: { searchParams: Prom
                 </tr>))}</tbody>
             </table></div>
           )}
+          <Pagination page={page} pages={pages} hrefFor={(n) => `/app/letters?${status ? `status=${status}&` : ''}page=${n}`} />
         </>
       ) : (
         <div className="space-y-8">

@@ -10,6 +10,8 @@ import {
   acceptInvite, authenticate, confirmTotp, createSession, requestPasswordReset, resetPassword, revokeSession, signUp,
 } from '@/lib/auth/service';
 import type { ActionState } from '@/components/forms';
+import { portalLoginPath } from '@/lib/org-brand';
+import { portalMessage } from '@/lib/portal-i18n';
 
 const email = z.string().trim().toLowerCase().email('Enter a valid email address').max(254);
 
@@ -17,15 +19,23 @@ function safeNext(n: string | undefined, fallback: string) {
   return n && n.startsWith('/') && !n.startsWith('//') && !n.includes('\\') ? n : fallback;
 }
 
+/**
+ * Client-facing forms send `lang=es` when the page is shown in Spanish; the error then comes back in Spanish too.
+ * Without it (every staff form) the result is returned untouched.
+ */
+function localized(state: ActionState, fd: FormData): ActionState {
+  return state?.error && fd.get('lang') === 'es' ? { ...state, error: portalMessage('es', state.error) } : state;
+}
+
 export async function loginAction(_: ActionState, fd: FormData): Promise<ActionState> {
-  return run(async () => {
+  return localized(await run(async () => {
     const d = parseForm(z.object({ email, password: z.string().min(1, 'Enter your password').max(200), next: zOpt(300), portal: zOpt(5) }), fd);
     const r = await authenticate({ email: d.email, password: d.password, portal: d.portal === 'true' }, await requestMeta());
     if (!r.ok) return { error: r.error };
     await setSessionCookie(r.token, r.role);
     if (d.portal === 'true') redirect(r.needsMfa ? '/mfa' : '/portal');
     redirect(r.needsEnrollment ? '/mfa/setup' : r.needsMfa ? '/mfa' : safeNext(d.next, '/app'));
-  });
+  }), fd);
 }
 
 export async function signUpAction(_: ActionState, fd: FormData): Promise<ActionState> {
@@ -59,33 +69,34 @@ export async function logoutAction() {
 }
 
 export async function verifyMfaAction(_: ActionState, fd: FormData): Promise<ActionState> {
-  return run(async () => {
+  return localized(await run(async () => {
     const s = await currentSession();
     if (!s) redirect('/login');
     const { code } = parseForm(z.object({ code: z.string().trim().regex(/^\d{6}$/, 'Enter the 6-digit code') }), fd);
     const r = await confirmTotp(s.userId, s.sessionId, code, false);
     if (!r.ok) return { error: r.error };
     redirect(s.role === 'client' ? '/portal' : '/app');
-  });
+  }), fd);
 }
 
 export async function enrollMfaAction(_: ActionState, fd: FormData): Promise<ActionState> {
-  return run(async () => {
+  return localized(await run(async () => {
     const s = await currentSession();
     if (!s) redirect('/login');
     const { code } = parseForm(z.object({ code: z.string().trim().regex(/^\d{6}$/, 'Enter the 6-digit code') }), fd);
     const r = await confirmTotp(s.userId, s.sessionId, code, true);
     if (!r.ok) return { error: r.error };
     redirect(s.role === 'client' ? '/portal' : '/app');
-  });
+  }), fd);
 }
 
 export async function forgotPasswordAction(_: ActionState, fd: FormData): Promise<ActionState> {
-  return run(async () => {
+  return localized(await run(async () => {
     const d = parseForm(z.object({ email }), fd);
     await requestPasswordReset(d.email, await requestMeta());
-    return { ok: 'If an account exists for that email, a reset link is on its way. It expires in 1 hour.' };
-  });
+    const sent = 'If an account exists for that email, a reset link is on its way. It expires in 1 hour.';
+    return { ok: fd.get('lang') === 'es' ? portalMessage('es', sent) : sent };
+  }), fd);
 }
 
 export async function resetPasswordAction(_: ActionState, fd: FormData): Promise<ActionState> {
@@ -94,17 +105,19 @@ export async function resetPasswordAction(_: ActionState, fd: FormData): Promise
     if (d.password !== d.confirm) throw new UserError('The two passwords do not match.');
     const r = await resetPassword(d.token, d.password);
     if (!r.ok) return { error: r.error };
+    // A client goes back to their own (branded) portal sign-in — the staff sign-in would turn them away.
+    if (r.portal) redirect(`${portalLoginPath(r.orgSlug)}${r.orgSlug ? '&' : '?'}reset=1${r.lang === 'es' ? '&lang=es' : ''}`);
     redirect('/login?reset=1');
   });
 }
 
 export async function acceptInviteAction(_: ActionState, fd: FormData): Promise<ActionState> {
-  return run(async () => {
+  return localized(await run(async () => {
     const d = parseForm(z.object({ token: z.string().min(20).max(200), fullName: z.string().trim().min(2).max(120), password: z.string().min(1).max(200) }), fd);
     const meta = await requestMeta();
     const r = await acceptInvite(d.token, { fullName: d.fullName, password: d.password }, meta);
     if (!r.ok) return { error: r.error };
     await setSessionCookie(r.token, r.role);
     redirect(r.role === 'client' ? '/portal' : '/mfa/setup');
-  });
+  }), fd);
 }

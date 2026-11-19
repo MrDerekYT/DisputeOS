@@ -4,7 +4,8 @@ import { redirect } from 'next/navigation';
 import { withTenant, type Db } from '../db';
 import { cookieSecure, getEnv } from '../env';
 import { can, isStaffRole, PermissionError, type Permission, type Role } from '../rbac';
-import { getSession, type RequestMeta, type SessionInfo } from './service';
+import { clientIp } from '../client-ip';
+import { getSession, secondFactorSatisfied, type RequestMeta, type SessionInfo } from './service';
 
 export const SESSION_COOKIE = 'dos_session';
 
@@ -29,11 +30,20 @@ export async function sessionToken(): Promise<string | undefined> {
 
 export async function requestMeta(): Promise<RequestMeta> {
   const h = await headers();
-  const fwd = h.get('x-forwarded-for')?.split(',')[0]?.trim();
-  return { ip: fwd || h.get('x-real-ip') || null, userAgent: h.get('user-agent') };
+  return { ip: clientIp(h), userAgent: h.get('user-agent') };
 }
 
 export const currentSession = cache(async (): Promise<SessionInfo | null> => getSession(await sessionToken()));
+
+/**
+ * For route handlers (src/app/api): the session only once the second factor is complete, otherwise null.
+ * A password-only session (cookie set before the code step) or an unenrolled staff account under REQUIRE_STAFF_MFA
+ * must never reach data; handlers answer 404 on null. Never use currentSession() to authorize data access.
+ */
+export const apiSession = cache(async (): Promise<SessionInfo | null> => {
+  const s = await currentSession();
+  return s && secondFactorSatisfied(s) ? s : null;
+});
 
 export interface Ctx {
   session: SessionInfo;

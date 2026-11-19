@@ -2,7 +2,7 @@ import Link from 'next/link';
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import { AlertTriangle, Check as CheckIcon, Download, FileText, Gavel, Mail, MapPin, Pencil, Phone, Pin, ScanSearch, UserPlus } from 'lucide-react';
-import { ActionForm, Check, Field, Select, SubmitButton, TextArea } from '@/components/forms';
+import { ActionForm, Check, ConfirmButton, Field, Select, SubmitButton, TextArea } from '@/components/forms';
 import { Avatar, Badge, DefinitionList, EmptyState, Notice, PageHeader, Section, StatusBadge, Tabs } from '@/components/ui';
 import { SplitBar } from '@/components/charts';
 import { polishedProgress } from '@/lib/ai/assistant';
@@ -13,10 +13,11 @@ import type { DisputeStatus } from '@/lib/disputes/workflow';
 import { BUREAU_LABEL, cn, fmtDate, isUuid, money, relTime, type Bureau } from '@/lib/util';
 import { cancelSubscriptionAction, recordPaymentAction, refundPaymentAction, subscribeClientAction } from '../../billing/actions';
 import { addNoteAction, createTaskAction, invitePortalAction, markInboundReadAction, recordConsentAction, requestDocumentAction, reviewDocumentAction, revokeConsentAction, sendMessageAction, setTaskStatusAction, togglePinAction, uploadDocumentAction } from '../actions';
-import { pullReportAction, uploadReportAction } from '../../reports/actions';
+import { importDocumentAsReportAction, pullReportAction, uploadReportAction } from '../../reports/actions';
 import { listProviders } from '@/lib/credit/providers';
 import { ScoreHistory, type ScoreRow } from '@/components/score-history';
 import { PRODUCT } from '@/lib/product';
+import { buildPlan, loadPlanInput } from '@/lib/plan';
 
 export const metadata: Metadata = { title: 'Client' };
 
@@ -126,12 +127,24 @@ async function Overview({ id, ctx, c, first }: { id: string; ctx: Ctx; c: C; fir
     const upcoming = await db.rows<{ id: string; item_label: string; due_at: string }>("select id, item_label, due_at from public.disputes where client_id = $1 and status in ('submitted','under_investigation') and due_at is not null order by due_at limit 3", [id]);
     const tasks = await db.rows<{ id: string; title: string; due_at: string | null }>("select id, title, due_at from public.tasks where client_id = $1 and status = 'open' order by due_at nulls last limit 4", [id]);
     const scores = await db.rows<ScoreRow>('select bureau, model, score, scored_on from public.credit_scores where client_id = $1 order by scored_on', [id]);
-    return { o: outcomes!, consents, events, requests, upcoming, tasks, scores };
+    return { o: outcomes!, consents, events, requests, upcoming, tasks, scores, plan: await loadPlanInput(db, id) };
   });
   const cs = consentStatus(d.consents);
+  const plan = buildPlan({ ...d.plan, firstName: first, self: ctx.session.orgMode === 'personal' });
   const pct = d.o.total ? Math.round(((d.o.deleted + d.o.updated) / d.o.total) * 100) : 0;
   return (
     <div className="grid gap-6 lg:grid-cols-3">
+      <Section title={`Plan for ${first}`} hint="Built from this client’s own records, most pressing first. Suggestions only — nothing here predicts a score or an outcome." className="lg:col-span-3">
+        <ol className="grid gap-3 md:grid-cols-2">
+          {plan.map((p, i) => (
+            <li key={p.key}>
+              <Link href={p.href ?? `/app/clients/${id}`} className="flex h-full gap-3 rounded-xl border border-line p-3.5 text-sm hover:bg-raised">
+                <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-brand-soft text-xs font-semibold text-brand-strong" aria-hidden>{i + 1}</span>
+                <span className="min-w-0"><span className="flex flex-wrap items-center gap-2 font-medium">{p.title}{p.tone === 'warn' && <Badge tone="warn">Needs action</Badge>}{p.tone === 'ok' && <Badge tone="ok">Done</Badge>}</span><span className="mt-1 block text-muted">{p.detail}</span></span>
+              </Link>
+            </li>))}
+        </ol>
+      </Section>
       <div className="space-y-6 lg:col-span-2">
         <Section title="Dispute progress" hint="Only counts disputes that were actually submitted. Outcomes are decided by the bureaus and furnishers.">
           {d.o.total === 0 ? <p className="text-sm text-muted">No disputes submitted yet.</p> : (
@@ -174,14 +187,14 @@ async function Overview({ id, ctx, c, first }: { id: string; ctx: Ctx; c: C; fir
           </ul>
         </Section>
 
-        <Section title="Compliance record" hint="What this client has received and signed.">
+        <Section id="compliance" title="Compliance record" hint="What this client has received and signed.">
           <ul className="space-y-2.5">
             {CONSENT_DOCS.filter((x) => x.required || d.consents.some((k) => k.kind === x.kind)).map((doc) => {
               const rec = d.consents.find((k) => k.kind === doc.kind && !k.revoked_at);
               return (
                 <li key={doc.kind} className="flex items-start justify-between gap-2 text-sm">
                   <div className="min-w-0"><div className="font-medium leading-snug">{doc.title}</div><div className="text-xs text-muted">{rec ? `Signed ${fmtDate(rec.signed_at)} as “${rec.signed_name}”` : doc.required ? 'Not on file — required' : 'Not on file'}</div></div>
-                  {rec ? <form action={revokeConsentAction}><input type="hidden" name="id" value={rec.id} /><input type="hidden" name="clientId" value={id} /><button className="text-xs text-muted underline" type="submit">Revoke</button></form> : <Badge tone={doc.required ? 'warn' : 'neutral'}>Missing</Badge>}
+                  {rec ? <form action={revokeConsentAction}><input type="hidden" name="id" value={rec.id} /><input type="hidden" name="clientId" value={id} /><ConfirmButton className="text-xs text-muted underline" message={`Revoke “${doc.title}”? The signed record is marked revoked and cannot be restored${doc.required ? ', and disputes cannot be submitted for this client until it is signed again' : ''}.`}>Revoke</ConfirmButton></form> : <Badge tone={doc.required ? 'warn' : 'neutral'}>Missing</Badge>}
                 </li>);
             })}
           </ul>
@@ -270,8 +283,8 @@ async function DisputesTab({ id, ctx }: { id: string; ctx: Ctx }) {
 // ------------------------------------------------------------------ documents
 async function DocumentsTab({ id, ctx }: { id: string; ctx: Ctx }) {
   const { docs, reqs } = await ctx.tx(async (db) => ({
-    docs: await db.rows<{ id: string; kind: string; file_name: string; size_bytes: number; source: string; review_status: string; created_at: string; uploader: string | null }>(
-      `select d.id, d.kind, d.file_name, d.size_bytes, d.source, d.review_status, d.created_at, u.full_name as uploader from public.documents d left join public.users u on u.id = d.uploaded_by where d.client_id = $1 order by d.created_at desc`, [id]),
+    docs: await db.rows<{ id: string; kind: string; file_name: string; size_bytes: number; source: string; review_status: string; created_at: string; uploader: string | null; mime_type: string; report_id: string | null }>(
+      `select d.id, d.kind, d.file_name, d.size_bytes, d.source, d.review_status, d.created_at, u.full_name as uploader, d.mime_type, (select r.id from public.credit_reports r where r.document_id = d.id order by r.created_at limit 1) as report_id from public.documents d left join public.users u on u.id = d.uploaded_by where d.client_id = $1 order by d.created_at desc`, [id]),
     reqs: await db.rows<{ id: string; kind: string; note: string | null; due_at: string | null; fulfilled_document_id: string | null }>('select id, kind, note, due_at, fulfilled_document_id from public.document_requests where client_id = $1 order by created_at desc', [id]),
   }));
   const kindOpts = DOC_KINDS.map((k) => ({ value: k, label: DOC_KIND_LABEL[k]! }));
@@ -289,7 +302,11 @@ async function DocumentsTab({ id, ctx }: { id: string; ctx: Ctx }) {
               <li key={x.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
                 <div className="min-w-0"><a href={`/api/documents/${x.id}`} className="flex items-center gap-2 font-medium hover:underline"><Download size={14} className="text-muted" /><span className="truncate">{x.file_name}</span></a>
                   <div className="text-xs text-muted">{DOC_KIND_LABEL[x.kind] ?? x.kind} · {(x.size_bytes / 1024).toFixed(0)} KB · {x.source === 'client' ? 'uploaded by client' : `by ${x.uploader ?? 'staff'}`} · {relTime(x.created_at)}</div></div>
-                <div className="flex items-center gap-2"><StatusBadge status={x.review_status} />
+                <div className="flex flex-wrap items-center gap-2"><StatusBadge status={x.review_status} />
+                  {x.report_id && <Link href={`/app/reports/${x.report_id}`} className="btn-ghost btn-sm">Open report</Link>}
+                  {!x.report_id && x.kind === 'credit_report' && x.review_status !== 'rejected' && ['application/pdf', 'text/plain', 'text/html', 'text/csv'].includes(x.mime_type) && (
+                    <ActionForm action={importDocumentAsReportAction} className="inline-flex flex-col items-end gap-1.5"><input type="hidden" name="id" value={x.id} /><input type="hidden" name="clientId" value={id} />
+                      <select name="bureau" defaultValue="" aria-label="Bureau this report is from" className="field !w-auto !py-1 text-xs"><option value="">Detect bureau from file</option>{(Object.keys(BUREAU_LABEL) as Bureau[]).map((b) => <option key={b} value={b}>{BUREAU_LABEL[b]}</option>)}</select><SubmitButton className="btn-sm" pendingText="Reading…">Read as credit report</SubmitButton></ActionForm>)}
                   {x.review_status === 'pending_review' && (<><form action={reviewDocumentAction}><input type="hidden" name="id" value={x.id} /><input type="hidden" name="clientId" value={id} /><input type="hidden" name="decision" value="accepted" /><button className="btn-secondary btn-sm">Accept</button></form>
                     <form action={reviewDocumentAction}><input type="hidden" name="id" value={x.id} /><input type="hidden" name="clientId" value={id} /><input type="hidden" name="decision" value="rejected" /><button className="btn-ghost btn-sm">Reject</button></form></>)}</div>
               </li>))}</ul>
@@ -336,8 +353,8 @@ async function LettersTab({ id, ctx }: { id: string; ctx: Ctx }) {
 // ------------------------------------------------------------------ messages
 async function MessagesTab({ id, ctx, c, draft }: { id: string; ctx: Ctx; c: C; draft?: string }) {
   const { msgs, stats } = await ctx.tx(async (db) => ({
-    msgs: await db.rows<{ id: string; direction: string; channel: string; subject: string | null; body: string; status: string; created_at: string; author: string | null }>(
-      `select m.id, m.direction, m.channel, m.subject, m.body, m.status, m.created_at, u.full_name as author from public.communications m left join public.users u on u.id = m.author_id where m.client_id = $1 order by m.created_at desc limit 100`, [id]),
+    msgs: await db.rows<{ id: string; direction: string; channel: string; subject: string | null; body: string; status: string; created_at: string; read_at: string | null; author: string | null }>(
+      `select m.id, m.direction, m.channel, m.subject, m.body, m.status, m.created_at, m.read_at, u.full_name as author from public.communications m left join public.users u on u.id = m.author_id where m.client_id = $1 order by m.created_at desc limit 100`, [id]),
     stats: await db.row<{ total: number; deleted: number; updated: number; verified: number; waiting: number; draft: number }>(
       `select count(*) filter (where status in ('submitted','under_investigation','response_received','resolved'))::int as total, count(*) filter (where outcome = 'deleted')::int as deleted, count(*) filter (where outcome = 'updated')::int as updated,
               count(*) filter (where outcome = 'verified')::int as verified, count(*) filter (where status in ('submitted','under_investigation'))::int as waiting, count(*) filter (where status = 'draft')::int as draft from public.disputes where client_id = $1`, [id]),
@@ -349,7 +366,7 @@ async function MessagesTab({ id, ctx, c, draft }: { id: string; ctx: Ctx; c: C; 
     prefill = r.text;
     note = r.usedAi ? `Wording polished by ${r.provider}; facts verified unchanged.` : r.note ?? 'Built from the dispute data — no AI rewriting applied.';
   }
-  const unread = msgs.some((m) => m.direction === 'inbound' && m.status === 'received');
+  const unread = msgs.some((m) => m.direction === 'inbound' && !m.read_at);
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_24rem]">
       <div className="space-y-3">
@@ -359,6 +376,7 @@ async function MessagesTab({ id, ctx, c, draft }: { id: string; ctx: Ctx; c: C; 
             <div className="mb-1 flex flex-wrap items-center gap-2 text-xs text-muted"><strong className="text-ink">{m.direction === 'inbound' ? c.full_name : m.author ?? 'Automation'}</strong><span>{m.channel}{m.direction === 'internal' ? ' (logged)' : ''}</span><span>{relTime(m.created_at)}</span>{m.status === 'queued' && <Badge tone="warn">Not delivered</Badge>}{m.status === 'failed' && <Badge tone="bad">Failed</Badge>}</div>
             {m.subject && <div className="text-sm font-medium">{m.subject}</div>}<p className="whitespace-pre-wrap text-sm">{m.body}</p>
           </div>))}
+        {msgs.length === 100 && <p className="text-center text-xs text-muted">Showing the 100 most recent messages. Older ones are kept but not listed here.</p>}
       </div>
       <Section title="Send or log">
         {note && <div className="mb-3"><Notice tone="info">{note}</Notice></div>}
@@ -388,7 +406,7 @@ async function TasksTab({ id, ctx }: { id: string; ctx: Ctx }) {
         <ul className="card divide-y divide-line">{tasks.map((t) => (
           <li key={t.id} className="flex items-start gap-3 p-4">
             <form action={setTaskStatusAction}><input type="hidden" name="id" value={t.id} /><input type="hidden" name="status" value={t.status === 'done' ? 'open' : 'done'} />
-              <button aria-label={t.status === 'done' ? 'Reopen task' : 'Complete task'} className={cn('mt-0.5 grid h-5 w-5 place-items-center rounded-full border', t.status === 'done' ? 'border-ok bg-ok text-white' : 'border-line hover:border-brand')}>{t.status === 'done' && <CheckIcon size={12} />}</button></form>
+              <button aria-label={t.status === 'done' ? 'Reopen task' : 'Complete task'} className="group -m-1.5 grid h-8 w-8 place-items-center rounded-full"><span className={cn('grid h-5 w-5 place-items-center rounded-full border', t.status === 'done' ? 'border-ok bg-ok text-surface' : 'border-line group-hover:border-brand')}>{t.status === 'done' && <CheckIcon size={12} />}</span></button></form>
             <div className="min-w-0 flex-1"><div className={cn('text-sm font-medium', t.status === 'done' && 'text-muted line-through')}>{t.title}</div>{t.detail && <div className="text-sm text-muted">{t.detail}</div>}
               <div className="mt-0.5 text-xs text-muted">{t.assignee ?? 'Unassigned'}{t.due_at ? ` · due ${fmtDate(t.due_at)}` : ''}{t.source === 'automation' ? ' · automation' : ''}</div></div>
           </li>))}</ul>)}</div>
@@ -425,7 +443,10 @@ async function NotesTab({ id, ctx }: { id: string; ctx: Ctx }) {
 async function TimelineTab({ id, ctx }: { id: string; ctx: Ctx }) {
   const events = await ctx.tx((db) => db.rows<{ id: string; kind: string; summary: string; created_at: string; actor: string | null }>(`select e.id, e.kind, e.summary, e.created_at, u.full_name as actor from public.client_events e left join public.users u on u.id = e.actor_id where e.client_id = $1 order by e.created_at desc limit 200`, [id]));
   return events.length === 0 ? <EmptyState title="No activity yet" /> : (
+    <>
     <ol className="card divide-y divide-line">{events.map((e) => (<li key={e.id} className="flex items-start justify-between gap-4 p-4 text-sm"><div><div>{e.summary}</div><div className="text-xs text-muted">{e.actor ?? 'System'} · {e.kind.replace(/_/g, ' ')}</div></div><time className="shrink-0 text-xs text-muted" dateTime={e.created_at} title={e.created_at}>{fmtDate(e.created_at)} · {relTime(e.created_at)}</time></li>))}</ol>
+    {events.length === 200 && <p className="mt-3 text-center text-xs text-muted">Showing the 200 most recent events. Older activity is kept in the record but not listed here.</p>}
+    </>
   );
 }
 
@@ -443,12 +464,12 @@ async function BillingTab({ id, ctx }: { id: string; ctx: Ctx }) {
       <div className="space-y-6">
         <Section title="Service plan">
           {active ? (<div className="flex flex-wrap items-center justify-between gap-3"><div><div className="font-medium">{active.plan_name}</div><div className="text-sm text-muted">{money(active.price_cents)}{active.interval === 'month' ? ' / month' : ' one time'} · since {fmtDate(active.started_at)}</div></div>
-            {ctx.can('billing:write') && <form action={cancelSubscriptionAction}><input type="hidden" name="id" value={active.id} /><input type="hidden" name="clientId" value={id} /><button className="btn-secondary btn-sm">Cancel plan</button></form>}</div>) : <p className="text-sm text-muted">No active plan.</p>}
+            {ctx.can('billing:write') && <form action={cancelSubscriptionAction}><input type="hidden" name="id" value={active.id} /><input type="hidden" name="clientId" value={id} /><ConfirmButton message={`Cancel the ${active.plan_name} plan for this client?`}>Cancel plan</ConfirmButton></form>}</div>) : <p className="text-sm text-muted">No active plan.</p>}
         </Section>
         <Section title="Payments" hint={`${money(paid)} received in total. Payments are recorded by your team — ${PRODUCT.name} does not charge cards.`}>
           {payments.length === 0 ? <p className="text-sm text-muted">No payments recorded.</p> : (
             <ul className="divide-y divide-line text-sm">{payments.map((p) => (<li key={p.id} className="flex flex-wrap items-center justify-between gap-3 py-2.5"><div><div className="font-medium tabular-nums">{money(p.amount_cents)} <span className="font-normal text-muted">· {p.method}</span></div><div className="text-xs text-muted">{fmtDate(p.paid_at)}{p.note ? ` · ${p.note}` : ''}</div></div>
-              <div className="flex items-center gap-2"><StatusBadge status={p.status} />{p.status === 'succeeded' && ctx.can('billing:write') && <form action={refundPaymentAction}><input type="hidden" name="id" value={p.id} /><input type="hidden" name="clientId" value={id} /><button className="text-xs text-muted underline">Mark refunded</button></form>}</div></li>))}</ul>)}
+              <div className="flex items-center gap-2"><StatusBadge status={p.status} />{p.status === 'succeeded' && ctx.can('billing:write') && <form action={refundPaymentAction}><input type="hidden" name="id" value={p.id} /><input type="hidden" name="clientId" value={id} /><ConfirmButton className="text-xs text-muted underline" message={`Mark this ${money(p.amount_cents)} payment as refunded? This cannot be undone here.`}>Mark refunded</ConfirmButton></form>}</div></li>))}</ul>)}
         </Section>
       </div>
       {ctx.can('billing:write') && (

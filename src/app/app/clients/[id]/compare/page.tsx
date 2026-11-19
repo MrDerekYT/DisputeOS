@@ -29,13 +29,15 @@ export default async function ComparePage({ params, searchParams }: { params: Pr
     const c = await db.row<{ id: string; full_name: string }>('select id, full_name from public.clients where id = $1', [id]);
     if (!c) return null;
     const input = await loadAnalysisInput(db, id);
-    const findings = await db.rows<FindingRow>(
-      `select id, category, severity, title, explanation, evidence, basis, status, tradeline_ids from public.findings where client_id = $1 and status <> 'dismissed' order by created_at`, [id]);
+    const all = await db.rows<FindingRow>(
+      `select id, category, severity, title, explanation, evidence, basis, status, tradeline_ids from public.findings where client_id = $1 order by created_at`, [id]);
+    const findings = all.filter((f) => f.status !== 'dismissed');
+    const dismissed = all.filter((f) => f.status === 'dismissed');
     const pending = await db.row<{ n: number }>("select count(*)::int as n from public.credit_reports where client_id = $1 and status = 'pending_review'", [id]);
-    return { c, input, findings, pending: pending?.n ?? 0 };
+    return { c, input, findings, dismissed, pending: pending?.n ?? 0 };
   });
   if (!data) notFound();
-  const { c, input, findings, pending } = data;
+  const { c, input, findings, dismissed, pending } = data;
   const canDispute = ctx.can('disputes:write');
   const groups = groupAccounts(input.tradelines);
   const have = new Set(input.reports.map((r) => r.bureau));
@@ -142,7 +144,7 @@ export default async function ComparePage({ params, searchParams }: { params: Pr
                 <button className="btn-primary btn-sm"><Gavel size={14} /> Draft disputes for selected</button>
               </form>
             )}
-            {findings.length === 0 ? <Notice tone="ok">Nothing to flag. The approved reports agree with each other and nothing looks out of the ordinary.</Notice> : (
+            {findings.length === 0 ? <Notice tone="ok">{dismissed.length ? 'No findings left to review. The ones you dismissed are listed below.' : 'Nothing to flag. The approved reports agree with each other and nothing looks out of the ordinary.'}</Notice> : (
               <ul className="space-y-3">
                 {findings.map((f) => {
                   const basis = BASIS_LABEL[f.basis]!;
@@ -184,6 +186,19 @@ export default async function ComparePage({ params, searchParams }: { params: Pr
                   );
                 })}
               </ul>
+            )}
+            {dismissed.length > 0 && (
+              <details className="mt-4 rounded-2xl border border-line p-4">
+                <summary className="cursor-pointer text-sm font-medium">Dismissed ({dismissed.length})</summary>
+                <ul className="mt-3 divide-y divide-line">
+                  {dismissed.map((f) => (
+                    <li key={f.id} className="flex flex-wrap items-start justify-between gap-3 py-3">
+                      <div className="min-w-0 flex-1"><div className="text-sm font-medium">{f.title}</div><p className="mt-0.5 text-sm text-muted">{f.explanation}</p></div>
+                      <form action={setFindingStatusAction}><input type="hidden" name="id" value={f.id} /><input type="hidden" name="clientId" value={id} /><input type="hidden" name="status" value="suggested" /><button className="btn-secondary btn-sm">Restore</button></form>
+                    </li>
+                  ))}
+                </ul>
+              </details>
             )}
           </section>
         </>

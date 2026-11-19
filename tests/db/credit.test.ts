@@ -208,7 +208,7 @@ describe('provider registry', () => {
     const saved = { ...process.env };
     try {
       resetEnvCache();
-      Object.assign(process.env, { APP_ENV: 'production', DATABASE_URL: 'postgres://x/y', APP_URL: 'https://app.example.com', PII_ENCRYPTION_KEY: Buffer.alloc(32, 5).toString('base64') });
+      Object.assign(process.env, { APP_ENV: 'production', DATABASE_URL: 'postgres://x/y', APP_URL: 'https://app.example.com', PII_ENCRYPTION_KEY: Buffer.alloc(32, 5).toString('base64'), EMAIL_DRIVER: 'resend', RESEND_API_KEY: 're_test_key' });
       expect(getEnv().APP_ENV).toBe('production');
       expect(getProvider('sandbox')).toBeNull();
       expect(listProviders().find((p) => p.key === 'sandbox')!.status).toBe('sandbox_unavailable');

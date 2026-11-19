@@ -234,6 +234,30 @@ async function signUpAgency(browser, label) {
       await staff.screenshot({ path: `${SHOTS}/04-dashboard.png`, fullPage: true, caret: 'initial' });
     });
 
+    await check('free-report path: the client uploads a report PDF in the portal and staff read it into the review queue in one click', async () => {
+      // a text-based PDF like the one a bureau site produces with "Save as PDF" (synthetic content)
+      const pdfPage = await clientCtx.newPage();
+      await pdfPage.setContent(`<pre style="font:12px monospace">${EXPERIAN.replace('Experian Credit Report', 'TransUnion Credit Report').replace('$2,450.00', '$2,450.00')}</pre>`);
+      const pdf = await pdfPage.pdf({ format: 'Letter' }); await pdfPage.close();
+      await client.goto(BASE + '/portal/documents');
+      await see(client, 'Send us your free credit reports'); await see(client, 'AnnualCreditReport.com');
+      await client.getByLabel('What is it?').selectOption('credit_report');
+      await client.setInputFiles('input[name=file]', { name: 'transunion-report.pdf', mimeType: 'application/pdf', buffer: pdf });
+      await client.getByRole('button', { name: 'Upload' }).click();
+      await client.waitForURL('**/portal/documents?uploaded=1');
+      await staff.goto(clientUrl + '?tab=documents');
+      const row = staff.locator('li', { hasText: 'transunion-report.pdf' });
+      await row.getByText('uploaded by client').waitFor();
+      await row.getByRole('button', { name: 'Read as credit report' }).click();
+      await staff.waitForURL(/\/app\/reports\//, { timeout: 20000 });
+      await see(staff, 'TransUnion report'); await see(staff, 'Review before this is used'); await see(staff, 'SYNTHETIC BANK NA');
+      if (!/2,450\.00/.test(await staff.locator('main').innerText())) throw new Error('the balance was not read from the PDF');
+      await staff.goto(clientUrl + '?tab=documents');
+      const again = staff.locator('li', { hasText: 'transunion-report.pdf' });
+      await again.getByRole('link', { name: 'Open report' }).waitFor();
+      if (await again.getByRole('button', { name: 'Read as credit report' }).count()) throw new Error('the same file can be imported twice');
+    });
+
     await check('access: the client can open only their own portal and letter; staff pages and the staff API are closed to them', async () => {
       const ids = { client: clientUrl.split('/').pop(), dispute: disputeUrl.split('/').pop(), letter: letterUrl.split('/').pop(), report: reportUrl.split('/').pop() };
       const own = await client.request.get(`${BASE}/api/letters/${ids.letter}/pdf`);

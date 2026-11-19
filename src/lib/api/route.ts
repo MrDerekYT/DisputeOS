@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { PermissionError } from '../rbac';
 import { UserError } from '../errors';
+import { clientIp } from '../client-ip';
 import { withTenant, type Db } from '../db';
 import { authenticateApiKey, type ApiPrincipal, type ApiScope } from './keys';
 
@@ -14,13 +15,33 @@ export interface ApiCtx {
 }
 
 const MAX_BODY = 2_000_000;
+const TOO_LARGE = 'Request body is too large (2 MB max).';
+
+/** Reads the body as UTF-8, stopping (and cancelling the stream) as soon as more than `max` BYTES have arrived. */
+export async function readBodyCapped(req: Request, max: number): Promise<string> {
+  if (!req.body) return '';
+  const reader = req.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > max) {
+      await reader.cancel().catch(() => {});
+      throw new UserError(TOO_LARGE);
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
 
 const err = (status: number, code: string, message: string, headers: Record<string, string> = {}) =>
   NextResponse.json({ error: { code, message } }, { status, headers: { 'cache-control': 'no-store', ...headers } });
 
 /** Wraps an API handler: authentication, scope check, rate limits, body limits and uniform JSON errors. */
 export async function withApi(req: Request, scope: ApiScope, handler: (ctx: ApiCtx) => Promise<Response>): Promise<Response> {
-  const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || null;
+  const ip = clientIp(req.headers);
   const auth = await authenticateApiKey(req.headers.get('authorization'), ip);
   if (!auth.ok) return err(auth.status, auth.status === 429 ? 'rate_limited' : 'unauthorized', auth.error, auth.retryAfter ? { 'retry-after': String(auth.retryAfter) } : {});
   const p = auth.principal;
@@ -31,8 +52,11 @@ export async function withApi(req: Request, scope: ApiScope, handler: (ctx: ApiC
     tx: (fn) => withTenant(p.userId, fn),
     actor: { orgId: p.orgId, userId: p.userId, role: p.role, label: `api:${p.prefix}`, meta: { ip } },
     json: async <T>() => {
-      const text = await req.text();
-      if (text.length > MAX_BODY) throw new UserError('Request body is too large (2 MB max).');
+      // Refuse on the declared size before reading anything; the streamed read below is the backstop for bodies
+      // sent without a (truthful) content-length.
+      const declared = req.headers.get('content-length');
+      if (declared !== null && !(Number(declared) <= MAX_BODY)) throw new UserError(TOO_LARGE);
+      const text = await readBodyCapped(req, MAX_BODY);
       try { return JSON.parse(text) as T; } catch { throw new UserError('Body must be valid JSON.'); }
     },
   };

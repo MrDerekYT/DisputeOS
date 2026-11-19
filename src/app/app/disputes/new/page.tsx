@@ -21,12 +21,22 @@ export default async function NewDisputePage({ searchParams }: { searchParams: P
 
   // ---- Step 1: choose a client
   if (!sp.clientId || !isUuid(sp.clientId)) {
+    const q = (sp.q ?? '').trim().slice(0, 80);
+    const PICK_LIMIT = 60;
     const clients = await ctx.tx((db) => db.rows<{ id: string; full_name: string; email: string | null; n: number }>(
-      `select c.id, c.full_name, c.email, (select count(*)::int from public.tradelines t where t.client_id = c.id) as n from public.clients c where c.status <> 'cancelled' order by c.last_activity_at desc limit 60`));
+      `select c.id, c.full_name, c.email, (select count(*)::int from public.tradelines t where t.client_id = c.id) as n from public.clients c
+        where c.status <> 'cancelled' ${q ? "and c.full_name ilike '%' || $1 || '%'" : ''} order by c.last_activity_at desc limit ${PICK_LIMIT}`, q ? [q.replace(/[\\%_]/g, '\\$&')] : []));
     return (
       <>
         <PageHeader title="New dispute" subtitle="Step 1 of 3 · Choose the client" back={{ href: '/app/disputes', label: 'Disputes' }} />
-        {clients.length === 0 ? <EmptyState title="No clients yet" action={<Link href="/app/clients/new" className="btn-primary">Add a client</Link>} /> : (
+        <form method="get" className="mb-4 flex flex-wrap items-center gap-3" role="search">
+          <input name="q" defaultValue={q} placeholder="Search clients by name" className="field min-w-[14rem] flex-1" aria-label="Search clients by name" />
+          <button className="btn-secondary" type="submit">Search</button>
+          {q && <Link href="/app/disputes/new" className="btn-ghost">Clear</Link>}
+        </form>
+        {clients.length === 0 && q ? <EmptyState title="No clients match that name" body="Try a different spelling, or clear the search." />
+        : clients.length === 0 ? <EmptyState title="No clients yet" action={<Link href="/app/clients/new" className="btn-primary">Add a client</Link>} /> : (
+          <>
           <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {clients.map((c) => (
               <li key={c.id}><Link href={`/app/disputes/new?clientId=${c.id}`} className="card flex items-center gap-3 p-4 transition hover:border-brand/50">
@@ -34,6 +44,8 @@ export default async function NewDisputePage({ searchParams }: { searchParams: P
               </Link></li>
             ))}
           </ul>
+          {clients.length === PICK_LIMIT && <p className="mt-3 text-sm text-muted">Showing the {PICK_LIMIT} {q ? 'most recently active matches' : 'most recently active clients'}. Search by name to find others.</p>}
+          </>
         )}
       </>
     );

@@ -22,8 +22,15 @@ was verified, and what is **not** done. It is engineering documentation, **not l
 | Rate limiting | Postgres-backed fixed windows (works across serverless instances) on sign-up, login, reset, MFA, invites | auth tests |
 | Data retention & deletion | per-client export (JSON) and hard delete with typed confirmation; retention report in Settings | manual/UI |
 
-**Operational requirements you must meet:** put the app behind a TLS-terminating proxy that sets `x-forwarded-for`
-(rate limits key on it); keep `PII_ENCRYPTION_KEY` in a secret manager and back it up separately; use a persistent,
+**Operational requirements you must meet:** put the app behind a TLS-terminating reverse proxy that **appends
+the connecting address to (or overwrites) `x-forwarded-for`** — nginx `$proxy_add_x_forwarded_for`, AWS ALB, Vercel,
+Fly and most load balancers do. Per-IP rate limits and audit-log IPs use the entry that proxy wrote: counting from the
+right, entry number `TRUSTED_PROXY_HOPS` (default `1` = one proxy; use `2` for CDN → load balancer → app). The leftmost
+value, which the browser controls, is never trusted. Setting the number higher than the real number of proxies lets a
+caller choose their own "IP", so do not guess; never expose the app port directly to the internet (without a proxy the
+header is whatever the caller sends). `x-real-ip` is only read when there is no `x-forwarded-for`. Route-handler
+downloads and search (`/api/documents`, `/api/letters/*/pdf`, `/api/clients/*/export`, `/api/search`) require a session
+that has completed two-step verification, the same as pages; keep `PII_ENCRYPTION_KEY` in a secret manager and back it up separately; use a persistent,
 access-controlled volume for `STORAGE_DIR`; enable database backups and encryption at rest at your provider.
 
 **Known gaps:** no malware scanning of uploads; no OCR; the `fs` storage backend only (no S3); recovery codes for

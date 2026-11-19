@@ -31,7 +31,7 @@ No local Postgres? `docker compose up -d` starts one (`postgres://disputeos:disp
 
 Tenant isolation is enforced by PostgreSQL row-level security. Application requests run as the NOLOGIN role
 `disputeos_rls`, which can only see rows its policies allow. The role in `DATABASE_URL` (the table owner) is used
-only by a handful of audited system paths: sign-in, sign-up, password reset, invitation acceptance, webhooks and
+only by a handful of audited system paths: sign-in, sign-up, password reset, invitation acceptance, API-key authentication, the health check and
 scheduled jobs (`withSystem` in `src/lib/db.ts`).
 
 On a managed database where the app role lacks `CREATEROLE`, create the role once as an admin before migrating:
@@ -46,13 +46,20 @@ grant disputeos_rls to <your_app_role>;
 1. Provision PostgreSQL 14+ with automated backups and encryption at rest (provider setting). Use TLS (`?sslmode=require`).
 2. Generate secrets: `openssl rand -base64 32` for `PII_ENCRYPTION_KEY`; `openssl rand -hex 24` for `CRON_SECRET`.
    Store them in the host's secret manager. **Back up the encryption key separately — without it encrypted data is unrecoverable.**
-3. Set `APP_ENV=production`, `APP_URL=https://…`, `EMAIL_DRIVER=resend` with a verified domain.
+3. Set `APP_ENV=production`, `APP_URL=https://…`, `EMAIL_DRIVER=resend` with `RESEND_API_KEY` and a verified domain
+   (staging/production refuse to start with the `log` driver). Set `APP_TIMEZONE` to your business timezone (default
+   `America/New_York`): it decides what "today" is for sent-on dates, task due days and the overdue count. Set `TRUSTED_PROXY_HOPS` to the
+   number of reverse proxies in front of the app (default 1) — see docs/SECURITY_AND_COMPLIANCE.md.
+   Lines left blank in an env file (`CRON_SECRET=`) count as not set.
 4. `npm run db:migrate` (never `db:reset`).
 5. Put `STORAGE_DIR` on a persistent encrypted volume (documents are additionally AES-256-GCM encrypted by the app).
 6. Schedule `POST /api/jobs/run` (every 15 min) with `authorization: Bearer $CRON_SECRET` for automations and deadline tracking.
    From a machine with the repo and the same environment, `npm run jobs:run` makes that call and exits non-zero if the app is
    unreachable, the secret is wrong, or any organization's jobs failed. It is safe to retry. See docs/INTEGRATIONS.md.
-7. Review `docs/INTEGRATIONS.md` for what each optional integration needs, and what has and has not been verified.
+7. Point your load balancer / uptime monitor at `GET /api/health`: unauthenticated, no side effects, answers
+   `200 {"ok":true}` when the database is reachable and the `disputeos_rls` role exists, otherwise `503 {"ok":false}`.
+   It returns no version, configuration or error details.
+8. Review `docs/INTEGRATIONS.md` for what each optional integration needs, and what has and has not been verified.
 
 ## Rotating the encryption key
 

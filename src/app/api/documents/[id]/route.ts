@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { audit } from '@/lib/audit';
-import { currentSession } from '@/lib/auth/context';
+import { apiSession } from '@/lib/auth/context';
 import { withTenant } from '@/lib/db';
 import { getObject } from '@/lib/storage';
 import { isUuid } from '@/lib/util';
@@ -10,7 +10,7 @@ export const dynamic = 'force-dynamic';
 /** Decrypts and streams a stored document. Row-level security decides who may see it (staff: their org; client: their own). */
 export async function GET(_: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const s = await currentSession();
+  const s = await apiSession();
   if (!s || !isUuid(id)) return new NextResponse('Not found', { status: 404 });
   const doc = await withTenant(s.userId, async (db) => {
     const d = await db.row<{ file_name: string; mime_type: string; storage_key: string; client_id: string }>('select file_name, mime_type, storage_key, client_id from public.documents where id = $1', [id]);

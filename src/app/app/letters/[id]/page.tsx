@@ -7,22 +7,24 @@ import { AiSuggest } from '@/components/ai-suggest';
 import { LetterEditor } from '@/components/letter-editor';
 import { DeliveryRecord, Notice, PageHeader, Section, StatusBadge } from '@/components/ui';
 import { providerStatus } from '@/lib/ai/provider';
+import { refusalMessage } from '@/lib/refusals';
 import { requireStaff } from '@/lib/auth/context';
-import { approvalBlockers } from '@/lib/letters/service';
+import { approvalBlockers, businessToday } from '@/lib/letters/service';
 import { fmtDate, isUuid, relTime } from '@/lib/util';
 import { aiAcceptLetterAction, aiSuggestLetterAction, letterStatusAction, markSentAction, restoreVersionAction, saveLetterAction } from '../actions';
 import { PRODUCT } from '@/lib/product';
 
 export const metadata: Metadata = { title: 'Letter' };
 
-export default async function LetterPage({ params }: { params: Promise<{ id: string }> }) {
+export default async function LetterPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ error?: string }> }) {
   const { id } = await params;
+  const sp = await searchParams;
   if (!isUuid(id)) notFound();
   const ctx = await requireStaff('clients:read');
   const data = await ctx.tx(async (db) => {
-    const l = await db.row<{ id: string; title: string; status: string; client_id: string; client_name: string; dispute_id: string | null; current_version: number; recipient_name: string; approved_at: string | null; approver: string | null; sent_at: string | null; sent_on: string | null; sent_method: string | null; tracking_number: string | null; delivery_source: string; carrier_delivered_at: string | null; recorder: string | null; language: string }>(
-      `select l.id, l.title, l.status, l.client_id, c.full_name as client_name, l.dispute_id, l.current_version, l.recipient_name, l.approved_at, u.full_name as approver, l.sent_at, l.sent_on, l.sent_method, l.tracking_number, l.delivery_source, l.carrier_delivered_at, sr.full_name as recorder, l.language
-         from public.letters l join public.clients c on c.id = l.client_id left join public.users u on u.id = l.approved_by left join public.users sr on sr.id = l.sent_recorded_by where l.id = $1`, [id]);
+    const l = await db.row<{ id: string; title: string; status: string; client_id: string; client_name: string; dispute_id: string | null; current_version: number; recipient_name: string; approved_at: string | null; approver: string | null; sent_at: string | null; sent_on: string | null; sent_method: string | null; tracking_number: string | null; delivery_source: string; carrier_delivered_at: string | null; recorder: string | null; language: string; dispute_status: string | null; dispute_submitted_at: string | null }>(
+      `select l.id, l.title, l.status, l.client_id, c.full_name as client_name, l.dispute_id, l.current_version, l.recipient_name, l.approved_at, u.full_name as approver, l.sent_at, l.sent_on, l.sent_method, l.tracking_number, l.delivery_source, l.carrier_delivered_at, sr.full_name as recorder, l.language, d.status as dispute_status, d.submitted_at as dispute_submitted_at
+         from public.letters l join public.clients c on c.id = l.client_id left join public.users u on u.id = l.approved_by left join public.users sr on sr.id = l.sent_recorded_by left join public.disputes d on d.id = l.dispute_id where l.id = $1`, [id]);
     if (!l) return null;
     const versions = await db.rows<{ version: number; source: string; change_note: string | null; created_at: string; author: string | null; body: string }>(
       `select v.version, v.source, v.change_note, v.created_at, u.full_name as author, v.body from public.letter_versions v left join public.users u on u.id = v.author_id where v.letter_id = $1 order by v.version desc`, [id]);
@@ -33,8 +35,10 @@ export default async function LetterPage({ params }: { params: Promise<{ id: str
   const body = versions[0]!.body;
   const blockers = approvalBlockers(body);
   const locked = l.status === 'sent' || l.status === 'void';
+  // A letter for a dispute that has not been submitted yet is recorded as sent from the dispute, which also starts the response deadline.
+  const viaDispute = !!l.dispute_id && !l.dispute_submitted_at && l.dispute_status !== 'cancelled';
   const ai = providerStatus();
-  const today = new Date().toISOString().slice(0, 10);
+  const today = businessToday(); // the agency's calendar day (APP_TIMEZONE), not the UTC date
 
   return (
     <>
@@ -42,8 +46,9 @@ export default async function LetterPage({ params }: { params: Promise<{ id: str
         subtitle={<>For <Link className="underline" href={`/app/clients/${l.client_id}`}>{l.client_name}</Link> · to {l.recipient_name} · version {l.current_version}</>}
         actions={<><StatusBadge status={l.status} /><a className="btn-secondary" href={`/api/letters/${l.id}/pdf`}><Download size={15} /> PDF</a></>} />
 
+      {sp.error && <div className="mb-4" role="alert"><Notice tone="warn" title="That did not go through">{refusalMessage(sp.error)}</Notice></div>}
       {l.status === 'draft' && <div className="mb-4"><Notice tone="warn" title="Draft">Not yet approved. The PDF is watermarked as a draft until a manager approves it.</Notice></div>}
-      {l.status === 'approved' && <div className="mb-4"><Notice tone="ok" title="Approved">Approved by {l.approver ?? 'a manager'} on {fmtDate(l.approved_at)}. Mail it, then record that it was sent.</Notice></div>}
+      {l.status === 'approved' && <div className="mb-4"><Notice tone="ok" title="Approved">Approved by {l.approver ?? 'a manager'} on {fmtDate(l.approved_at)}. {viaDispute ? 'Mail it, then record the submission on the dispute. That marks this letter as sent and starts the response deadline.' : 'Mail it, then record that it was sent.'}</Notice></div>}
       {l.status === 'sent' && <div className="mb-4"><DeliveryRecord sentOn={l.sent_on ?? l.sent_at} method={l.sent_method} tracking={l.tracking_number} source={l.delivery_source} recordedBy={l.recorder} carrierDeliveredAt={l.carrier_delivered_at} /></div>}
 
       <div className="grid gap-6 2xl:grid-cols-[1fr_20rem]">
@@ -64,7 +69,13 @@ export default async function LetterPage({ params }: { params: Promise<{ id: str
                   <ActionForm action={letterStatusAction}><input type="hidden" name="id" value={l.id} /><input type="hidden" name="to" value="draft" /><SubmitButton className="w-full" variant="secondary">Return to draft</SubmitButton></ActionForm>
                 </>
               )}
-              {l.status === 'approved' && (
+              {l.status === 'approved' && viaDispute && (
+                <div className="space-y-2">
+                  <Link href={`/app/disputes/${l.dispute_id}`} className="btn-primary w-full">Record the submission on the dispute</Link>
+                  <p className="text-xs text-muted">{l.dispute_status === 'approved' ? 'Recording it there' : 'Once the dispute is approved, recording the submission there'} marks this letter as sent with the same details and starts the response deadline, so it only has to be entered once.</p>
+                </div>
+              )}
+              {l.status === 'approved' && !viaDispute && (
                 <ActionForm action={markSentAction} className="space-y-3">
                   <input type="hidden" name="id" value={l.id} />
                   <Select label="How was it sent?" name="method" defaultValue="certified_mail" options={[{ value: 'certified_mail', label: 'Certified mail' }, { value: 'first_class_mail', label: 'First-class mail' }, { value: 'portal', label: 'Online portal' }, { value: 'manual', label: 'Other' }]} />

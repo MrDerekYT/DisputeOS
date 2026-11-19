@@ -6,12 +6,13 @@ import { SplitBar } from '@/components/charts';
 import { ScoreHistory, type ScoreRow } from '@/components/score-history';
 import { Badge, Section } from '@/components/ui';
 import { CONSENT_DOCS } from '@/lib/compliance/disclosures';
-import { DOC_KIND_LABEL, CLIENT_STAGES } from '@/lib/crm';
+import { CLIENT_STAGES, DOC_KINDS } from '@/lib/crm';
 import { portalContext, specialistFirstName } from '@/lib/portal';
 import { nextStep, type NextKey } from '@/lib/portal-next-step';
 import type { PortalKey } from '@/lib/portal-i18n';
 import { cn, daysUntil, fmtDate, relTimeIn } from '@/lib/util';
 import { portalUploadAction } from '../actions';
+import { PortalFileInput } from '../file-input';
 
 export const metadata: Metadata = { title: 'Your case' };
 
@@ -39,7 +40,9 @@ export default async function PortalHome() {
   const specialist = await specialistFirstName(client.id);
   const first = client.full_name.split(' ')[0];
   const needSign = CONSENT_DOCS.filter((c) => c.required && !d.consents.some((k) => k.kind === c.kind));
-  const stageIdx = Math.min(CLIENT_STAGES.indexOf(client.stage as (typeof CLIENT_STAGES)[number]), STEPS.length - 1);
+  // A graduated client is past the last step, so every step shows as done.
+  const stageIdx = client.stage === 'graduated' ? STEPS.length : Math.min(CLIENT_STAGES.indexOf(client.stage as (typeof CLIENT_STAGES)[number]), STEPS.length - 1);
+  const kindLabel = (k: string) => ((DOC_KINDS as readonly string[]).includes(k) ? t(`kind_${k}` as PortalKey) : k);
   const s = d.stats!;
   const stLabel = (k: string | null) => (k ? t(`st_${k}` as PortalKey) : '');
   const next = nextStep({ needSign: needSign.length > 0, needDocs: d.requests.length > 0, reviewing: s.reviewing > 0, nextDue: s.next_due, stage: client.stage });
@@ -59,7 +62,7 @@ export default async function PortalHome() {
             <h2 id="next-step" className="mt-1 font-display text-2xl font-semibold leading-tight">{t(`ns_${next.key}_t` as PortalKey)}</h2>
             <p className="mt-1.5 text-muted">
               {t(`ns_${next.key}_b` as PortalKey)}
-              {next.key === 'wait' && s.next_due && <> <strong className="font-semibold text-ink">{fmtDate(s.next_due, lang)}</strong>{days != null && days >= 0 && <> ({days === 0 ? t('today') : `${days} ${t('daysAway')}`})</>}.</>}
+              {next.key === 'wait' && s.next_due && <> <strong className="font-semibold text-ink">{fmtDate(s.next_due, lang)}</strong>{days != null && days >= 0 && <> ({days === 0 ? t('today') : `${days} ${t(days === 1 ? 'dayAway' : 'daysAway')}`})</>}.</>}
             </p>
             {next.key === 'wait' && days != null && days < 0 && <p className="mt-1 text-sm text-muted">{t('ns_late')}</p>}
             <div className="mt-4 flex flex-wrap gap-2">
@@ -87,14 +90,14 @@ export default async function PortalHome() {
       <Section title={t('needFromYou')} id="needs">
         {d.requests.length === 0 && needSign.length === 0 ? <p className="text-sm text-muted">{t('nothingNeeded')}</p> : (
           <ul className="space-y-3">
-            {needSign.map((c) => <li key={c.kind}><Link href="/portal/profile#agreements" className="flex items-center justify-between gap-3 rounded-xl border border-warn/40 bg-warn-soft/50 p-3.5 text-sm"><span className="flex items-center gap-2.5"><PenLine size={16} className="text-warn" aria-hidden /><span className="font-medium">{c.title}</span></span><Badge tone="warn">{t('sign')}</Badge></Link></li>)}
+            {needSign.map((c) => <li key={c.kind}><Link href="/portal/profile#agreements" className="flex items-center justify-between gap-3 rounded-xl border border-warn/40 bg-warn-soft/50 p-3.5 text-sm"><span className="flex items-center gap-2.5"><PenLine size={16} className="text-warn" aria-hidden /><span className="font-medium">{t(`consent_${c.kind}_title` as PortalKey)}</span></span><Badge tone="warn">{t('sign')}</Badge></Link></li>)}
             {d.requests.map((r) => (
               <li key={r.id} className="rounded-xl border border-line p-3.5">
-                <div className="mb-2 flex items-center gap-2.5 text-sm"><FileUp size={16} className="text-brand" aria-hidden /><span className="font-medium">{DOC_KIND_LABEL[r.kind] ?? r.kind}</span>{r.due_at && <span className="text-xs text-muted">· {fmtDate(r.due_at, lang)}</span>}</div>
+                <div className="mb-2 flex items-center gap-2.5 text-sm"><FileUp size={16} className="text-brand" aria-hidden /><span className="font-medium">{kindLabel(r.kind)}</span>{r.due_at && <span className="text-xs text-muted">· {fmtDate(r.due_at, lang)}</span>}</div>
                 {r.note && <p className="mb-2 text-sm text-muted">{r.note}</p>}
                 <ActionForm action={portalUploadAction} resetOnSuccess className="flex flex-wrap items-end gap-2">
                   <input type="hidden" name="kind" value={r.kind} />
-                  <div className="min-w-[12rem] flex-1"><label className="sr-only" htmlFor={`f-${r.id}`}>{t('chooseFile')}</label><input id={`f-${r.id}`} name="file" type="file" required accept=".pdf,.png,.jpg,.jpeg" className="field !p-2 text-sm file:mr-3 file:rounded-lg file:border-0 file:bg-brand-soft file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-brand-strong" /></div>
+                  <div className="min-w-[12rem] flex-1"><label className="sr-only" htmlFor={`f-${r.id}`}>{t('chooseFile')}</label><PortalFileInput id={`f-${r.id}`} tooLarge={t('e_fileTooLarge')} /></div>
                   <SubmitButton>{t('upload')}</SubmitButton>
                 </ActionForm>
               </li>))}

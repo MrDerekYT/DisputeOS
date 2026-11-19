@@ -4,7 +4,7 @@ import { BarSeries, Donut, HBars, SplitBar } from '@/components/charts';
 import { Badge, EmptyState, PageHeader, Section, Stat } from '@/components/ui';
 import { getAnalytics } from '@/lib/analytics';
 import { requireStaff } from '@/lib/auth/context';
-import { daysRemaining } from '@/lib/disputes/workflow';
+import { daysOverdue, daysRemaining, deadlineState } from '@/lib/disputes/workflow';
 import { BUREAU_LABEL, cn, fmtDate, moneyShort, type Bureau } from '@/lib/util';
 import { PRODUCT } from '@/lib/product';
 
@@ -48,7 +48,7 @@ export default async function AnalyticsPage({ searchParams }: { searchParams: Pr
           {a.bureauOutcomes.length === 0 ? <p className="text-sm text-muted">No outcomes in this period.</p> : <HBars rows={a.bureauOutcomes.map((b) => ({ label: BUREAU_LABEL[b.bureau as Bureau] ?? b.bureau, value: b.changed, sub: `${b.changed} of ${b.total}` }))} tone="ok" />}
         </Section>
         <Section title="Upcoming response deadlines">
-          {a.deadlines.length === 0 ? <p className="text-sm text-muted">Nothing pending.</p> : <ul className="space-y-3 text-sm">{a.deadlines.map((x) => { const left = daysRemaining(x.due_at); return <li key={x.id} className="flex items-center justify-between gap-3"><span className="min-w-0"><Link className="font-medium hover:underline" href={`/app/disputes/${x.id}`}>{x.item_label}</Link><span className="block truncate text-xs text-muted">{x.client_name} · due {fmtDate(x.due_at)}</span></span><Badge tone={left < 0 ? 'bad' : left <= 5 ? 'warn' : 'neutral'}>{left < 0 ? `${-left}d overdue` : `${left}d`}</Badge></li>; })}</ul>}
+          {a.deadlines.length === 0 ? <p className="text-sm text-muted">Nothing pending.</p> : <ul className="space-y-3 text-sm">{a.deadlines.map((x) => { const st = deadlineState(x.due_at); return <li key={x.id} className="flex items-center justify-between gap-3"><span className="min-w-0"><Link className="font-medium hover:underline" href={`/app/disputes/${x.id}`}>{x.item_label}</Link><span className="block truncate text-xs text-muted">{x.client_name} · due {fmtDate(x.due_at)}</span></span><Badge tone={st === 'overdue' ? 'bad' : st === 'soon' ? 'warn' : 'neutral'}>{st === 'overdue' ? `${daysOverdue(x.due_at)}d overdue` : `${daysRemaining(x.due_at)}d`}</Badge></li>; })}</ul>}
         </Section>
       </div>
 

@@ -7,8 +7,9 @@ import { getAnalytics } from '@/lib/analytics';
 import { requireStaff } from '@/lib/auth/context';
 import { clientCare } from '@/lib/client-care';
 import type { Db } from '@/lib/db';
-import { daysRemaining } from '@/lib/disputes/workflow';
-import { BUREAU_LABEL, fmtDate, relTime, type Bureau } from '@/lib/util';
+import { getEnv } from '@/lib/env';
+import { daysOverdue, daysRemaining, deadlineState, DUE_SOON_DAYS } from '@/lib/disputes/workflow';
+import { BUREAU_LABEL, dueDay, fmtDate, relTime, type Bureau } from '@/lib/util';
 
 export const metadata: Metadata = { title: 'Dashboard' };
 
@@ -47,13 +48,15 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
 
       <section aria-labelledby="do-first" className="mb-6">
         <h2 id="do-first" className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted">Do these first</h2>
-        <div className="grid gap-4 lg:grid-cols-3">
-          <WorkList title="Overdue deadlines" count={first3.counts.overdue} tone="bad" empty="No investigation deadline has passed." allHref="/app/disputes?view=table" allLabel="All disputes"
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <WorkList title="Overdue deadlines" count={first3.counts.overdue} tone="bad" empty="No investigation deadline has passed." allHref="/app/disputes?view=table&overdue=1" allLabel="All overdue disputes"
             items={first3.overdue.map((d) => ({ key: d.id, href: `/app/disputes/${d.id}`, title: d.item_label, sub: d.client_name, right: `${d.days}d overdue` }))} />
           <WorkList title="Letters awaiting approval" count={first3.counts.letters} tone="warn" empty="No letter is waiting for approval." allHref="/app/letters?status=pending_approval" allLabel="All letters"
             items={first3.letters.map((l) => ({ key: l.id, href: `/app/letters/${l.id}`, title: l.title, sub: l.client_name, right: relTime(l.created_at) }))} />
           <WorkList title="Unanswered messages" count={care.counts.messages} tone="warn" empty="No client is waiting for a reply." allHref="/app/inbox" allLabel="Inbox"
             items={care.messages.map((m) => ({ key: m.id, href: `/app/clients/${m.client_id}?tab=messages`, title: m.client_name, sub: m.body, right: relTime(m.created_at) }))} />
+          <WorkList title="Reports to review" count={first3.counts.reports} tone="warn" empty="No credit report is waiting for review."
+            items={first3.reports.map((r) => ({ key: r.id, href: `/app/reports/${r.id}`, title: r.client_name, sub: `${r.bureau ? BUREAU_LABEL[r.bureau as Bureau] ?? r.bureau : 'Credit'} report · not used until it is approved`, right: relTime(r.created_at) }))} />
         </div>
       </section>
 
@@ -70,7 +73,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Stat label="Active clients" value={a.clients.active} sub={`${a.clients.total} total · ${a.clients.newInRange} new in 90 days`} href="/app/clients" />
         <Stat label="Disputes in flight" value={d.inFlight} sub={`${d.created} created in 90 days`} href="/app/disputes" />
-        <Stat label="Due in 7 days" value={d.dueSoon} tone={d.dueSoon ? 'warn' : undefined} sub={d.overdue ? `${d.overdue} overdue` : 'none overdue'} href="/app/disputes?view=table" />
+        <Stat label={`Due in ${DUE_SOON_DAYS} days`} value={d.dueSoon} tone={d.dueSoon ? 'warn' : undefined} sub={d.overdue ? `${d.overdue} overdue` : 'none overdue'} href="/app/disputes?view=table&due=soon" />
         <Stat label="Open tasks" value={a.tasks.open} tone={a.tasks.overdue ? 'warn' : undefined} sub={a.tasks.overdue ? `${a.tasks.overdue} overdue` : 'all on time'} href="/app/tasks" />
       </div>
 
@@ -92,15 +95,15 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
           {mine.length === 0 && d.awaitingReview === 0 ? <p className="py-6 text-center text-sm text-muted">You’re all caught up.</p> : (
             <ul className="divide-y divide-line">{mine.map((t) => (
               <li key={t.id} className="flex items-center justify-between gap-3 py-2.5 text-sm"><div className="min-w-0"><div className="truncate font-medium">{t.title}</div>{t.client_name && <Link href={`/app/clients/${t.client_id}`} className="text-xs text-muted hover:underline">{t.client_name}</Link>}</div>
-                {t.due_at && <Badge tone={new Date(t.due_at) < new Date() ? 'bad' : 'neutral'}>{fmtDate(t.due_at)}</Badge>}</li>))}</ul>
+                {t.due_at && <Badge tone={dueDay(t.due_at, getEnv().APP_TIMEZONE) === 'overdue' ? 'bad' : 'neutral'}>{fmtDate(t.due_at)}</Badge>}</li>))}</ul>
           )}
         </Section>
 
         <Section title="Upcoming deadlines" hint="Bureau and furnisher response windows">
           {a.deadlines.length === 0 ? <p className="text-sm text-muted">No submitted disputes yet.</p> : (
             <ul className="space-y-3">{a.deadlines.slice(0, 5).map((x) => {
-              const left = daysRemaining(x.due_at);
-              return (<li key={x.id} className="text-sm"><Link href={`/app/disputes/${x.id}`} className="font-medium hover:underline">{x.item_label}</Link><div className="flex items-center justify-between text-xs text-muted"><span>{x.client_name}{x.bureau ? ` · ${BUREAU_LABEL[x.bureau as Bureau]}` : ''}</span><Badge tone={left < 0 ? 'bad' : left <= 5 ? 'warn' : 'neutral'}>{left < 0 ? `${-left}d overdue` : `${left}d`}</Badge></div></li>);
+              const st = deadlineState(x.due_at);
+              return (<li key={x.id} className="text-sm"><Link href={`/app/disputes/${x.id}`} className="font-medium hover:underline">{x.item_label}</Link><div className="flex items-center justify-between text-xs text-muted"><span>{x.client_name}{x.bureau ? ` · ${BUREAU_LABEL[x.bureau as Bureau]}` : ''}</span><Badge tone={st === 'overdue' ? 'bad' : st === 'soon' ? 'warn' : 'neutral'}>{st === 'overdue' ? `${daysOverdue(x.due_at)}d overdue` : `${daysRemaining(x.due_at)}d`}</Badge></div></li>);
             })}</ul>
           )}
         </Section>
@@ -135,8 +138,8 @@ function CareList({ icon: Icon, title, items, count, empty }: { icon: typeof Fil
 
 type WorkItem = { key: string; href: string; title: string; sub: string; right: string };
 
-/** One of the three "do these first" queues. The count is the real total; the list shows the oldest five. */
-function WorkList({ title, count, tone, items, empty, allHref, allLabel }: { title: string; count: number; tone: 'bad' | 'warn'; items: WorkItem[]; empty: string; allHref: string; allLabel: string }) {
+/** One of the "do these first" queues. The count is the real total; the list shows the oldest five. */
+function WorkList({ title, count, tone, items, empty, allHref, allLabel }: { title: string; count: number; tone: 'bad' | 'warn'; items: WorkItem[]; empty: string; allHref?: string; allLabel?: string }) {
   return (
     <div className={`card p-4 ${count > 0 ? (tone === 'bad' ? 'border-bad/40' : 'border-warn/40') : ''}`}>
       <div className="mb-3 flex items-center justify-between gap-2">
@@ -151,14 +154,14 @@ function WorkList({ title, count, tone, items, empty, allHref, allLabel }: { tit
           </Link></li>))}</ul>
       )}
       {count > items.length && <p className="mt-3 text-xs text-muted">Showing the oldest {items.length} of {count}.</p>}
-      <Link href={allHref} className="mt-3 inline-block text-xs font-medium text-brand-strong hover:underline">{allLabel}</Link>
+      {allHref && <Link href={allHref} className="mt-3 inline-block text-xs font-medium text-brand-strong hover:underline">{allLabel}</Link>}
     </div>
   );
 }
 
-/** Overdue investigation deadlines and letters waiting for approval, oldest first, under the viewer's row-level security. */
+/** Overdue investigation deadlines, letters waiting for approval and credit reports waiting for review, oldest first, under the viewer's row-level security. */
 async function workFirst(db: Db) {
-  const [overdue, letters] = await Promise.all([
+  const [overdue, letters, reports] = await Promise.all([
     db.rows<{ id: string; item_label: string; client_name: string; days: number; n: number }>(
       `select d.id, d.item_label, c.full_name as client_name, greatest(1, ceil(extract(epoch from now() - d.due_at) / 86400))::int as days, count(*) over ()::int as n
          from public.disputes d join public.clients c on c.id = d.client_id
@@ -166,6 +169,9 @@ async function workFirst(db: Db) {
     db.rows<{ id: string; title: string; client_name: string; created_at: string; n: number }>(
       `select l.id, l.title, c.full_name as client_name, l.created_at, count(*) over ()::int as n
          from public.letters l join public.clients c on c.id = l.client_id where l.status = 'pending_approval' order by l.created_at limit 5`),
+    db.rows<{ id: string; bureau: string | null; client_name: string; created_at: string; n: number }>(
+      `select r.id, r.bureau, c.full_name as client_name, r.created_at, count(*) over ()::int as n
+         from public.credit_reports r join public.clients c on c.id = r.client_id where r.status = 'pending_review' order by r.created_at limit 5`),
   ]);
-  return { overdue, letters, counts: { overdue: overdue[0]?.n ?? 0, letters: letters[0]?.n ?? 0 } };
+  return { overdue, letters, reports, counts: { overdue: overdue[0]?.n ?? 0, letters: letters[0]?.n ?? 0, reports: reports[0]?.n ?? 0 } };
 }

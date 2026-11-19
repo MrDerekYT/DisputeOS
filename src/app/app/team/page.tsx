@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import { ActionForm, ConfirmButton, Field, Select, SubmitButton } from '@/components/forms';
 import { Avatar, Badge, Notice, PageHeader, Section } from '@/components/ui';
+import { refusalMessage } from '@/lib/refusals';
 import { requireStaff } from '@/lib/auth/context';
 import { getAnalytics } from '@/lib/analytics';
 import { grantableRoles } from '@/lib/rbac';
@@ -9,7 +10,8 @@ import { changeRoleAction, inviteStaffAction, reassignClientsAction, removeMembe
 
 export const metadata: Metadata = { title: 'Team' };
 
-export default async function TeamPage() {
+export default async function TeamPage({ searchParams }: { searchParams: Promise<{ error?: string }> }) {
+  const sp = await searchParams;
   const ctx = await requireStaff();
   if (!ctx.can('team:manage') && !ctx.can('analytics:team')) return <Notice tone="warn" title="Not available">Team management is for managers and admins.</Notice>;
   const manage = ctx.can('team:manage');
@@ -24,6 +26,7 @@ export default async function TeamPage() {
   return (
     <>
       <PageHeader title="Team" subtitle="Who can do what in your workspace." />
+      {sp.error && <div className="mb-4" role="alert"><Notice tone="warn" title="That did not go through">{refusalMessage(sp.error)}</Notice></div>}
       <div className="grid gap-6 lg:grid-cols-[1fr_22rem]">
         <div className="space-y-6">
           <div className="table-wrap"><table className="table"><thead><tr><th>Member</th><th>Role</th><th>2-step</th><th className="text-right">Active clients</th><th className="text-right">Open tasks</th><th>Last sign-in</th>{manage && <th></th>}</tr></thead>

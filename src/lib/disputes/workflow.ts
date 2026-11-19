@@ -71,9 +71,14 @@ export const daysRemaining = (due: Date | string, now = new Date()) => Math.ceil
 export type DeadlineState = 'ok' | 'soon' | 'overdue' | 'none';
 export function deadlineState(due: string | null | undefined, now = new Date()): DeadlineState {
   if (!due) return 'none';
-  const d = daysRemaining(due, now);
-  return d < 0 ? 'overdue' : d <= 5 ? 'soon' : 'ok';
+  // Overdue the moment the deadline passes — the same test the overdue counts and filters use (due_at < now).
+  if (new Date(due).getTime() < now.getTime()) return 'overdue';
+  return daysRemaining(due, now) <= DUE_SOON_DAYS ? 'soon' : 'ok';
 }
+/** One "due soon" window for every count, filter and badge. */
+export const DUE_SOON_DAYS = 7;
+/** Whole days past the deadline, never less than 1 once it has passed. */
+export const daysOverdue = (due: Date | string, now = new Date()) => Math.max(1, Math.ceil((now.getTime() - new Date(due).getTime()) / 86_400_000));
 
 export const BUREAU_ADDRESSES: Record<string, { name: string; address: string }> = {
   experian: { name: 'Experian', address: 'P.O. Box 4500, Allen, TX 75013' },

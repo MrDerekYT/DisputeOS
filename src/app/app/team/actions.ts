@@ -1,6 +1,8 @@
 'use server';
 
+import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
+import { refusalCode } from '@/lib/refusals';
 import { z } from 'zod';
 import type { ActionState } from '@/components/forms';
 import { parseForm, run, UserError, zUuid } from '@/lib/action';
@@ -29,44 +31,71 @@ export async function inviteStaffAction(_: ActionState, fd: FormData): Promise<A
   });
 }
 
+/**
+ * These three are plain form actions (no inline message area), so a refusal goes back to the Team page as a notice
+ * instead of surfacing as an error page.
+ */
+async function orRefuse(fn: () => Promise<void>) {
+  try {
+    await fn();
+  } catch (e) {
+    if (!(e instanceof UserError)) throw e;
+    revalidatePath('/app/team');
+    redirect(`/app/team?error=${refusalCode(e.message)}`);
+  }
+}
+
 export async function changeRoleAction(fd: FormData) {
   const ctx = await requireStaff('team:manage');
-  const d = parseForm(z.object({ userId: zUuid, role: z.enum(['admin', 'manager', 'specialist']) }), fd);
-  if (!grantableRoles(ctx.role).includes(d.role)) throw new UserError('You cannot grant that role.');
-  if (d.userId === ctx.userId) throw new UserError('You cannot change your own role.');
-  await ctx.tx(async (db) => {
-    const t = await db.row<{ role: Role }>('select role from public.memberships where org_id = $1 and user_id = $2', [ctx.orgId, d.userId]);
-    if (!t || t.role === 'owner' || (t.role === 'admin' && ctx.role !== 'owner')) throw new UserError('You cannot change that member.');
-    await db.run('update public.memberships set role = $3 where org_id = $1 and user_id = $2', [ctx.orgId, d.userId, d.role]);
-    await audit(db, { orgId: ctx.orgId, actorId: ctx.userId, action: 'team.role_changed', entityType: 'user', entityId: d.userId, ip: ctx.meta.ip, meta: { role: d.role } });
+  await orRefuse(async () => {
+    const d = parseForm(z.object({ userId: zUuid, role: z.enum(['admin', 'manager', 'specialist']) }), fd);
+    if (!grantableRoles(ctx.role).includes(d.role)) throw new UserError('You cannot grant that role.');
+    if (d.userId === ctx.userId) throw new UserError('You cannot change your own role.');
+    await ctx.tx(async (db) => {
+      const t = await db.row<{ role: Role }>('select role from public.memberships where org_id = $1 and user_id = $2', [ctx.orgId, d.userId]);
+      if (!t || t.role === 'owner' || (t.role === 'admin' && ctx.role !== 'owner')) throw new UserError('You cannot change that member.');
+      await db.run('update public.memberships set role = $3 where org_id = $1 and user_id = $2', [ctx.orgId, d.userId, d.role]);
+      await audit(db, { orgId: ctx.orgId, actorId: ctx.userId, action: 'team.role_changed', entityType: 'user', entityId: d.userId, ip: ctx.meta.ip, meta: { role: d.role } });
+    });
   });
   revalidatePath('/app/team');
 }
 
 export async function removeMemberAction(fd: FormData) {
   const ctx = await requireStaff('team:manage');
-  const d = parseForm(z.object({ userId: zUuid }), fd);
-  if (d.userId === ctx.userId) throw new UserError('You cannot remove yourself.');
-  await ctx.tx(async (db) => {
-    const t = await db.row<{ role: Role }>('select role from public.memberships where org_id = $1 and user_id = $2', [ctx.orgId, d.userId]);
-    if (!t || t.role === 'owner' || t.role === 'client' || (t.role === 'admin' && ctx.role !== 'owner')) throw new UserError('You cannot remove that member.');
-    await db.run('update public.clients set assigned_to = null where assigned_to = $1', [d.userId]);
-    await db.run('update public.tasks set assignee_id = null where assignee_id = $1 and status = \'open\'', [d.userId]);
-    await db.run('delete from public.memberships where org_id = $1 and user_id = $2', [ctx.orgId, d.userId]);
-    await audit(db, { orgId: ctx.orgId, actorId: ctx.userId, action: 'team.removed', entityType: 'user', entityId: d.userId, ip: ctx.meta.ip });
+  await orRefuse(async () => {
+    const d = parseForm(z.object({ userId: zUuid }), fd);
+    if (d.userId === ctx.userId) throw new UserError('You cannot remove yourself.');
+    await ctx.tx(async (db) => {
+      const t = await db.row<{ role: Role }>('select role from public.memberships where org_id = $1 and user_id = $2', [ctx.orgId, d.userId]);
+      if (!t || t.role === 'owner' || t.role === 'client' || (t.role === 'admin' && ctx.role !== 'owner')) throw new UserError('You cannot remove that member.');
+      await db.run('update public.clients set assigned_to = null where assigned_to = $1', [d.userId]);
+      // Their disputes too: deadline reminders go to the dispute's assignee first, so a removed person must not stay on any.
+      await db.run('update public.disputes set assigned_to = null where assigned_to = $1', [d.userId]);
+      await db.run('update public.tasks set assignee_id = null where assignee_id = $1 and status = \'open\'', [d.userId]);
+      await db.run('delete from public.memberships where org_id = $1 and user_id = $2', [ctx.orgId, d.userId]);
+      await audit(db, { orgId: ctx.orgId, actorId: ctx.userId, action: 'team.removed', entityType: 'user', entityId: d.userId, ip: ctx.meta.ip });
+    });
+    // end their sessions for this workspace immediately
+    const { revokeAllSessions } = await import('@/lib/auth/service');
+    await revokeAllSessions(d.userId);
   });
-  // end their sessions for this workspace immediately
-  const { revokeAllSessions } = await import('@/lib/auth/service');
-  await revokeAllSessions(d.userId);
   revalidatePath('/app/team');
 }
 
 export async function resetMfaAction(fd: FormData) {
   const ctx = await requireStaff('team:manage');
-  const d = parseForm(z.object({ userId: zUuid }), fd);
-  const ok = await adminResetMfa(ctx.orgId, d.userId);
-  if (!ok) throw new UserError('That member’s two-step verification cannot be reset.');
-  await ctx.tx((db) => audit(db, { orgId: ctx.orgId, actorId: ctx.userId, action: 'team.mfa_reset', entityType: 'user', entityId: d.userId, ip: ctx.meta.ip }));
+  await orRefuse(async () => {
+    const d = parseForm(z.object({ userId: zUuid }), fd);
+    const REFUSED = 'That member’s two-step verification cannot be reset.';
+    // Same hierarchy as changing a role or removing someone: never yourself, never the owner, and an admin only by the owner.
+    if (d.userId === ctx.userId) throw new UserError('You cannot reset your own two-step verification here.');
+    const t = await ctx.tx((db) => db.row<{ role: Role }>('select role from public.memberships where org_id = $1 and user_id = $2', [ctx.orgId, d.userId]));
+    if (!t || t.role === 'owner' || t.role === 'client' || (t.role === 'admin' && ctx.role !== 'owner')) throw new UserError(REFUSED);
+    const ok = await adminResetMfa(ctx.orgId, d.userId);
+    if (!ok) throw new UserError(REFUSED);
+    await ctx.tx((db) => audit(db, { orgId: ctx.orgId, actorId: ctx.userId, action: 'team.mfa_reset', entityType: 'user', entityId: d.userId, ip: ctx.meta.ip }));
+  });
   revalidatePath('/app/team');
 }
 

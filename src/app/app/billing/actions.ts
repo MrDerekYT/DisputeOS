@@ -20,7 +20,7 @@ export async function recordPaymentAction(_: ActionState, fd: FormData): Promise
   const ctx = await requireStaff('billing:write');
   return run(async () => {
     const d = parseForm(
-      z.object({ clientId: zUuid, amount: dollars, method: z.enum(['card', 'ach', 'cash', 'check', 'other']), note: zOpt(500), subscriptionId: zUuid.optional().or(z.literal('')), performed: zBool }),
+      z.object({ clientId: zUuid, amount: dollars.refine((c) => c > 0, 'Enter an amount greater than zero'), method: z.enum(['card', 'ach', 'cash', 'check', 'other']), note: zOpt(500), subscriptionId: zUuid.optional().or(z.literal('')), performed: zBool }),
       fd,
     );
     if (!d.performed) throw new UserError('Confirm that this payment is for services already performed. Charging in advance of performance is prohibited for credit repair organizations.');
@@ -41,7 +41,8 @@ export async function refundPaymentAction(fd: FormData) {
   const ctx = await requireStaff('billing:write');
   const d = parseForm(z.object({ id: zUuid, clientId: zUuid }), fd);
   await ctx.tx(async (db) => {
-    await db.run("update public.payments set status = 'refunded' where id = $1 and status = 'succeeded'", [d.id]);
+    const n = await db.run("update public.payments set status = 'refunded' where id = $1 and status = 'succeeded'", [d.id]);
+    if (n === 0) return; // already refunded, or not a payment the caller can see: nothing happened, so nothing is logged
     await audit(db, { orgId: ctx.orgId, actorId: ctx.userId, action: 'payment.refunded', entityType: 'payment', entityId: d.id, ip: ctx.meta.ip });
   });
   revalidatePath(`/app/clients/${d.clientId}`);

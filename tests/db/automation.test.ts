@@ -69,6 +69,46 @@ describe('event triggers and the approval gate', () => {
     expect(await count('select count(*)::int as n from public.communications where client_id = $1', [c])).toBe(0);
   });
 
+  it('a specialist’s own action can fire an automation (run log insert is allowed), but they still cannot approve or cancel', async () => {
+    await create('Specialist trigger', 'client_created', [{ type: 'create_task', title: 'Specialist task' }, { type: 'portal_message', body: 'Welcome aboard.' }]);
+    const c = await addClient(org.orgId, 'Specialist Client');
+    const spec = { orgId: org.orgId, userId: specialistId };
+    await asUser(specialistId, (db) => fireTrigger(db, spec, 'client_created', { type: 'client', id: c }));
+    expect(await count("select count(*)::int as n from public.tasks where client_id = $1 and title = 'Specialist task'", [c])).toBe(1);
+    const run = await withSystem((db) => db.row<{ id: string }>("select r.id from public.automation_runs r join public.automations a on a.id = r.automation_id where r.subject_id = $1 and a.name = 'Specialist trigger' and r.status = 'pending_approval'", [c]));
+    expect(run).toBeTruthy();
+    // Row-level security: a specialist can neither change nor delete a run; the client-facing message stays unsent.
+    expect(await asUser(specialistId, (db) => db.rows("update public.automation_runs set status = 'completed' where id = $1 returning id", [run!.id]))).toHaveLength(0);
+    expect(await asUser(specialistId, (db) => db.rows('delete from public.automation_runs where id = $1 returning id', [run!.id]))).toHaveLength(0);
+    expect(await count('select count(*)::int as n from public.communications where client_id = $1', [c])).toBe(0);
+  });
+
+  it('a specialist can only log a run for their own organization’s automation, undecided and in a state the engine writes', async () => {
+    const mine = await create('Own org', 'client_created', [{ type: 'create_task', title: 'x' }]);
+    const other = await makeOrg('AutoOther');
+    const theirs = await asUser(other.ownerId, (db) => db.row<{ id: string }>(
+      `insert into public.automations (org_id, name, trigger, conditions, actions, created_by) values ($1, 'Theirs', 'client_created', '{}', '[]', $2) returning id`, [other.orgId, other.ownerId]));
+    const c = await addClient(org.orgId, 'Policy Client');
+    const ins = (automationId: string, status: string, decidedBy: string | null, key: string) => asUser(specialistId, (db) => db.run(
+      `insert into public.automation_runs (org_id, automation_id, dedupe_key, subject_type, subject_id, status, result, decided_by) values ($1, $2, $3, 'client', $4, $5, '{}', $6)`,
+      [org.orgId, automationId, key, c, status, decidedBy]));
+    await expect(ins(theirs!.id, 'completed', null, 'k1')).rejects.toThrow(/row-level security/);
+    await expect(ins(mine, 'cancelled', null, 'k2')).rejects.toThrow(/row-level security/);
+    await expect(ins(mine, 'completed', specialistId, 'k3')).rejects.toThrow(/row-level security/);
+    await ins(mine, 'completed', null, 'k4');
+    expect(await count('select count(*)::int as n from public.automation_runs where automation_id = $1', [theirs!.id])).toBe(0);
+  });
+
+  it('a report automation runs for every imported report, not once per client ever', async () => {
+    const a = await create('Each report', 'report_uploaded', [{ type: 'create_task', title: 'Review the new report' }]);
+    const c = await addClient(org.orgId, 'Monthly Client');
+    const fire = (bucket?: string) => asUser(org.ownerId, (db) => fireTrigger(db, actor(), 'report_uploaded', { type: 'client', id: c }, {}, bucket));
+    await fire('report:11111111-1111-4111-8111-111111111111');
+    await fire('report:11111111-1111-4111-8111-111111111111'); // same import retried: still one run
+    await fire('report:22222222-2222-4222-8222-222222222222'); // next month's report: a new run
+    expect(await count('select count(*)::int as n from public.automation_runs where automation_id = $1', [a])).toBe(2);
+  });
+
   it('only fires status automations for the configured status', async () => {
     const a = await create('On submit', 'dispute_status_changed', [{ type: 'notify_staff', title: 'Dispute submitted' }], { conditions: { toStatus: 'submitted' } });
     const c = await addClient(org.orgId, 'Status Client');

@@ -1,4 +1,5 @@
 import type { Db } from './db';
+import { getEnv } from './env';
 
 /**
  * All dashboard and analytics numbers come from here, computed by SQL over the caller's own data (row-level security
@@ -40,7 +41,7 @@ export async function getAnalytics(db: Db, opts: { rangeDays: number; withTeam: 
        from public.disputes`, [days]);
 
   const tasks = await one<Analytics['tasks']>(
-    `select count(*) filter (where status = 'open')::int as open, count(*) filter (where status = 'open' and due_at < now())::int as overdue from public.tasks`);
+    `select count(*) filter (where status = 'open')::int as open, count(*) filter (where status = 'open' and (due_at at time zone 'UTC')::date < (now() at time zone $1)::date)::int as overdue from public.tasks`, [getEnv().APP_TIMEZONE]); // by calendar day in the agency's zone, like dueDay()
 
   const monthly = (col: string, table: string, where = '') =>
     db.rows<{ label: string; value: number }>(

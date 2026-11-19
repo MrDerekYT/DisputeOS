@@ -2,7 +2,7 @@ import Link from 'next/link';
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import { AlertTriangle, CheckCircle2 } from 'lucide-react';
-import { ActionForm, Check, Field, SubmitButton } from '@/components/forms';
+import { ActionForm, Check, ConfirmButton, Field, SubmitButton } from '@/components/forms';
 import { Badge, DefinitionList, EmptyState, Notice, PageHeader, Section, StatusBadge } from '@/components/ui';
 import { requireStaff } from '@/lib/auth/context';
 import { lowConfidenceFields } from '@/lib/reports/parser';
@@ -114,7 +114,7 @@ export default async function ReportReview({ params }: { params: Promise<{ id: s
                 {pending && (
                   <form action={deleteTradelineAction} className="mt-2">
                     <input type="hidden" name="id" value={t.id} /><input type="hidden" name="reportId" value={r.id} />
-                    <button className="text-xs text-bad underline" type="submit">Remove (misread row)</button>
+                    <ConfirmButton className="text-xs text-bad underline" message={`Remove ${t.creditor_name} from this report? Use this only for a row that was misread. It cannot be undone.`}>Remove (misread row)</ConfirmButton>
                   </form>
                 )}
               </details>
@@ -139,7 +139,7 @@ export default async function ReportReview({ params }: { params: Promise<{ id: s
         <div className="sticky bottom-4 mt-8 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-line bg-surface/95 p-4 shadow-pop backdrop-blur">
           <p className="text-sm text-muted">Approving runs the cross-bureau analysis for this client.</p>
           <div className="flex gap-2">
-            <form action={decideReportAction}><input type="hidden" name="id" value={r.id} /><input type="hidden" name="decision" value="rejected" /><button className="btn-secondary" type="submit">Reject</button></form>
+            <form action={decideReportAction}><input type="hidden" name="id" value={r.id} /><input type="hidden" name="decision" value="rejected" /><ConfirmButton className="btn-secondary" message="Reject this report? This is final: it will not be used, and the same file cannot be read again. To try again you would upload the report as a new file.">Reject</ConfirmButton></form>
             <form action={decideReportAction}><input type="hidden" name="id" value={r.id} /><input type="hidden" name="decision" value="approved" /><button className="btn-primary" type="submit">Approve report</button></form>
           </div>
         </div>

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { AlertTriangle, CheckCircle2 } from 'lucide-react';
 import { ActionForm, SubmitButton, TextArea } from '@/components/forms';
 import { findBlockedClaims } from '@/lib/compliance/claims';
@@ -12,6 +12,8 @@ type Save = (prev: ActionState, fd: FormData) => Promise<ActionState>;
 /** Edit on the left, see the letter as it will print on the right. Problems are flagged as you type. */
 export function LetterEditor({ id, initial, locked, save }: { id: string; initial: string; locked: boolean; save: Save }) {
   const [text, setText] = useState(initial);
+  // Follow the server's current version (restore, accepted suggestion) so the editor never shows stale text.
+  useEffect(() => setText(initial), [initial]);
   const unresolved = unresolvedPlaceholders(text);
   const claims = findBlockedClaims(text);
   const dirty = text.trim() !== initial.trim();

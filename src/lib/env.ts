@@ -30,6 +30,10 @@ const schema = z.object({
   STORAGE_DIR: z.string().default('.storage'),
   REQUIRE_STAFF_MFA: z.enum(['true', 'false']).default('true'),
   STAFF_IDLE_MINUTES: z.coerce.number().int().min(5).max(1440).default(120),
+  // How many reverse proxies sit in front of the app; decides which x-forwarded-for entry is believed (src/lib/client-ip.ts).
+  TRUSTED_PROXY_HOPS: z.coerce.number().int().min(1).max(5).default(1),
+  // IANA timezone the agency works in; decides what "today" means for a sent-on date left blank.
+  APP_TIMEZONE: z.string().refine((tz) => { try { new Intl.DateTimeFormat('en-CA', { timeZone: tz }); return true; } catch { return false; } }, 'must be an IANA timezone such as America/New_York').default('America/New_York'),
   // Email
   EMAIL_DRIVER: z.enum(['log', 'resend']).default('log'),
   EMAIL_FROM: z.string().default(`${PRODUCT.name} <no-reply@localhost>`),
@@ -40,9 +44,6 @@ const schema = z.object({
   AI_BASE_URL: z.string().url().optional(),
   AI_API_KEY: z.string().optional(),
   ANTHROPIC_API_KEY: z.string().optional(),
-  // Billing
-  STRIPE_SECRET_KEY: z.string().optional(),
-  STRIPE_WEBHOOK_SECRET: z.string().optional(),
   // Scheduled jobs (automation runner endpoint)
   CRON_SECRET: z.string().min(24).optional(),
 });
@@ -64,12 +65,14 @@ export function getEnv(): Env {
   const appEnv = detectAppEnv();
   const strict = appEnv === 'staging' || appEnv === 'production';
   const raw: Record<string, string | undefined> = { ...process.env, APP_ENV: appEnv };
+  // A blank line in an env file (`CRON_SECRET=`) means "not set", not "set to the empty string".
+  for (const k of Object.keys(raw)) if (raw[k]?.trim() === '') delete raw[k];
 
   if (!strict) {
     raw.PII_ENCRYPTION_KEY ??= DEV_PII_KEY;
     raw.APP_URL ??= 'http://localhost:3000';
     if (appEnv === 'test') {
-      raw.DATABASE_URL = process.env.DATABASE_URL_TEST ?? process.env.DATABASE_URL;
+      raw.DATABASE_URL = raw.DATABASE_URL_TEST ?? raw.DATABASE_URL;
       raw.REQUIRE_STAFF_MFA ??= 'true';
     }
   }
@@ -84,6 +87,8 @@ export function getEnv(): Env {
     if (env.PII_ENCRYPTION_KEY === DEV_PII_KEY) problems.push('PII_ENCRYPTION_KEY must not be the development key');
     if (!env.APP_URL.startsWith('https://')) problems.push('APP_URL must be https in staging/production');
     if (env.REQUIRE_STAFF_MFA !== 'true') problems.push('REQUIRE_STAFF_MFA must be true in staging/production');
+    // The log driver delivers nothing and writes reset/invitation links in plaintext to disk: development and test only.
+    if (env.EMAIL_DRIVER !== 'resend') problems.push('EMAIL_DRIVER must be resend in staging/production (the log driver delivers nothing)');
     if (env.EMAIL_DRIVER === 'resend' && !env.RESEND_API_KEY) problems.push('RESEND_API_KEY is required when EMAIL_DRIVER=resend');
     if (problems.length) throw new Error(`Unsafe ${appEnv} configuration:\n  ${problems.join('\n  ')}`);
   }

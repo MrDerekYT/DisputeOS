@@ -12,7 +12,7 @@ import {
 import { findBlockedClaims } from '../compliance/claims';
 import type { Evidence } from '../reports/analysis';
 import { draftReason } from './reasons';
-import { checkSentOn } from '../letters/service';
+import { businessToday, checkSentOn } from '../letters/service';
 
 export interface DActor { orgId: string; userId: string; role: Role; meta?: { ip?: string | null } }
 export class DisputeError extends UserError {}
@@ -107,10 +107,12 @@ export async function transitionDispute(
     const received = opts.receivedOn ? new Date(`${opts.receivedOn}T12:00:00Z`) : new Date();
     // When no sent date is given it defaults to today — or to the received date, if that is earlier (it cannot have arrived before it was sent).
     const receivedDay = received.toISOString().slice(0, 10);
-    const sentOn = checkSentOn(opts.sentOn ?? (opts.receivedOn && receivedDay < new Date().toISOString().slice(0, 10) ? receivedDay : null));
+    const sentOn = checkSentOn(opts.sentOn ?? (opts.receivedOn && receivedDay < businessToday() ? receivedDay : null));
     // submitted_at is the day the letter was actually sent (as recorded by staff), not the moment someone clicked.
-    const submitted = sentOn === new Date().toISOString().slice(0, 10) ? new Date() : new Date(`${sentOn}T12:00:00Z`);
-    if (received.getTime() < new Date(`${sentOn}T00:00:00Z`).getTime()) throw new DisputeError('The received date cannot be before the sent date.');
+    // A date that is not in the past (today, or "today" for someone ahead of the agency's zone) is recorded as now — never a future time.
+    const submitted = sentOn >= businessToday() ? new Date() : new Date(`${sentOn}T12:00:00Z`);
+    // Only a typed received date can contradict the sent date; with none, receipt is now and the sent date is already not in the future.
+    if (opts.receivedOn && received.getTime() < new Date(`${sentOn}T00:00:00Z`).getTime()) throw new DisputeError('The received date cannot be before the sent date.');
     set('submitted_at', submitted);
     set('deadline_extended', !!opts.extended);
     set('due_at', responseDueDate(received, !!opts.extended));

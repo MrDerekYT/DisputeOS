@@ -36,8 +36,29 @@ export function relTimeIn(v: string | Date | null | undefined, lang: 'en' | 'es'
   return f.format(0, 'second');
 }
 
+/** A `?page=` value as a safe page number: a whole number from 1 to 100,000, otherwise 1 (never NaN, Infinity or 1e30 in SQL). */
+export function pageParam(v: string | undefined): number {
+  const n = Number(v);
+  return Number.isInteger(n) && n >= 1 && n <= 100_000 ? n : 1;
+}
+
 /** Whole days from `now` until `v` (negative when past). */
 export const daysUntil = (v: string | Date, now = new Date()) => Math.ceil(((typeof v === 'string' ? new Date(v) : v).getTime() - now.getTime()) / 86_400_000);
+
+/**
+ * The calendar date (YYYY-MM-DD) of `now` in the IANA time zone `tz`. This file is imported by client components, so it
+ * never reads the environment: server code passes getEnv().APP_TIMEZONE (see businessToday in letters/service).
+ */
+export const dayInZone = (tz: string, now = new Date()) => new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
+/**
+ * Task due dates are picked as a day, not a time (stored as that day in UTC, shown with fmtDate). Compare days, not
+ * instants: a task due today stays "today" all day (in the agency's time zone `tz`) and is overdue only from the next day.
+ */
+export function dueDay(dueAt: string, tz: string, now = new Date()): 'overdue' | 'today' | 'upcoming' {
+  const due = dueAt.slice(0, 10);
+  const today = dayInZone(tz, now);
+  return due < today ? 'overdue' : due === today ? 'today' : 'upcoming';
+}
 
 export function relTime(v: string | Date | null | undefined, now = new Date()): string {
   if (!v) return '—';

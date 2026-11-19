@@ -81,7 +81,7 @@ export function withTenant<T>(userId: string, fn: (db: Db) => Promise<T>): Promi
 
 /**
  * Privileged (RLS-bypassing) access. Reserved for code that runs before a user context exists or across tenants:
- * sign-in, sign-up, password reset, invitation acceptance, webhooks, scheduled jobs. Keep call sites few and audited.
+ * sign-in, sign-up, password reset, invitation acceptance, API-key authentication, scheduled jobs, the health check. Keep call sites few and audited.
  */
 export function withSystem<T>(fn: (db: Db) => Promise<T>): Promise<T> {
   return inTx(null, fn);

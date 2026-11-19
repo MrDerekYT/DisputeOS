@@ -108,6 +108,10 @@ export async function createClientAction(_: ActionState, fd: FormData): Promise<
       if (sent.provider === 'log') {
         return { ok: `Client created, but email delivery is not configured. Share this one-time invitation link with the client: ${inviteLink} — then open the client from the Clients list.` };
       }
+      // Not an error state: the client exists, so the form must not invite a second submission.
+      if (!sent.ok) {
+        return { ok: `Client created, but the invitation email could not be sent (${sent.error ?? 'delivery failed'}). Share this one-time invitation link with the client instead: ${inviteLink} — then open the client from the Clients list.` };
+      }
     }
     redirect(`/app/clients/${newId}`);
   });
@@ -248,9 +252,12 @@ export async function sendMessageAction(_: ActionState, fd: FormData): Promise<A
         `insert into public.communications (org_id, client_id, direction, channel, subject, body, status, author_id, approved_by, provider_ref) values ($1, $2, $3, $4, $5, $6, $7, $8, $8, $9)`,
         [ctx.orgId, d.clientId, direction, channel, d.subject ?? null, d.body, status, ctx.userId, providerRef],
       );
+      // A reply that actually went out answers the client's messages, so they stop counting as unread.
+      if (direction === 'outbound' && status !== 'failed') await db.run("update public.communications set read_at = now() where client_id = $1 and direction = 'inbound' and read_at is null", [d.clientId]);
       await logEvent(db, ctx, d.clientId, 'message', `${direction === 'internal' ? 'Logged' : 'Sent'} ${channel} message`);
     });
     revalidatePath(`/app/clients/${d.clientId}`);
+    revalidatePath('/app', 'layout');
     return status === 'failed' ? { error: note } : { ok: note };
   });
 }

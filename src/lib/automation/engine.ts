@@ -177,13 +177,17 @@ export async function executeAutomation(db: Db, actor: Actor, a: AutomationRow, 
   return { status: needsApproval ? 'pending_approval' : 'completed', runId: run.id };
 }
 
-/** Event triggers, fired inline by the action that caused them (same transaction, same user). */
-export async function fireTrigger(db: Db, actor: { orgId: string; userId: string }, trigger: TriggerKey, subject: Subject, extra: { toStatus?: string } & Record<string, string | undefined> = {}) {
+/**
+ * Event triggers, fired inline by the action that caused them (same transaction, same user).
+ * An automation runs once per subject per `bucket`. The default is once ever (a client is created once) or once per
+ * status; pass a per-event bucket when the same event legitimately repeats for a subject (each uploaded report).
+ */
+export async function fireTrigger(db: Db, actor: { orgId: string; userId: string }, trigger: TriggerKey, subject: Subject, extra: { toStatus?: string } & Record<string, string | undefined> = {}, bucket?: string) {
   const autos = await db.rows<AutomationRow>('select * from public.automations where org_id = $1 and enabled and trigger = $2', [actor.orgId, trigger]);
   for (const a of autos) {
     if (trigger === 'dispute_status_changed' && a.conditions.toStatus && a.conditions.toStatus !== extra.toStatus) continue;
     const ex = Object.fromEntries(Object.entries(extra).filter(([, v]) => v != null)) as Record<string, string>;
-    await executeAutomation(db, actor, a, subject, extra.toStatus ?? 'once', ex);
+    await executeAutomation(db, actor, a, subject, bucket ?? extra.toStatus ?? 'once', ex);
   }
 }
 

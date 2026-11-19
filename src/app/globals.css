@@ -18,15 +18,15 @@
   --line: 226 222 213;
   --ink: 24 28 36;
   --muted: 92 98 110;
-  --faint: 140 145 155;
+  --faint: 104 110 121;
 
   --brand: 15 118 110;
   --brand-strong: 17 94 89;
   --brand-soft: 224 242 239;
   --brand-ink: 255 255 255;
 
-  --ok: 22 128 74;     --ok-soft: 222 244 230;
-  --warn: 161 98 7;    --warn-soft: 253 240 205;
+  --ok: 20 120 68;     --ok-soft: 222 244 230;
+  --warn: 152 92 7;    --warn-soft: 253 240 205;
   --bad: 185 28 28;    --bad-soft: 252 226 226;
   --info: 37 99 168;   --info-soft: 224 237 252;
 
@@ -40,7 +40,7 @@
   --line: 44 50 61;
   --ink: 235 238 243;
   --muted: 160 167 180;
-  --faint: 112 119 133;
+  --faint: 134 141 155;
 
   --brand: 45 190 172;
   --brand-strong: 94 214 198;
@@ -58,7 +58,7 @@
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) {
     --canvas: 14 17 22; --surface: 22 26 33; --raised: 27 32 40; --line: 44 50 61;
-    --ink: 235 238 243; --muted: 160 167 180; --faint: 112 119 133;
+    --ink: 235 238 243; --muted: 160 167 180; --faint: 134 141 155;
     --brand: 45 190 172; --brand-strong: 94 214 198; --brand-soft: 17 52 50; --brand-ink: 6 30 28;
     --ok: 74 200 130; --ok-soft: 18 50 34; --warn: 232 178 66; --warn-soft: 56 43 14;
     --bad: 244 114 114; --bad-soft: 60 24 24; --info: 110 168 240; --info-soft: 20 38 62;
@@ -89,7 +89,7 @@
   .btn-primary { @apply btn bg-brand text-brand-ink hover:bg-brand-strong; }
   .btn-secondary { @apply btn border border-line bg-surface text-ink hover:bg-raised; }
   .btn-ghost { @apply btn text-muted hover:bg-raised hover:text-ink; }
-  .btn-danger { @apply btn bg-bad text-white hover:opacity-90; }
+  .btn-danger { @apply btn bg-bad text-surface hover:opacity-90; }
   .btn-sm { @apply min-h-[2rem] rounded-lg px-3 py-1 text-xs; }
 
   .field { @apply block w-full rounded-xl border border-line bg-surface px-3.5 py-2.5 text-ink placeholder:text-faint transition focus:border-brand focus:outline-none focus:ring-4 focus:ring-brand/15; }

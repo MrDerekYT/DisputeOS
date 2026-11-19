@@ -19,7 +19,7 @@ Built so that compliance is part of the product, not a checklist next to it.
 | **AI assistant** | Modular providers (rules / Anthropic / OpenAI-compatible). Works with no LLM at all; an LLM may only reword, and its output is discarded if any fact changes |
 | **Automations** | Triggers, caps, cooldowns, idempotency, and approval for anything client-facing |
 | **Client portal** | Under the **agency's own name and colour** (branded sign-in link per agency; the software name is a small "Powered by" line). Opens with one clear next step computed from the client's real records, explains the current stage, shows progress, reported scores and the client's rights; uploads, approved letters, messaging, e-signing; app-style bottom navigation on phones; English and Spanish (including dates). Clients can only ever see their own records (database-enforced) |
-| **Credit Connect** | Consent-gated automatic import: provider adapter framework (+ dev sandbox) and a public REST API with scoped API keys, OpenAPI spec and idempotent report push. Live provider adapters need partner access — see [docs/CREDIT_CONNECT.md](docs/CREDIT_CONNECT.md) |
+| **Credit Connect** | Consent-gated import pipeline (no live provider is connected; reports arrive by upload or API push): provider adapter framework (+ dev sandbox) and a public REST API with scoped API keys, OpenAPI spec and idempotent report push. Live provider adapters need partner access — see [docs/CREDIT_CONNECT.md](docs/CREDIT_CONNECT.md) |
 | **Everyday speed** | Command palette (⌘K), reported-score history, white-label client portal colour |
 | **Lead capture** | A public, branded enquiry form per agency (`/start/<slug>`): contact details only, consent required, rate limited; each enquiry becomes a lead with a follow-up task |
 | **Client care** | Dashboard queues for clients waiting on the team: unanswered messages, client uploads to review, and active clients with no update in 14+ days |
@@ -54,7 +54,7 @@ Set `REQUIRE_STAFF_MFA=false` in `.env.local` to skip two-step verification loca
 |---|---|
 | `npm run check` | typecheck + lint + all tests + production build |
 | `npm test` | unit + database tests (needs `DATABASE_URL_TEST`) |
-| `node e2e/journey.cjs` | 28-step browser journey against a running server (see below) |
+| `node e2e/journey.cjs` | browser journey against a running server; prints `<n>/<n> steps passed` (see below) |
 | `npm run db:migrate` / `db:reset` / `db:seed` | migrations / drop-and-recreate (refused in production) / demo data |
 
 ## Architecture
@@ -75,14 +75,14 @@ src/app/app/     staff app               src/app/portal/     client portal
 
 ## Testing (what was actually run)
 
-- **248 automated tests**, all passing: security primitives (TOTP against the RFC 4226/6238 vectors), PostgreSQL row-level-security isolation, auth flows, report parsing / PDF round-trip, dispute → letter → approval → submission workflow, automation safeguards, AI safety guard, form parsing, client-portal copy (every client-visible status has plain-language text in both languages; no outcome promises), branded sign-in privacy, client-care queues.
-- **Browser end-to-end** (`e2e/journey.cjs`, Playwright + Chromium) against the **production build** with MFA enforced: sign-up + MFA, client creation, report upload/review/approval, comparison, dispute, letter approval + PDF, submission, outcome, portal invite (branded), the portal's next-step card and rights, client upload and messaging, the staff client-care queue, tenant isolation, phone/tablet layouts with bottom navigation, branded sign-out, dark mode, session revocation — the public enquiry form and bulk dispute drafting — **33 steps**. Run with:
+- **Automated tests** (`npm test` prints the current count): security primitives (TOTP against the RFC 4226/6238 vectors), PostgreSQL row-level-security isolation, auth flows, report parsing / PDF round-trip, dispute → letter → approval → submission workflow, automation safeguards, AI safety guard, form parsing, client-portal copy (every client-visible status has plain-language text in both languages; no outcome promises), branded sign-in privacy, client-care queues.
+- **Browser end-to-end** (`e2e/journey.cjs`, Playwright + Chromium) against the **production build** with MFA enforced: sign-up + MFA, client creation, report upload/review/approval, comparison, dispute, letter approval + PDF, submission, outcome, portal invite (branded), the portal's next-step card and rights, client upload and messaging, the staff client-care queue, tenant isolation, phone/tablet layouts with bottom navigation, branded sign-out, dark mode, session revocation — the public enquiry form and bulk dispute drafting. The script prints its own `<n>/<n> steps passed` total. Run with:
   `REQUIRE_STAFF_MFA=true npx next start -p 3100` then `node e2e/journey.cjs` (needs Playwright's Chromium).
 - The end-to-end run found real defects that unit tests missed (e.g. unchecked checkboxes failing every form); each is fixed with a regression test.
 
 ## Honest limitations
 
-Read [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md) for the full list. In short: **no live credit-report pulls, card processing, SMS, e-signature provider or certified-mail integration exists** — those need third-party accounts and approvals, and they are marked "Not built" in Settings rather than faked. Email, AI and Resend adapters are implemented to the providers' documented APIs but have not been run against the live services. Scanned (image-only) reports are not read (no OCR). No malware scanning of uploads. Compliance documents are reference drafts that your attorney must review.
+Read [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md) for the full list. In short: **no live credit-report pulls, card processing, SMS, e-signature provider or certified-mail integration exists** — those need third-party accounts and approvals, and Settings → Integrations shows each of them as "Manual path in use", with the manual steps and the exact missing dependency, rather than faking a connection. Email, AI and Resend adapters are implemented to the providers' documented APIs but have not been run against the live services. Scanned (image-only) reports are not read (no OCR). No malware scanning of uploads. Compliance documents are reference drafts that your attorney must review.
 
 ## Docs
 

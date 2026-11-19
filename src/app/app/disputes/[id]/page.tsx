@@ -6,8 +6,9 @@ import { ActionForm, Check, ConfirmButton, Field, Select, SubmitButton, TextArea
 import { Badge, DeliveryRecord, EmptyState, Notice, PageHeader, Section, StatusBadge } from '@/components/ui';
 import { requireStaff } from '@/lib/auth/context';
 import { consentStatus } from '@/lib/compliance/disclosures';
-import { CATEGORIES, daysRemaining, deadlineState, nextSteps, OUTCOME_LABEL, OUTCOMES, PIPELINE, STATUS_LABEL, type DisputeStatus, type Outcome } from '@/lib/disputes/workflow';
+import { CATEGORIES, daysOverdue, daysRemaining, deadlineState, nextSteps, OUTCOME_LABEL, OUTCOMES, PIPELINE, STATUS_LABEL, type DisputeStatus, type Outcome } from '@/lib/disputes/workflow';
 import { staffMembers, memberLabel, DOC_KIND_LABEL } from '@/lib/crm';
+import { businessToday } from '@/lib/letters/service';
 import { BUREAU_LABEL, cn, fmtDate, isUuid, relTime, type Bureau } from '@/lib/util';
 import { addEvidenceAction, addFollowUpTaskAction, analyzeReplyAction, assignDisputeAction, nextRoundAction, recordResponseAction, transitionAction } from '../actions';
 import { PRODUCT } from '@/lib/product';
@@ -58,7 +59,7 @@ export default async function DisputePage({ params }: { params: Promise<{ id: st
   if (!data) notFound();
   const { d, events, evidence, letters, docs, consents, tasks, children, team, check } = data;
   const cs = consentStatus(consents);
-  const today = new Date().toISOString().slice(0, 10);
+  const today = businessToday(); // the agency's calendar day (APP_TIMEZONE), not the UTC date
   const hasApproved = letters.some((l) => l.status === 'approved' || l.status === 'sent');
   const steps = nextSteps({ status: d.status, round: d.round, due_at: d.due_at, outcome: d.outcome, hasApprovedLetter: hasApproved, evidenceCount: evidence.length });
   const canApprove = ctx.can('disputes:approve');
@@ -232,7 +233,7 @@ export default async function DisputePage({ params }: { params: Promise<{ id: st
               <div className="flex justify-between"><dt className="text-muted">Created</dt><dd>{fmtDate(d.created_at)}</dd></div>
               <div className="flex justify-between"><dt className="text-muted">Approved</dt><dd>{d.approved_at ? `${fmtDate(d.approved_at)} · ${d.approved_by_name ?? ''}` : '—'}</dd></div>
               <div className="flex justify-between"><dt className="text-muted">Submitted</dt><dd>{fmtDate(d.submitted_at)}</dd></div>
-              <div className="flex justify-between"><dt className="text-muted">Response due</dt><dd className="flex items-center gap-2">{fmtDate(d.due_at)}{d.due_at && open && <Badge tone={state === 'overdue' ? 'bad' : state === 'soon' ? 'warn' : 'neutral'}><CalendarClock size={12} /> {state === 'overdue' ? `${Math.abs(daysRemaining(d.due_at))}d overdue` : `${daysRemaining(d.due_at)}d`}</Badge>}</dd></div>
+              <div className="flex justify-between"><dt className="text-muted">Response due</dt><dd className="flex items-center gap-2">{fmtDate(d.due_at)}{d.due_at && open && <Badge tone={state === 'overdue' ? 'bad' : state === 'soon' ? 'warn' : 'neutral'}><CalendarClock size={12} /> {state === 'overdue' ? `${daysOverdue(d.due_at)}d overdue` : `${daysRemaining(d.due_at)}d`}</Badge>}</dd></div>
               <div className="flex justify-between"><dt className="text-muted">Response</dt><dd>{fmtDate(d.response_at)}</dd></div>
               <div className="flex justify-between"><dt className="text-muted">Outcome</dt><dd>{d.outcome ? <StatusBadge status={d.outcome} text={OUTCOME_LABEL[d.outcome]} /> : '—'}</dd></div>
             </dl>

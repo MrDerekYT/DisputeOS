@@ -13,7 +13,22 @@ import { consentDoc, type ConsentKind } from '@/lib/compliance/disclosures';
 import { sha256Hex } from '@/lib/crypto';
 import { DOC_KINDS } from '@/lib/crm';
 import { deleteObject, putObject } from '@/lib/storage';
+import { portalMessage, tr, type Lang, type PortalKey } from '@/lib/portal-i18n';
 import { readUpload, UploadError } from '@/lib/upload';
+
+type PortalCtx = Awaited<ReturnType<typeof requireClient>>;
+
+/**
+ * Every portal form action runs through here so that results and errors reach the client in their own language,
+ * without internal field names. `t` is bound to the language saved on the client's own record.
+ */
+async function portalAction(fn: (ctx: PortalCtx, t: (k: PortalKey) => string) => Promise<ActionState | void>): Promise<ActionState> {
+  const ctx = await requireClient();
+  const row = await ctx.tx((db) => db.row<{ preferred_language: Lang }>('select preferred_language from public.clients where id = $1', [ctx.clientId]));
+  const lang: Lang = row?.preferred_language === 'es' ? 'es' : 'en';
+  const r = await run(() => fn(ctx, tr(lang)));
+  return r?.error ? { ...r, error: portalMessage(lang, r.error) } : r;
+}
 
 export async function portalLogoutAction() {
   const s = await currentSession();
@@ -25,20 +40,18 @@ export async function portalLogoutAction() {
 }
 
 export async function portalSendMessageAction(_: ActionState, fd: FormData): Promise<ActionState> {
-  const ctx = await requireClient();
-  return run(async () => {
+  return portalAction(async (ctx, t) => {
     const d = parseForm(z.object({ body: zText(4000) }), fd);
     await ctx.tx((db) => db.run(
       `insert into public.communications (org_id, client_id, direction, channel, body, status, author_id) values ($1, $2, 'inbound', 'portal', $3, 'received', $4)`,
       [ctx.orgId, ctx.clientId, d.body, ctx.userId]));
     revalidatePath('/portal/messages');
-    return { ok: 'Message sent. Your specialist will reply here.' };
+    return { ok: t('a_messageSent') };
   });
 }
 
 export async function portalUploadAction(_: ActionState, fd: FormData): Promise<ActionState> {
-  const ctx = await requireClient();
-  return run(async () => {
+  return portalAction(async (ctx) => {
     const d = parseForm(z.object({ kind: z.enum(DOC_KINDS) }), fd);
     if (d.kind === 'contract' || d.kind === 'bureau_response' || d.kind === 'evidence' || d.kind === 'credit_report') { /* allowed: clients may send these too */ }
     let up;
@@ -60,8 +73,7 @@ export async function portalUploadAction(_: ActionState, fd: FormData): Promise<
 }
 
 export async function portalUpdateProfileAction(_: ActionState, fd: FormData): Promise<ActionState> {
-  const ctx = await requireClient();
-  return run(async () => {
+  return portalAction(async (ctx) => {
     const d = parseForm(
       z.object({
         phone: z.string().trim().max(30).optional(), language: z.enum(['en', 'es']),
@@ -76,38 +88,36 @@ export async function portalUpdateProfileAction(_: ActionState, fd: FormData): P
       await audit(db, { orgId: ctx.orgId, actorId: ctx.userId, action: 'portal.profile_updated', entityType: 'client', entityId: ctx.clientId, ip: ctx.meta.ip });
     });
     revalidatePath('/portal', 'layout');
-    return { ok: 'Saved.' };
+    return { ok: tr(d.language)('a_saved') }; // in the language just saved, like the page around it
   });
 }
 
 export async function portalSignConsentAction(_: ActionState, fd: FormData): Promise<ActionState> {
-  const ctx = await requireClient();
-  return run(async () => {
+  return portalAction(async (ctx, t) => {
     const d = parseForm(z.object({ kind: z.enum(['croa_disclosure', 'croa_contract', 'fcra_authorization', 'esign', 'communications', 'data_processing']), signedName: zText(160), agree: zBool }), fd);
-    if (!d.agree) throw new UserError('Please confirm you have read and agree.');
+    if (!d.agree) throw new UserError(t('a_confirmAgree'));
     const doc = consentDoc(d.kind as ConsentKind);
     await ctx.tx(async (db) => {
       const client = await db.row<{ full_name: string }>('select full_name from public.clients where id = $1', [ctx.clientId]);
       const typed = d.signedName.trim().toLowerCase().replace(/\s+/g, ' ');
       const known = (client?.full_name ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
-      if (known && typed.split(' ')[0] !== known.split(' ')[0]) throw new UserError('Please type your full legal name as it appears on your account.');
+      if (known && typed.split(' ')[0] !== known.split(' ')[0]) throw new UserError(t('a_legalName'));
       const dup = await db.row('select 1 from public.client_consents where client_id = $1 and kind = $2 and revoked_at is null', [ctx.clientId, d.kind]);
-      if (dup) throw new UserError('You have already signed this.');
+      if (dup) throw new UserError(t('a_alreadySigned'));
       await db.run('insert into public.client_consents (org_id, client_id, kind, version, signed_name, ip, user_agent) values ($1,$2,$3,$4,$5,$6,$7)',
         [ctx.orgId, ctx.clientId, d.kind, `${doc.version}:${sha256Hex(doc.text).slice(0, 12)}`, d.signedName, ctx.meta.ip ?? null, ctx.meta.userAgent?.slice(0, 300) ?? null]);
       await audit(db, { orgId: ctx.orgId, actorId: ctx.userId, action: 'consent.signed_by_client', entityType: 'client', entityId: ctx.clientId, ip: ctx.meta.ip, meta: { kind: d.kind } });
     });
     revalidatePath('/portal', 'layout');
-    return { ok: 'Signed. Thank you.' };
+    return { ok: t('a_signedOk') };
   });
 }
 
 export async function portalChangePasswordAction(_: ActionState, fd: FormData): Promise<ActionState> {
-  const ctx = await requireClient();
-  return run(async () => {
+  return portalAction(async (ctx, t) => {
     const d = parseForm(z.object({ current: z.string().min(1).max(200), next: z.string().min(1).max(200), confirm: z.string() }), fd);
-    if (d.next !== d.confirm) throw new UserError('The new passwords do not match.');
+    if (d.next !== d.confirm) throw new UserError(t('a_pwMismatch'));
     const r = await changePassword(ctx.userId, d.current, d.next, ctx.session.sessionId);
-    return r.ok ? { ok: 'Password changed.' } : { error: r.error };
+    return r.ok ? { ok: t('a_pwChanged') } : { error: r.error };
   });
 }

@@ -1,7 +1,8 @@
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
+import { resetEnvCache } from '@/lib/env';
 import {
   acceptInvite, adminResetMfa, authenticate, beginTotpEnrollment, changePassword, confirmTotp, createInviteToken, getInvite,
-  getSession, requestPasswordReset, resetPassword, revokeSession, signUp,
+  getSession, getVerifiedSession, requestPasswordReset, resetPassword, revokeSession, signUp,
 } from '@/lib/auth/service';
 import { rateLimit } from '@/lib/auth/rate-limit';
 import { totpNow } from '@/lib/auth/totp';
@@ -121,6 +122,27 @@ describe('two-step verification', () => {
     expect(s2.mfaVerified).toBe(false);
     expect((await confirmTotp(u.userId, s2.sessionId, code, false)).ok).toBe(false); // replay
   });
+  it('a password-only session is refused by the guard the route handlers use, until the code step is passed', async () => {
+    const u = await newUser();
+    const first = await authenticate({ email: u.email, password: PASSWORD }, { ip: u.ip });
+    if (!first.ok) throw new Error('login');
+    // REQUIRE_STAFF_MFA is on in tests: a brand-new, unenrolled staff account has a valid session but no data access.
+    expect(await getSession(first.token)).toMatchObject({ totpEnabled: false, mfaVerified: false });
+    expect(await getVerifiedSession(first.token)).toBeNull();
+    const s = (await getSession(first.token))!;
+    const enrol = await beginTotpEnrollment(u.userId);
+    if ('ok' in enrol) throw new Error('enrol');
+    expect((await confirmTotp(u.userId, s.sessionId, totpNow(enrol.secret), true)).ok).toBe(true);
+    expect(await getVerifiedSession(first.token)).toMatchObject({ userId: u.userId, mfaVerified: true });
+
+    // A later sign-in with only the password (stolen-password case): the cookie exists, the session is valid, but it opens nothing.
+    const again = await authenticate({ email: u.email, password: PASSWORD }, { ip: testIp() });
+    if (!again.ok) throw new Error('login2');
+    expect(again.needsMfa).toBe(true);
+    expect(await getSession(again.token)).toMatchObject({ totpEnabled: true, mfaVerified: false });
+    expect(await getVerifiedSession(again.token)).toBeNull();
+    expect(await getVerifiedSession(undefined)).toBeNull();
+  });
   it('lets an admin reset a teammate’s factor but never an owner’s', async () => {
     const o = await makeOrg('Reset');
     const mate = await withSystem(async (db) => {
@@ -155,6 +177,26 @@ describe('password reset', () => {
     sentLog.length = 0;
     await expect(requestPasswordReset(`ghost-${uniq()}@test.dev`, { ip: testIp() })).resolves.toBeUndefined();
     expect(sentLog).toHaveLength(0);
+  });
+  it('leaves a trace when the reset email could not be delivered', async () => {
+    const u = await newUser();
+    const savedEnv = { ...process.env };
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ message: 'domain is not verified' }), { status: 403 }));
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      Object.assign(process.env, { EMAIL_DRIVER: 'resend', RESEND_API_KEY: 're_test_key' });
+      resetEnvCache();
+      await expect(requestPasswordReset(u.email, { ip: testIp() })).resolves.toBeUndefined(); // caller still learns nothing
+      expect(errors).toHaveBeenCalledWith(expect.stringMatching(/not delivered/), 'domain is not verified');
+      expect(JSON.stringify(errors.mock.calls)).not.toContain(u.email);
+    } finally {
+      fetchMock.mockRestore();
+      errors.mockRestore();
+      process.env = savedEnv;
+      resetEnvCache();
+    }
+    const actions = await withSystem((db) => db.rows<{ action: string }>("select action from public.audit_logs where actor_id = $1 and action like 'auth.reset%'", [u.userId]));
+    expect(actions.map((a) => a.action)).toEqual(['auth.reset_email_failed']);
   });
   it('rejects expired tokens', async () => {
     const u = await newUser();

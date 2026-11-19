@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { currentSession } from '@/lib/auth/context';
+import { apiSession } from '@/lib/auth/context';
 import { withTenant } from '@/lib/db';
 import { isStaffRole } from '@/lib/rbac';
 
@@ -9,7 +9,7 @@ const esc = (s: string) => s.replace(/[\\%_]/g, (m) => `\\${m}`);
 
 /** Staff-only quick search. Runs under row-level security, so it can only ever return the caller's own organization. */
 export async function GET(req: Request) {
-  const s = await currentSession();
+  const s = await apiSession();
   if (!s || !isStaffRole(s.role) || s.role === 'client') return new NextResponse('Not found', { status: 404 });
   const q = (new URL(req.url).searchParams.get('q') ?? '').trim().slice(0, 60);
   if (q.length < 2) return NextResponse.json({ results: [] });

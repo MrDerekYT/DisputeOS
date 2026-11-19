@@ -19,7 +19,7 @@ export default async function PortalDisputes() {
       {rows.length === 0 ? <EmptyState title={t('noDisputes')} /> : rows.map((d) => (
         <article key={d.id} className="card p-5 sm:p-6">
           <div className="flex flex-wrap items-start justify-between gap-3">
-            <div className="min-w-0"><h2 className="text-lg font-semibold leading-snug">{d.item_label}</h2><p className="text-sm text-muted">{d.bureau ? BUREAU_LABEL[d.bureau] : d.recipient_name}{d.round > 1 ? ` · #${d.round}` : ''}</p></div>
+            <div className="min-w-0"><h2 className="text-lg font-semibold leading-snug">{d.item_label}</h2><p className="text-sm text-muted">{d.bureau ? BUREAU_LABEL[d.bureau] : d.recipient_name}{d.round > 1 ? ` · ${t('round')} ${d.round}` : ''}</p></div>
             <Badge tone={tone(d.status)} dot>{t(`st_${d.status}` as 'st_resolved')}</Badge>
           </div>
           <p className="mt-3 text-sm">{t(`m_${d.status}` as 'm_resolved')}</p>

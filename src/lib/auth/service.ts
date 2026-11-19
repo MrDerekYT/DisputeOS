@@ -132,6 +132,23 @@ export async function getSession(token: string | undefined): Promise<SessionInfo
   });
 }
 
+/**
+ * Second-factor policy for a signed-in session, the single rule used by pages (requireStaff/requireClient) and by
+ * route handlers: an enrolled user must have passed the code step on THIS session, and when REQUIRE_STAFF_MFA is on,
+ * staff who have not enrolled yet have no access to data at all.
+ */
+export function secondFactorSatisfied(s: Pick<SessionInfo, 'role' | 'totpEnabled' | 'mfaVerified'>): boolean {
+  if (s.totpEnabled && !s.mfaVerified) return false;
+  if (s.role !== 'client' && !s.totpEnabled && getEnv().REQUIRE_STAFF_MFA === 'true') return false;
+  return true;
+}
+
+/** A session that may read data: valid AND through the second factor. A password-only session yields null. */
+export async function getVerifiedSession(token: string | undefined): Promise<SessionInfo | null> {
+  const s = await getSession(token);
+  return s && secondFactorSatisfied(s) ? s : null;
+}
+
 export const revokeSession = (token: string) =>
   withSystem((db) => db.run('update public.sessions set revoked_at = now() where token_hash = $1 and revoked_at is null', [hashToken(token)]));
 
@@ -265,15 +282,22 @@ export async function requestPasswordReset(emailIn: string, meta: RequestMeta = 
   await withSystem((db) =>
     db.run(`insert into public.password_resets (user_id, token_hash, expires_at) values ($1, $2, now() + interval '1 hour')`, [user.id, hashToken(token)]));
   const link = `${getEnv().APP_URL}/reset-password?token=${token}`;
-  await sendEmail({
+  const sent = await sendEmail({
     to: email,
     subject: `Reset your ${PRODUCT.name} password`,
     text: `We received a request to reset your password.\n\nUse this link within 1 hour:\n${link}\n\nIf you did not request this, you can ignore this email — your password will not change.`,
   });
-  await auditSystem({ orgId: null, actorId: user.id, action: 'auth.reset_requested', entityType: 'user', entityId: user.id, ip: meta.ip });
+  // The page always says "if the account exists, a link is on its way"; a failed delivery must at least leave a trace
+  // for the operator (server log + audit log). Never log the address or the link.
+  if (!sent.ok) console.error('[auth] password-reset email was not delivered:', sent.error ?? 'unknown error');
+  await auditSystem({
+    orgId: null, actorId: user.id, action: sent.ok ? 'auth.reset_requested' : 'auth.reset_email_failed', entityType: 'user', entityId: user.id, ip: meta.ip,
+    ...(sent.ok ? {} : { meta: { error: (sent.error ?? 'unknown').slice(0, 200) } }),
+  });
 }
 
-export async function resetPassword(token: string, newPassword: string): Promise<{ ok: true } | Fail> {
+/** On success, `portal` says the account is a client's, so the caller can send them back to their own (branded) portal sign-in. */
+export async function resetPassword(token: string, newPassword: string): Promise<{ ok: true; portal: boolean; orgSlug: string | null; lang: 'en' | 'es' } | Fail> {
   const row = await withSystem((db) =>
     db.row<{ id: string; user_id: string; email: string }>(
       `select r.id, r.user_id, u.email from public.password_resets r join public.users u on u.id = r.user_id
@@ -288,7 +312,15 @@ export async function resetPassword(token: string, newPassword: string): Promise
     await db.run('update public.sessions set revoked_at = now() where user_id = $1 and revoked_at is null', [row.user_id]);
   });
   await auditSystem({ orgId: null, actorId: row.user_id, action: 'auth.password_reset', entityType: 'user', entityId: row.user_id });
-  return { ok: true };
+  // Same membership choice as sign-in: staff roles win over a client role.
+  const m = await withSystem((db) => db.row<{ role: Role; slug: string; mode: string; lang: string | null }>(
+    `select m.role, o.slug, o.mode, c.preferred_language as lang
+       from public.memberships m join public.organizations o on o.id = m.org_id
+       left join public.clients c on c.org_id = m.org_id and c.portal_user_id = m.user_id
+      where m.user_id = $1 and o.status = 'active'
+      order by (m.role = 'client') asc, m.created_at asc limit 1`, [row.user_id]));
+  const portal = m?.role === 'client';
+  return { ok: true, portal, orgSlug: portal && m.mode === 'agency' ? m.slug : null, lang: portal && m.lang === 'es' ? 'es' : 'en' };
 }
 
 export async function changePassword(userId: string, current: string, next: string, keepSessionId?: string): Promise<{ ok: true } | Fail> {
@@ -305,6 +337,8 @@ export async function changePassword(userId: string, current: string, next: stri
 // ------------------------------------------------------------------ invitations (staff + client portal)
 export interface InviteView {
   id: string; orgId: string; orgName: string; email: string; role: Role; clientId: string | null; clientName: string | null;
+  /** The invited client's preferred language, so the invitation page can greet them in it. */
+  clientLang: 'en' | 'es';
 }
 
 export async function createInviteToken(db: Db, args: { orgId: string; email: string; role: Exclude<Role, 'owner'>; clientId?: string | null; invitedBy: string }): Promise<string> {
@@ -319,11 +353,11 @@ export async function createInviteToken(db: Db, args: { orgId: string; email: st
 
 export async function getInvite(token: string): Promise<InviteView | null> {
   const r = await withSystem((db) =>
-    db.row<{ id: string; org_id: string; org_name: string; email: string; role: Role; client_id: string | null; client_name: string | null }>(
-      `select i.id, i.org_id, o.name as org_name, i.email, i.role, i.client_id, c.full_name as client_name
+    db.row<{ id: string; org_id: string; org_name: string; email: string; role: Role; client_id: string | null; client_name: string | null; client_lang: string | null }>(
+      `select i.id, i.org_id, o.name as org_name, i.email, i.role, i.client_id, c.full_name as client_name, c.preferred_language as client_lang
          from public.invites i join public.organizations o on o.id = i.org_id left join public.clients c on c.id = i.client_id
         where i.token_hash = $1 and i.accepted_at is null and i.expires_at > now() and o.status = 'active'`, [hashToken(token)]));
-  return r ? { id: r.id, orgId: r.org_id, orgName: r.org_name, email: r.email, role: r.role, clientId: r.client_id, clientName: r.client_name } : null;
+  return r ? { id: r.id, orgId: r.org_id, orgName: r.org_name, email: r.email, role: r.role, clientId: r.client_id, clientName: r.client_name, clientLang: r.client_lang === 'es' ? 'es' : 'en' } : null;
 }
 
 export async function acceptInvite(token: string, input: { fullName: string; password: string }, meta: RequestMeta = {}): Promise<{ ok: true; token: string; role: Role } | Fail> {

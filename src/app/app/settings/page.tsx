@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import type { Metadata } from 'next';
 import { AlertTriangle, CheckCircle2, CircleDashed, Hand, Wrench } from 'lucide-react';
-import { ActionForm, Field, SubmitButton } from '@/components/forms';
+import { ActionForm, Check, Field, SubmitButton } from '@/components/forms';
 import { Badge, DefinitionList, Notice, PageHeader, Section } from '@/components/ui';
 import { requireStaff } from '@/lib/auth/context';
 import { CONSENT_DOCS } from '@/lib/compliance/disclosures';
@@ -21,10 +21,34 @@ const STATUS: Record<IntegrationStatus, { label: string; tone: 'ok' | 'warn' | '
 };
 
 export default async function SettingsPage() {
-  const ctx = await requireStaff('settings:manage');
+  // Everyone on the team can manage their own password and sessions here; workspace settings stay with owners and admins.
+  const ctx = await requireStaff();
   const env = getEnv();
+  const security = (
+          <Section title="Your security">
+            <ActionForm action={changePasswordAction} className="space-y-3">
+              <Field label="Current password" name="current" type="password" autoComplete="current-password" required />
+              <Field label="New password" name="next" type="password" autoComplete="new-password" required hint="10+ characters." />
+              <Field label="Confirm new password" name="confirm" type="password" autoComplete="new-password" required />
+              <SubmitButton variant="secondary">Change password</SubmitButton>
+            </ActionForm>
+            <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-line pt-4 text-sm">
+              <span className="flex flex-wrap items-center gap-2">Two-step verification: {ctx.session.totpEnabled ? <Badge tone="ok">On</Badge> : <><Badge tone="warn">Off</Badge><Link href="/mfa/setup" className="font-medium text-brand-strong underline">Turn on</Link></>}</span>
+              <form action={signOutEverywhereAction}><button className="btn-secondary btn-sm">Sign out of all devices</button></form>
+            </div>
+            <p className="mt-3 text-xs text-muted">Staff sessions end after {env.STAFF_IDLE_MINUTES} minutes idle, or 12 hours.</p>
+          </Section>
+  );
+  if (!ctx.can('settings:manage')) {
+    return (
+      <>
+        <PageHeader title="Settings" subtitle="Your sign-in and security. Workspace settings are managed by an owner or admin." />
+        <div className="max-w-xl">{security}</div>
+      </>
+    );
+  }
   const { org, eligible, sessions } = await ctx.tx(async (db) => {
-    const o = await db.row<{ name: string; slug: string; state_code: string | null; plan: string; plan_status: string; trial_ends_at: string | null; settings: { retention_days?: number; brand_color?: string }; created_at: string; mode: string }>('select name, slug, state_code, plan, plan_status, trial_ends_at, settings, created_at, mode from public.organizations where id = $1', [ctx.orgId]);
+    const o = await db.row<{ name: string; slug: string; state_code: string | null; plan: string; plan_status: string; trial_ends_at: string | null; settings: { retention_days?: number; brand_color?: string; monitoring_url?: string; monitoring_label?: string; monitoring_paid?: boolean }; created_at: string; mode: string }>('select name, slug, state_code, plan, plan_status, trial_ends_at, settings, created_at, mode from public.organizations where id = $1', [ctx.orgId]);
     const days = o?.settings.retention_days ?? 2555;
     const e = await db.rows<{ id: string; full_name: string; status: string; last_activity_at: string }>(
       "select id, full_name, status, last_activity_at from public.clients where status in ('completed','cancelled') and last_activity_at < now() - ($1 || ' days')::interval order by last_activity_at limit 20", [String(days)]);
@@ -42,6 +66,12 @@ export default async function SettingsPage() {
             <Field label="State of operation" name="stateCode" defaultValue={org.state_code} maxLength={2} hint="Many states regulate credit services organizations (registration, bonding, contract terms). Confirm your obligations with an attorney." />
             <Field label="Keep client records for (days) after they complete or cancel" name="retentionDays" type="number" min={365} max={3650} defaultValue={org.settings.retention_days ?? 2555} hint="Used to list clients eligible for deletion. Nothing is deleted automatically." />
             <div><label className="label" htmlFor="brandColor">Client portal colour</label><div className="flex items-center gap-3"><input id="brandColor" name="brandColor" type="color" defaultValue={org.settings.brand_color ?? '#0f766e'} className="h-11 w-16 cursor-pointer rounded-xl border border-line bg-surface p-1" /><span className="text-xs text-muted">Your clients see their portal in this colour. Text contrast is adjusted automatically.</span></div></div>
+            <div className="space-y-3 border-t border-line pt-4">
+              <Field label="Credit-monitoring referral link (optional)" name="monitoringUrl" type="url" maxLength={300} defaultValue={org.settings.monitoring_url} placeholder="https://" hint="Shown to clients as an optional paid alternative, below the free AnnualCreditReport.com instructions. It is only a link: nothing is imported from it. Leave empty to show nothing." />
+              <Field label="Service name" name="monitoringLabel" maxLength={60} defaultValue={org.settings.monitoring_label} placeholder="e.g. SmartCredit" />
+              <Check name="monitoringPaid" defaultChecked={org.settings.monitoring_paid !== false}>I may earn a commission from this link</Check>
+              <p className="hint">If you earn a commission from this link, clients are told so.</p>
+            </div>
             <SubmitButton>Save</SubmitButton>
           </ActionForm>
           {org.mode === 'agency' && (
@@ -64,19 +94,7 @@ export default async function SettingsPage() {
         </Section>
 
         <div className="space-y-6">
-          <Section title="Your security">
-            <ActionForm action={changePasswordAction} className="space-y-3">
-              <Field label="Current password" name="current" type="password" autoComplete="current-password" required />
-              <Field label="New password" name="next" type="password" autoComplete="new-password" required hint="10+ characters." />
-              <Field label="Confirm new password" name="confirm" type="password" autoComplete="new-password" required />
-              <SubmitButton variant="secondary">Change password</SubmitButton>
-            </ActionForm>
-            <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-line pt-4 text-sm">
-              <span>Two-step verification: {ctx.session.totpEnabled ? <Badge tone="ok">On</Badge> : <Badge tone="warn">Off</Badge>}</span>
-              <form action={signOutEverywhereAction}><button className="btn-secondary btn-sm">Sign out of all devices</button></form>
-            </div>
-            <p className="mt-3 text-xs text-muted">Staff sessions end after {env.STAFF_IDLE_MINUTES} minutes idle, or 12 hours.</p>
-          </Section>
+          {security}
         </div>
       </div>
 

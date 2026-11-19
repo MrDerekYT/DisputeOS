@@ -43,15 +43,15 @@ export default async function ClientsPage({ searchParams }: { searchParams: Prom
         actions={<Link href="/app/clients/new" className="btn-primary"><Plus size={16} /> New client</Link>}
       />
 
-      <div className="-mx-1 mb-4 flex gap-2 overflow-x-auto px-1 pb-1" role="tablist" aria-label="Segments">
+      <nav className="-mx-1 mb-4 flex gap-2 overflow-x-auto px-1 pb-1" aria-label="Segments">
         {SEGMENTS.map((s) => (
-          <Link key={s.key} href={qs({ segment: s.key === 'all' ? undefined : s.key, page: undefined })} role="tab" aria-selected={segment === s.key}
+          <Link key={s.key} href={qs({ segment: s.key === 'all' ? undefined : s.key, page: undefined })} aria-current={segment === s.key ? 'page' : undefined}
             className={`flex shrink-0 items-center gap-2 rounded-full border px-3.5 py-1.5 text-sm font-medium transition ${segment === s.key ? 'border-brand bg-brand-soft text-brand-strong' : 'border-line bg-surface text-muted hover:text-ink'}`}>
             {s.label}
             <span className="text-xs tabular-nums opacity-70">{segmentCounts[s.key === 'active_disputes' ? 'active_disputes' : s.key === 'needs_docs' ? 'needs_docs' : s.key] ?? 0}</span>
           </Link>
         ))}
-      </div>
+      </nav>
 
       <form method="get" className="mb-4 flex flex-wrap items-center gap-3" role="search">
         {sp.segment && <input type="hidden" name="segment" value={sp.segment} />}

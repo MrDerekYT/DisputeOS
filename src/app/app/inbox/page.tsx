@@ -54,11 +54,11 @@ export default async function InboxPage() {
         )}
 
         {d.notes.length > 0 && (
-          <Section title="Notifications" actions={<form action={markNotificationReadAction}><input type="hidden" name="id" value="" /><button className="text-sm text-brand-strong hover:underline">Mark all read</button></form>}>
+          <Section title="Notifications" actions={<form action={markNotificationReadAction}><input type="hidden" name="id" value="" /><button className="btn-ghost btn-sm">Mark all read</button></form>}>
             <ul className="divide-y divide-line">{d.notes.map((n) => (
               <li key={n.id} className="flex items-start gap-3 py-3"><Bell size={16} className={`mt-1 shrink-0 ${n.read_at ? 'text-faint' : 'text-brand'}`} />
                 <div className="min-w-0 flex-1"><div className={`text-sm ${n.read_at ? 'text-muted' : 'font-medium'}`}>{n.href ? <Link className="hover:underline" href={n.href}>{n.title}</Link> : n.title}</div>{n.body && <p className="text-sm text-muted">{n.body}</p>}<div className="text-xs text-faint">{fmtDate(n.created_at)}</div></div>
-                {!n.read_at && <form action={markNotificationReadAction}><input type="hidden" name="id" value={n.id} /><button className="text-xs text-muted underline">Mark read</button></form>}</li>))}</ul>
+                {!n.read_at && <form action={markNotificationReadAction}><input type="hidden" name="id" value={n.id} /><button className="btn-ghost btn-sm shrink-0">Mark read</button></form>}</li>))}</ul>
           </Section>
         )}
       </div>

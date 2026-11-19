@@ -69,7 +69,8 @@ export async function storeParsedReport(
     await logEvent(db, actor, input.clientId, 'report_uploaded', `${bureau[0]!.toUpperCase()}${bureau.slice(1)} report imported (${rows.t.length} accounts) — awaiting review`);
     await audit(db, { orgId: actor.orgId, actorId: actor.userId, action: 'report.imported', entityType: 'credit_report', entityId: rid, ip: actor.meta?.ip, meta: { bureau, accounts: rows.t.length, source: input.source } });
   }
-  await fireTrigger(db, actor, 'report_uploaded', { type: 'client', id: input.clientId });
+  // One run per import (not once per client ever): every later report gets its review task / notice too.
+  await fireTrigger(db, actor, 'report_uploaded', { type: 'client', id: input.clientId }, {}, ids[0] ? `report:${ids[0]}` : undefined);
   return ids;
 }
 
