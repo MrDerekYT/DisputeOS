@@ -1,4 +1,15 @@
-export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
+import { getEnv, VERCEL_MAX_UPLOAD_MB } from './env';
+
+/**
+ * Largest accepted upload in MB: MAX_UPLOAD_MB when set, otherwise 10, or 4 on Vercel. Server-side only (it reads the
+ * environment); pages pass the number to the browser-side checks and messages so everyone states the same limit.
+ */
+export function maxUploadMb(): number {
+  return getEnv().MAX_UPLOAD_MB ?? (process.env.VERCEL ? VERCEL_MAX_UPLOAD_MB : 10);
+}
+export const maxUploadBytes = (): number => maxUploadMb() * 1024 * 1024;
+/** The refusal for an oversized file. The same sentence is shown by the browser-side check before anything is sent. */
+export const tooLargeMessage = (mb: number): string => `That file is larger than ${mb} MB.`;
 
 export type DetectedMime = 'application/pdf' | 'image/png' | 'image/jpeg' | 'text/plain' | 'text/html' | 'text/csv';
 
@@ -27,7 +38,7 @@ export class UploadError extends Error {}
 /** Validate an uploaded File and return its bytes + detected type. */
 export async function readUpload(file: File | null, allowed: DetectedMime[]): Promise<{ bytes: Buffer; mime: DetectedMime; name: string }> {
   if (!file || typeof file === 'string' || file.size === 0) throw new UploadError('Choose a file to upload.');
-  if (file.size > MAX_UPLOAD_BYTES) throw new UploadError('That file is larger than 10 MB.');
+  if (file.size > maxUploadBytes()) throw new UploadError(tooLargeMessage(maxUploadMb()));
   const bytes = Buffer.from(await file.arrayBuffer());
   const mime = detectMime(bytes, file.name);
   if (!mime || !allowed.includes(mime)) {

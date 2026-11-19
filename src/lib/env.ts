@@ -23,11 +23,20 @@ const schema = z.object({
   APP_ENV: z.enum(['development', 'test', 'staging', 'production']),
   APP_URL: z.string().url(),
   DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
+  // PEM text of the CA that signed the database's TLS certificate, when it is not a public CA (Supabase). See scripts/pg-config.mjs.
+  DATABASE_CA_CERT: z.string().optional(),
+  // Connections one server process may hold. Default: 10, or 3 on Vercel (scripts/pg-config.mjs).
+  DB_POOL_MAX: z.coerce.number().int().min(1).max(50).optional(),
   PII_ENCRYPTION_KEY: base64Key,
   PII_ENCRYPTION_KEY_ID: z.string().regex(/^[\w-]{1,16}$/).default('1'),
   PII_ENCRYPTION_KEY_PREVIOUS: base64Key.optional(),
   PII_ENCRYPTION_KEY_PREVIOUS_ID: z.string().regex(/^[\w-]{1,16}$/).optional(),
+  // Where uploaded documents live: `disk` (STORAGE_DIR, needs a persistent volume) or `db` (the database; for hosts
+  // without a persistent disk, such as Vercel). Files are encrypted by the app either way (src/lib/storage.ts).
+  STORAGE_DRIVER: z.enum(['disk', 'db']).default('disk'),
   STORAGE_DIR: z.string().default('.storage'),
+  // Largest accepted upload, in MB. Default: 10, or 4 on Vercel, whose functions refuse request bodies over 4.5 MB (src/lib/upload.ts).
+  MAX_UPLOAD_MB: z.coerce.number().int().min(1).max(10).optional(),
   REQUIRE_STAFF_MFA: z.enum(['true', 'false']).default('true'),
   STAFF_IDLE_MINUTES: z.coerce.number().int().min(5).max(1440).default(120),
   // How many reverse proxies sit in front of the app; decides which x-forwarded-for entry is believed (src/lib/client-ip.ts).
@@ -35,7 +44,9 @@ const schema = z.object({
   // IANA timezone the agency works in; decides what "today" means for a sent-on date left blank.
   APP_TIMEZONE: z.string().refine((tz) => { try { new Intl.DateTimeFormat('en-CA', { timeZone: tz }); return true; } catch { return false; } }, 'must be an IANA timezone such as America/New_York').default('America/New_York'),
   // Email
-  EMAIL_DRIVER: z.enum(['log', 'resend']).default('log'),
+  // log: written to a local file, nothing is delivered (development/test only) · resend: delivered through Resend ·
+  // disabled: nothing is sent and the app says so wherever email would be used (src/lib/mailer.ts).
+  EMAIL_DRIVER: z.enum(['log', 'resend', 'disabled']).default('log'),
   EMAIL_FROM: z.string().default(`${PRODUCT.name} <no-reply@localhost>`),
   RESEND_API_KEY: z.string().optional(),
   // AI
@@ -57,6 +68,9 @@ function detectAppEnv(): AppEnv {
   if (process.env.NODE_ENV === 'test') return 'test';
   return 'development';
 }
+
+/** Upload ceiling on Vercel: its functions refuse request bodies over 4.5 MB, and a form adds a little to the file. */
+export const VERCEL_MAX_UPLOAD_MB = 4;
 
 let cached: Env | undefined;
 
@@ -88,8 +102,15 @@ export function getEnv(): Env {
     if (!env.APP_URL.startsWith('https://')) problems.push('APP_URL must be https in staging/production');
     if (env.REQUIRE_STAFF_MFA !== 'true') problems.push('REQUIRE_STAFF_MFA must be true in staging/production');
     // The log driver delivers nothing and writes reset/invitation links in plaintext to disk: development and test only.
-    if (env.EMAIL_DRIVER !== 'resend') problems.push('EMAIL_DRIVER must be resend in staging/production (the log driver delivers nothing)');
+    if (env.EMAIL_DRIVER === 'log') problems.push('EMAIL_DRIVER must be resend in staging/production, or disabled to run without email (the log driver delivers nothing)');
     if (env.EMAIL_DRIVER === 'resend' && !env.RESEND_API_KEY) problems.push('RESEND_API_KEY is required when EMAIL_DRIVER=resend');
+    // Vercel: the filesystem is read-only and not shared between instances, request bodies stop at 4.5 MB, and
+    // vercel.json schedules /api/jobs/run, which answers 404 until CRON_SECRET is set.
+    if (process.env.VERCEL) {
+      if (env.STORAGE_DRIVER !== 'db') problems.push('STORAGE_DRIVER must be db on Vercel (files written to its disk are lost)');
+      if ((env.MAX_UPLOAD_MB ?? 0) > VERCEL_MAX_UPLOAD_MB) problems.push(`MAX_UPLOAD_MB cannot be more than ${VERCEL_MAX_UPLOAD_MB} on Vercel (the platform refuses request bodies over 4.5 MB)`);
+      if (!env.CRON_SECRET) problems.push('CRON_SECRET is required on Vercel (the scheduled jobs in vercel.json are refused without it)');
+    }
     if (problems.length) throw new Error(`Unsafe ${appEnv} configuration:\n  ${problems.join('\n  ')}`);
   }
   cached = env;

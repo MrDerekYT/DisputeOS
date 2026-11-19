@@ -15,7 +15,7 @@ import { consentDoc, type ConsentKind } from '@/lib/compliance/disclosures';
 import { DOC_KINDS, CLIENT_STAGES, CLIENT_STATUSES, logEvent } from '@/lib/crm';
 import { encryptPII } from '@/lib/crypto';
 import { getEnv } from '@/lib/env';
-import { sendEmail } from '@/lib/mailer';
+import { delivers, sendEmail } from '@/lib/mailer';
 import { deleteObject, putObject } from '@/lib/storage';
 import { readUpload, UploadError } from '@/lib/upload';
 import { sha256Hex } from '@/lib/crypto';
@@ -107,7 +107,7 @@ export async function createClientAction(_: ActionState, fd: FormData): Promise<
         subject: `${ctx.session.orgName}: your secure client portal`,
         text: `Hello ${d.fullName.split(' ')[0]},\n\n${ctx.session.orgName} has invited you to your secure client portal, where you can see progress, upload documents and message your specialist.\n\nCreate your account: ${inviteLink}\n\nThis link expires in 7 days.`,
       });
-      if (sent.provider === 'log') {
+      if (!delivers(sent)) {
         return { ok: `Client created, but email delivery is not configured. Share this one-time invitation link with the client: ${inviteLink} — then open the client from the Clients list.` };
       }
       // Not an error state: the client exists, so the form must not invite a second submission.
@@ -263,9 +263,9 @@ export async function sendMessageAction(_: ActionState, fd: FormData): Promise<A
       channel = 'email';
       if (!client.email) throw new UserError('This client has no email address.');
       const r = await sendEmail({ to: client.email, subject: d.subject || `Message from ${ctx.session.orgName}`, text: d.body });
-      status = r.provider === 'log' ? 'queued' : r.ok ? 'sent' : 'failed';
+      status = !delivers(r) ? 'queued' : r.ok ? 'sent' : 'failed';
       providerRef = r.providerRef ?? null;
-      note = r.provider === 'log' ? 'Recorded, but email delivery is not configured so nothing was delivered (set EMAIL_DRIVER=resend).' : r.ok ? 'Email sent.' : `Email failed: ${r.error}`;
+      note = !delivers(r) ? 'Recorded, but email is not connected so nothing was delivered.' : r.ok ? 'Email sent.' : `Email failed: ${r.error}`;
     } else if (d.channel === 'note_call' || d.channel === 'note_sms') {
       channel = d.channel === 'note_call' ? 'call' : 'sms';
       direction = 'internal';
@@ -403,7 +403,7 @@ export async function invitePortalAction(_: ActionState, fd: FormData): Promise<
       subject: `${ctx.session.orgName}: your secure client portal`,
       text: `Hello ${first},\n\n${ctx.session.orgName} has set up a secure portal for you. There you can follow each item we work on, upload documents, sign your agreements and message your specialist.\n\nCreate your account (this link expires in 7 days):\n${link}\n\nAfter that, sign in any time at:\n${signIn}\n\nIf you weren't expecting this, you can ignore this email.`,
     });
-    return sent.provider === 'log'
+    return !delivers(sent)
       ? { ok: `Email delivery is not configured. Share this one-time link with the client: ${link}` }
       : sent.ok ? { ok: `Invitation emailed to ${to}.` } : { error: `Could not send the email: ${sent.error}` };
   });

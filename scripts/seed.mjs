@@ -4,6 +4,7 @@
 import './load-env.mjs';
 import { randomBytes, scrypt } from 'node:crypto';
 import pg from 'pg';
+import { pgConnectionConfig } from './pg-config.mjs';
 
 const env = process.env.APP_ENV ?? process.env.NODE_ENV ?? 'development';
 if (env === 'production' || env === 'staging' || process.env.NODE_ENV === 'production') {
@@ -19,7 +20,7 @@ const hash = (pw) => new Promise((res, rej) => {
 });
 
 const PASSWORD = process.env.SEED_PASSWORD ?? 'Demo-Passw0rd-2026!';
-const db = new pg.Client({ connectionString: url });
+const db = new pg.Client(pgConnectionConfig(url));
 await db.connect();
 const q = async (sql, p) => (await db.query(sql, p)).rows;
 const one = async (sql, p) => (await q(sql, p))[0];

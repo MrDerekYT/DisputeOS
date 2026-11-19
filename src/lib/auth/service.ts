@@ -2,7 +2,7 @@ import { auditSystem } from '../audit';
 import { decryptPII, encryptPII, hashToken, randomToken } from '../crypto';
 import { withSystem, type Db } from '../db';
 import { getEnv } from '../env';
-import { sendEmail } from '../mailer';
+import { emailDisabled, sendEmail } from '../mailer';
 import { STAFF_ROLES, type Role } from '../rbac';
 import { slugify } from '../util';
 import { dummyHash, hashPassword, passwordProblem, verifyPassword } from './password';
@@ -271,6 +271,7 @@ export async function adminResetMfa(orgId: string, targetUserId: string): Promis
 
 // ------------------------------------------------------------------ password reset
 export async function requestPasswordReset(emailIn: string, meta: RequestMeta = {}): Promise<void> {
+  if (emailDisabled()) return; // no way to deliver a link, so none is created; the page says email is not connected
   const email = normEmail(emailIn);
   const rl = await rateLimit(`reset:email:${email}`, 3, 3600);
   const rlIp = await rateLimit(`reset:ip:${meta.ip ?? 'unknown'}`, 10, 3600);

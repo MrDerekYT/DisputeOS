@@ -21,6 +21,9 @@ import { importDocumentAsReportAction, pullReportAction, uploadReportAction } fr
 import { listProviders } from '@/lib/credit/providers';
 import { ScoreHistory, type ScoreRow } from '@/components/score-history';
 import { PRODUCT } from '@/lib/product';
+import { emailIsLive } from '@/lib/lead-outreach';
+import { FileInput } from '@/components/file-input';
+import { maxUploadBytes, maxUploadMb, tooLargeMessage } from '@/lib/upload';
 import { buildPlan, loadPlanInput } from '@/lib/plan';
 
 export const metadata: Metadata = { title: 'Client' };
@@ -321,7 +324,7 @@ async function ReportsTab({ id, ctx }: { id: string; ctx: Ctx }) {
       <Section title="Upload a report">
         <ActionForm action={uploadReportAction} className="space-y-4">
           <input type="hidden" name="clientId" value={id} />
-          <div><label className="label" htmlFor="file">File</label><input id="file" name="file" type="file" required accept=".pdf,.txt,.html,.htm,.csv" className="field !p-2 text-sm file:mr-3 file:rounded-lg file:border-0 file:bg-brand-soft file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-brand-strong" /></div>
+          <div><label className="label" htmlFor="file">File</label><FileInput id="file" accept=".pdf,.txt,.html,.htm,.csv" maxBytes={maxUploadBytes()} tooLarge={tooLargeMessage(maxUploadMb())} /><p className="hint">PDF, HTML, TXT or CSV · max {maxUploadMb()} MB.</p></div>
           <Select label="Bureau (if the file doesn’t say)" name="bureau" placeholder="Detect automatically" options={(Object.keys(BUREAU_LABEL) as Bureau[]).map((b) => ({ value: b, label: BUREAU_LABEL[b] }))} />
           <SubmitButton pendingText="Reading report…">Upload & read</SubmitButton>
           <p className="text-xs text-muted">Best results: text-based PDF or the CSV template. Scanned images are not read (no OCR). Files are stored encrypted. <a className="link" href="/templates/report-import.csv">CSV template</a></p>
@@ -404,7 +407,7 @@ async function DocumentsTab({ id, ctx }: { id: string; ctx: Ctx }) {
           <ActionForm action={uploadDocumentAction} resetOnSuccess className="space-y-3">
             <input type="hidden" name="clientId" value={id} />
             <Select label="Type" name="kind" options={kindOpts} defaultValue="other" />
-            <div><label className="label" htmlFor="docfile">File</label><input id="docfile" name="file" type="file" required accept=".pdf,.png,.jpg,.jpeg,.txt,.csv" className="field !p-2 text-sm file:mr-3 file:rounded-lg file:border-0 file:bg-brand-soft file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-brand-strong" /><p className="hint">PDF, PNG, JPG, TXT or CSV · max 10 MB. Type is checked from the file’s contents.</p></div>
+            <div><label className="label" htmlFor="docfile">File</label><FileInput id="docfile" accept=".pdf,.png,.jpg,.jpeg,.txt,.csv" maxBytes={maxUploadBytes()} tooLarge={tooLargeMessage(maxUploadMb())} /><p className="hint">PDF, PNG, JPG, TXT or CSV · max {maxUploadMb()} MB. Type is checked from the file’s contents.</p></div>
             <SubmitButton pendingText="Encrypting…">Upload</SubmitButton>
           </ActionForm>
         </Section>
@@ -470,7 +473,7 @@ async function MessagesTab({ id, ctx, c, draft }: { id: string; ctx: Ctx; c: C; 
           </div>)}
         <ActionForm action={sendMessageAction} resetOnSuccess className="space-y-3">
           <input type="hidden" name="clientId" value={id} />
-          <Select label="Channel" name="channel" defaultValue="portal" options={[{ value: 'portal', label: 'Client portal message' }, { value: 'email', label: c.email ? `Email to ${c.email}` : 'Email (no address on file)' }, { value: 'note_call', label: 'Log a phone call (nothing is sent)' }, { value: 'note_sms', label: 'Log a text message (nothing is sent)' }]} />
+          <Select label="Channel" name="channel" defaultValue="portal" options={[{ value: 'portal', label: 'Client portal message' }, { value: 'email', label: !emailIsLive() ? 'Email (not connected: nothing will be sent)' : c.email ? `Email to ${c.email}` : 'Email (no address on file)' }, { value: 'note_call', label: 'Log a phone call (nothing is sent)' }, { value: 'note_sms', label: 'Log a text message (nothing is sent)' }]} />
           <Field label="Subject (email only)" name="subject" />
           <TextArea label="Message" name="body" rows={7} required defaultValue={prefill} />
           <SubmitButton pendingText="Sending…">Send</SubmitButton>

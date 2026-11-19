@@ -6,6 +6,7 @@
 // This records a grant only: it takes no payment. Collect payment separately; no payment processor is connected.
 import './load-env.mjs';
 import pg from 'pg';
+import { pgConnectionConfig } from './pg-config.mjs';
 
 const MAX = 100_000;
 const usage = 'Usage: npm run credits:grant -- <org-slug> <amount> [note]\n  amount: a whole number from 1 to 100000';
@@ -22,7 +23,7 @@ const env = process.env.APP_ENV ?? process.env.NODE_ENV ?? 'development';
 const url = (env === 'test' && process.env.DATABASE_URL_TEST) || process.env.DATABASE_URL;
 if (!url) { console.error('DATABASE_URL is not set.'); process.exit(1); }
 
-const db = new pg.Client({ connectionString: url });
+const db = new pg.Client(pgConnectionConfig(url));
 await db.connect();
 let code = 0;
 try {

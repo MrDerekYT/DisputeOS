@@ -6,7 +6,8 @@ import { Badge, EmptyState, Notice, Section } from '@/components/ui';
 import { DOC_KINDS } from '@/lib/crm';
 import { parseMonitoring } from '@/lib/monitoring';
 import { portalContext } from '@/lib/portal';
-import type { PortalKey } from '@/lib/portal-i18n';
+import { fill, type PortalKey } from '@/lib/portal-i18n';
+import { maxUploadMb } from '@/lib/upload';
 import { fmtDate } from '@/lib/util';
 import { portalUploadAction } from '../../actions';
 import { PortalFileInput } from '../../file-input';
@@ -43,7 +44,7 @@ export default async function PortalDocuments({ searchParams }: { searchParams: 
           <Section title={t('upload')}>
             <ActionForm action={portalUploadAction} resetOnSuccess className="space-y-4">
               <Select label={t('docType')} name="kind" defaultValue="other" options={KINDS.map((k) => ({ value: k, label: kindLabel(k) }))} />
-              <div><label className="label" htmlFor="pfile">{t('chooseFile')}</label><PortalFileInput id="pfile" tooLarge={t('e_fileTooLarge')} /><p className="hint">{t('uploadHelp')}</p></div>
+              <div><label className="label" htmlFor="pfile">{t('chooseFile')}</label><PortalFileInput id="pfile" lang={lang} /><p className="hint">{fill(t('uploadHelp'), { max: maxUploadMb() })}</p></div>
               <SubmitButton pendingText="…">{t('upload')}</SubmitButton>
             </ActionForm>
           </Section>

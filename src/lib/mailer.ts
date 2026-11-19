@@ -25,7 +25,7 @@ export function fromHeader(platformFrom: string, name?: string): string {
 
 export interface SendResult {
   ok: boolean;
-  provider: 'log' | 'resend';
+  provider: 'log' | 'resend' | 'disabled';
   providerRef?: string;
   error?: string;
 }
@@ -33,11 +33,21 @@ export interface SendResult {
 /** In-process record of what the `log` driver "sent" — lets tests assert on emails without a mail server. */
 export const sentLog: Email[] = [];
 
+export const EMAIL_NOT_CONNECTED = 'Email is not connected';
+/** True when this result came from a driver that can actually deliver mail. */
+export const delivers = (r: SendResult): boolean => r.provider === 'resend';
+/** True when the operator has explicitly chosen to run without email (EMAIL_DRIVER=disabled). */
+export const emailDisabled = (): boolean => getEnv().EMAIL_DRIVER === 'disabled';
+
+
 /**
  * Email delivery behind one function.
  *  - `log` (default): writes to .storage/outbox/emails.jsonl. Nothing leaves the machine. Development/test only.
  *  - `resend`: POSTs to the Resend REST API (needs RESEND_API_KEY and a verified sending domain).
  *    NOTE: the Resend driver is implemented to the documented API but has not been exercised against the live service.
+ *  - `disabled`: an explicit "no email provider". Nothing is sent and nothing is written anywhere; the result says so,
+ *    and callers show the person what to do instead (for example, hand over an invitation link themselves).
+ * Only `resend` delivers. Callers must treat any other provider as "not delivered": see `delivers()`.
  */
 export async function sendEmail(mail: Email): Promise<SendResult> {
   const env = getEnv();
@@ -56,6 +66,7 @@ export async function sendEmail(mail: Email): Promise<SendResult> {
       return { ok: false, provider: 'resend', error: (e as Error).message };
     }
   }
+  if (env.EMAIL_DRIVER === 'disabled') return { ok: false, provider: 'disabled', error: EMAIL_NOT_CONNECTED };
   sentLog.push(mail);
   if (sentLog.length > 200) sentLog.shift();
   try {

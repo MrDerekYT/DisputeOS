@@ -25,9 +25,15 @@ export function integrationStatus(): Integration[] {
   const sandbox = env.APP_ENV === 'development' || env.APP_ENV === 'test';
   return [
     { key: 'db', name: 'PostgreSQL database', status: 'active', verified: true, detail: 'Row-level security enforces tenant isolation. Verified by the automated test suite against PostgreSQL 16.' },
-    { key: 'storage', name: 'Document storage', status: 'active', verified: true, detail: 'Encrypted (AES-256-GCM) files on the server volume. Put STORAGE_DIR on a persistent, access-controlled disk. An S3-compatible backend is not built yet.' },
-    { key: 'email', name: 'Email (Resend)', status: emailLive ? 'active' : env.EMAIL_DRIVER === 'log' ? 'dev_only' : 'needs_credentials', verified: false,
-      detail: emailLive ? 'Configured. Implemented to the documented API; not yet exercised against the live service from this codebase.' : 'Currently writing emails to a local log — nothing is delivered. Messages are marked “not delivered”.', needs: 'EMAIL_DRIVER=resend, RESEND_API_KEY and a verified sending domain' },
+    { key: 'storage', name: 'Document storage', status: 'active', verified: true, detail: env.STORAGE_DRIVER === 'db'
+      ? 'Encrypted (AES-256-GCM) files stored in the database (STORAGE_DRIVER=db), so they persist on hosts without a disk and are covered by database backups. An S3-compatible backend is not built yet.'
+      : 'Encrypted (AES-256-GCM) files on the server volume. Put STORAGE_DIR on a persistent, access-controlled disk. An S3-compatible backend is not built yet.' },
+    { key: 'email', name: 'Email (Resend)', status: emailLive ? 'active' : env.EMAIL_DRIVER === 'log' ? 'dev_only' : env.EMAIL_DRIVER === 'disabled' ? 'manual' : 'needs_credentials', verified: false,
+      detail: emailLive ? 'Configured. Implemented to the documented API; not yet exercised against the live service from this codebase.'
+        : env.EMAIL_DRIVER === 'disabled' ? 'Email is not connected (EMAIL_DRIVER=disabled). No email is ever sent: no invitations, password-reset links, client emails or lead follow-ups.'
+        : 'Currently writing emails to a local log — nothing is delivered. Messages are marked “not delivered”.',
+      ...(env.EMAIL_DRIVER === 'disabled' ? { manualPath: 'Invitations show a one-time link for you to pass on yourself. Message clients through the portal. Password reset by email is unavailable: a person who forgets their password cannot recover the account on their own until email is connected.' } : {}),
+      needs: 'EMAIL_DRIVER=resend, RESEND_API_KEY and a verified sending domain' },
     { key: 'ai', name: `AI assistant (${ai.provider})`, status: ai.active ? 'active' : 'dev_only', verified: !ai.active, detail: ai.active ? 'LLM rewriting on for workspaces with AI credits; outputs are fact-checked before use. Adapter verified against a mocked API only.' : 'Deterministic engine in use (fully functional). LLM rewriting is optional.', needs: 'AI_PROVIDER plus ANTHROPIC_API_KEY, or AI_BASE_URL + AI_API_KEY + AI_MODEL' },
     { key: 'ai_credits', name: 'AI credits (buying online)', status: 'manual', verified: false,
       detail: 'AI wording is metered: each AI result that is returned costs credits from the workspace balance, and with no credits the standard wording is used. No payment processor is connected, so credits cannot be bought in the app.',

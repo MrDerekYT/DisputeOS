@@ -123,7 +123,7 @@ export default async function PortalHome() {
                     <ActionForm action={portalUploadAction} resetOnSuccess className="mt-3">
                       <input type="hidden" name="kind" value={r.kind} />
                       <div className="flex flex-wrap items-end gap-2.5">
-                        <div className="min-w-[12rem] flex-1"><label className="sr-only" htmlFor={`f-${r.id}`}>{t('chooseFile')}</label><PortalFileInput id={`f-${r.id}`} tooLarge={t('e_fileTooLarge')} /></div>
+                        <div className="min-w-[12rem] flex-1"><label className="sr-only" htmlFor={`f-${r.id}`}>{t('chooseFile')}</label><PortalFileInput id={`f-${r.id}`} lang={lang} /></div>
                         <SubmitButton>{t('upload')}</SubmitButton>
                       </div>
                     </ActionForm>

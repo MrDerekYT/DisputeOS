@@ -40,7 +40,7 @@ const EN = {
   byStaff: 'recorded by your specialist', byCarrier: 'confirmed by the mail carrier', sentNoDate: 'Sent, date not recorded',
   sentOn: 'Sent', expectBy: 'Response expected by', reason: 'What we asked', noDisputes: 'No items have been sent yet. We’ll show them here once we submit your first dispute.',
   scoresTitle: 'Your reported scores', scoresNote: 'Shown exactly as stated on your credit reports. Scores move for many reasons and are not a prediction or a promise.',
-  uploaded: 'Your uploads', uploadedOk: 'Uploaded — thank you', uploadedOkBody: 'Your specialist has been notified.', noDocs: 'You haven’t uploaded anything yet.', requested: 'Requested', received: 'Received', docType: 'What is it?', chooseFile: 'Choose a file', uploadHelp: 'PDF, PNG or JPG, up to 10 MB. Your files are stored encrypted.',
+  uploaded: 'Your uploads', uploadedOk: 'Uploaded — thank you', uploadedOkBody: 'Your specialist has been notified.', noDocs: 'You haven’t uploaded anything yet.', requested: 'Requested', received: 'Received', docType: 'What is it?', chooseFile: 'Choose a file', uploadHelp: 'PDF, PNG or JPG, up to {max} MB. Your files are stored encrypted.',
   noLetters: 'No approved letters yet. Letters appear here after your specialist reviews and approves them.', download: 'Download PDF',
   messagesTitle: 'Messages with your specialist', noMessages: 'No messages yet — send one below.', writeMessage: 'Write a message', send: 'Send', you: 'You', team: 'Your team',
   contact: 'Contact details', phone: 'Phone', address: 'Mailing address', language: 'Language', save: 'Save changes', email: 'Email', emailNote: 'To change your email, ask your specialist.',
@@ -68,7 +68,8 @@ const EN = {
   a_pwMismatch: 'The new passwords do not match.', a_pwChanged: 'Password changed.',
   // Messages produced by shared server code. The English text must match the source exactly: portalMessage() looks them up by it.
   e_required: 'Please fill in every required field.', e_checkForm: 'Please check the form and try again.', e_state: 'Use a two-letter state code', e_zip: 'Use a 5-digit ZIP',
-  e_fileMissing: 'Choose a file to upload.', e_fileTooLarge: 'That file is larger than 10 MB.', e_fileType: 'That file type is not accepted. Please upload a PDF, PNG or JPG.',
+  e_emailOff: 'Email is not connected, so a reset link cannot be sent. Ask the person who manages your account to help you sign in.',
+  e_fileMissing: 'Choose a file to upload.', e_fileTooLarge: 'That file is larger than {max} MB.', e_fileType: 'That file type is not accepted. Please upload a PDF, PNG or JPG.',
   e_generic: 'Something went wrong. Please try again.', e_noAccess: 'You do not have access to that record.', e_exists: 'That already exists.',
   e_pwCurrent: 'Your current password is incorrect.', e_pwShort: 'Use at least 10 characters.', e_pwLong: 'Use 128 characters or fewer.', e_pwCommon: 'That password is too common.',
   e_pwRepeat: 'Avoid repeating a single character.', e_pwEmail: 'Do not include your email name in the password.', e_pwVaried: 'Use a more varied password.',
@@ -79,13 +80,13 @@ const EN = {
   e_formUnavailable: 'This form is not available.', e_code: 'Enter the 6-digit code', e_codeInvalid: 'That code is not valid. Check your authenticator app and try again.',
   e_resetSent: 'If an account exists for that email, a reset link is on its way. It expires in 1 hour.',
   // Error screens
-  err_title: 'Something went wrong', err_body: 'This page could not be loaded or your last action did not go through. Please try again. If you were uploading a file, make sure it is smaller than 10 MB.',
+  err_title: 'Something went wrong', err_body: 'This page could not be loaded or your last action did not go through. Please try again. If you were uploading a file, make sure it is within the size limit shown on the upload form.',
   err_retry: 'Try again', err_rootBody: 'Please try again. If it keeps happening, reload the page.', err_home: 'Go to the home page',
   // Sign-in, password reset and invitation
   li_title: 'Your client portal', li_welcomeBack: 'Welcome back', li_subBrand: 'Sign in to see your progress with {org}, upload documents and message your specialist.',
   li_sub: 'Check progress, upload documents and message your specialist.', li_workHere: 'Work here?', li_staff: 'Staff sign in',
   li_noRecord: 'We could not find a client record for this account. Contact your specialist.', li_reset: 'Password updated. Sign in with your new password.',
-  li_forgot: 'Forgot password?', li_signIn: 'Sign in', li_signingIn: 'Signing in…', li_newHere: 'New here? {org} will email you an invitation to create your portal account.', li_yourSpecialist: 'Your specialist',
+  li_forgot: 'Forgot password?', li_signIn: 'Sign in', li_signingIn: 'Signing in…', li_newHere: 'New here? {org} will email you an invitation to create your portal account.', li_newHereNoEmail: 'New here? Ask {org} for your invitation link to create your portal account.', li_yourSpecialist: 'Your specialist',
   fp_title: 'Reset your password', fp_sub: 'Enter your email and we will send you a link.', fp_send: 'Send reset link', fp_back: 'Back to sign in', fp_portalLink: 'Client portal sign in',
   inv_welcome: 'Welcome', inv_sub: '{org} has invited you to your secure client portal.', inv_name: 'Your name',
   inv_pwHint: 'At least 10 characters, not used anywhere else. If you already have a portal account with this email, enter that password.', inv_accept: 'Accept invitation', inv_settingUp: 'Setting up…',
@@ -156,7 +157,7 @@ const ES: Record<PortalKey, string> = {
   byStaff: 'registrado por su especialista', byCarrier: 'confirmado por el servicio de correo', sentNoDate: 'Enviada, fecha no registrada',
   sentOn: 'Enviada', expectBy: 'Respuesta esperada para', reason: 'Lo que pedimos', noDisputes: 'Aún no se ha enviado ninguna cuenta. Las verá aquí cuando enviemos su primera disputa.',
   scoresTitle: 'Sus puntajes reportados', scoresNote: 'Tal como aparecen en sus informes de crédito. Los puntajes cambian por muchas razones y no son una predicción ni una promesa.',
-  uploaded: 'Sus archivos', uploadedOk: 'Subido — gracias', uploadedOkBody: 'Su especialista ha sido notificado.', noDocs: 'Aún no ha subido nada.', requested: 'Solicitado', received: 'Recibido', docType: '¿Qué es?', chooseFile: 'Elija un archivo', uploadHelp: 'PDF, PNG o JPG, hasta 10 MB. Sus archivos se guardan cifrados.',
+  uploaded: 'Sus archivos', uploadedOk: 'Subido — gracias', uploadedOkBody: 'Su especialista ha sido notificado.', noDocs: 'Aún no ha subido nada.', requested: 'Solicitado', received: 'Recibido', docType: '¿Qué es?', chooseFile: 'Elija un archivo', uploadHelp: 'PDF, PNG o JPG, hasta {max} MB. Sus archivos se guardan cifrados.',
   noLetters: 'Aún no hay cartas aprobadas. Aparecerán aquí cuando su especialista las revise y apruebe.', download: 'Descargar PDF',
   messagesTitle: 'Mensajes con su especialista', noMessages: 'Aún no hay mensajes — envíe uno abajo.', writeMessage: 'Escriba un mensaje', send: 'Enviar', you: 'Usted', team: 'Su equipo',
   contact: 'Datos de contacto', phone: 'Teléfono', address: 'Dirección postal', language: 'Idioma', save: 'Guardar cambios', email: 'Correo', emailNote: 'Para cambiar su correo, pídaselo a su especialista.',
@@ -181,7 +182,8 @@ const ES: Record<PortalKey, string> = {
   a_legalName: 'Escriba su nombre legal completo tal como aparece en su cuenta.', a_alreadySigned: 'Ya firmó este acuerdo.', a_signedOk: 'Firmado. Gracias.',
   a_pwMismatch: 'Las contraseñas nuevas no coinciden.', a_pwChanged: 'Contraseña cambiada.',
   e_required: 'Complete todos los campos obligatorios.', e_checkForm: 'Revise el formulario e inténtelo de nuevo.', e_state: 'Use el código de estado de dos letras', e_zip: 'Use un código postal de 5 dígitos',
-  e_fileMissing: 'Elija un archivo para subir.', e_fileTooLarge: 'Ese archivo pesa más de 10 MB.', e_fileType: 'Ese tipo de archivo no se acepta. Suba un PDF, PNG o JPG.',
+  e_emailOff: 'El correo electrónico no está conectado, así que no se puede enviar un enlace. Pida ayuda a la persona que administra su cuenta.',
+  e_fileMissing: 'Elija un archivo para subir.', e_fileTooLarge: 'Ese archivo pesa más de {max} MB.', e_fileType: 'Ese tipo de archivo no se acepta. Suba un PDF, PNG o JPG.',
   e_generic: 'Algo salió mal. Inténtelo de nuevo.', e_noAccess: 'No tiene acceso a ese registro.', e_exists: 'Eso ya existe.',
   e_pwCurrent: 'Su contraseña actual es incorrecta.', e_pwShort: 'Use al menos 10 caracteres.', e_pwLong: 'Use 128 caracteres o menos.', e_pwCommon: 'Esa contraseña es demasiado común.',
   e_pwRepeat: 'Evite repetir un solo carácter.', e_pwEmail: 'No incluya el nombre de su correo en la contraseña.', e_pwVaried: 'Use una contraseña más variada.',
@@ -191,12 +193,12 @@ const ES: Record<PortalKey, string> = {
   e_email: 'Escriba un correo electrónico válido', e_enterPassword: 'Escriba su contraseña', e_name: 'Escriba su nombre', e_contactConsent: 'Confirme que podemos comunicarnos con usted',
   e_formUnavailable: 'Este formulario no está disponible.', e_code: 'Escriba el código de 6 dígitos', e_codeInvalid: 'Ese código no es válido. Revise su aplicación de autenticación e inténtelo de nuevo.',
   e_resetSent: 'Si existe una cuenta con ese correo, le enviamos un enlace para restablecer la contraseña. Vence en 1 hora.',
-  err_title: 'Algo salió mal', err_body: 'No se pudo cargar esta página o su última acción no se completó. Inténtelo de nuevo. Si estaba subiendo un archivo, asegúrese de que pese menos de 10 MB.',
+  err_title: 'Algo salió mal', err_body: 'No se pudo cargar esta página o su última acción no se completó. Inténtelo de nuevo. Si estaba subiendo un archivo, asegúrese de que no supere el límite de tamaño indicado en el formulario.',
   err_retry: 'Intentar de nuevo', err_rootBody: 'Inténtelo de nuevo. Si sigue ocurriendo, recargue la página.', err_home: 'Ir a la página de inicio',
   li_title: 'Su portal de clientes', li_welcomeBack: 'Le damos la bienvenida de nuevo', li_subBrand: 'Inicie sesión para ver su progreso con {org}, subir documentos y escribir a su especialista.',
   li_sub: 'Consulte su progreso, suba documentos y escriba a su especialista.', li_workHere: '¿Trabaja aquí?', li_staff: 'Acceso del personal',
   li_noRecord: 'No encontramos un expediente de cliente para esta cuenta. Comuníquese con su especialista.', li_reset: 'Contraseña actualizada. Inicie sesión con su contraseña nueva.',
-  li_forgot: '¿Olvidó su contraseña?', li_signIn: 'Iniciar sesión', li_signingIn: 'Iniciando sesión…', li_newHere: '¿Es nuevo aquí? {org} le enviará por correo una invitación para crear su cuenta del portal.', li_yourSpecialist: 'Su especialista',
+  li_forgot: '¿Olvidó su contraseña?', li_signIn: 'Iniciar sesión', li_signingIn: 'Iniciando sesión…', li_newHere: '¿Es nuevo aquí? {org} le enviará por correo una invitación para crear su cuenta del portal.', li_newHereNoEmail: '¿Es nuevo aquí? Pida a {org} su enlace de invitación para crear su cuenta del portal.', li_yourSpecialist: 'Su especialista',
   fp_title: 'Restablezca su contraseña', fp_sub: 'Escriba su correo y le enviaremos un enlace.', fp_send: 'Enviar enlace', fp_back: 'Volver a iniciar sesión', fp_portalLink: 'Acceso al portal de clientes',
   inv_welcome: 'Le damos la bienvenida', inv_sub: '{org} le ha invitado a su portal seguro para clientes.', inv_name: 'Su nombre',
   inv_pwHint: 'Al menos 10 caracteres, que no use en ningún otro sitio. Si ya tiene una cuenta del portal con este correo, escriba esa contraseña.', inv_accept: 'Aceptar invitación', inv_settingUp: 'Preparando…',
@@ -256,6 +258,8 @@ export function portalMessage(lang: Lang, message: string): string {
   const t = tr(lang);
   const minutes = /^Too many attempts\. Try again in (\d+) minute/.exec(message);
   if (minutes) return fill(t('e_tooManyMin'), { n: minutes[1]! });
+  const tooLarge = /^That file is larger than (\d+) MB\.$/.exec(message); // tooLargeMessage() in src/lib/upload.ts
+  if (tooLarge) return fill(t('e_fileTooLarge'), { max: tooLarge[1]! });
   const known = (m: string) => SERVER_MESSAGE_KEY.get(m) ?? SERVER_MESSAGE_PREFIX.find(([p]) => m.startsWith(p))?.[1];
   const key = known(message);
   if (key) return t(key);

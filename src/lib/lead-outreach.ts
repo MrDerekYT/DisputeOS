@@ -149,7 +149,7 @@ export async function runLeadOutreach(orgId: string, opts: OutreachOptions = {})
       assertNoBlockedClaims(`${m.subject}\n${m.text}`);
       mail = { to: claim.lead.email, subject: m.subject, text: m.text, replyTo: settings.replyTo, fromName: org.name };
       const res = await (opts.send ?? sendEmail)(mail);
-      if (res.provider === 'log') error = 'Email is not connected; nothing was delivered.';
+      if (res.provider !== 'resend') error = 'Email is not connected; nothing was delivered.';
       else if (!res.ok) error = res.error ?? 'The email service refused the message.';
       ref = res.providerRef ?? null;
     } catch (e) {

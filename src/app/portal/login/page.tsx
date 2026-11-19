@@ -1,3 +1,4 @@
+import { emailDisabled } from '@/lib/mailer';
 import Link from 'next/link';
 import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
@@ -53,7 +54,7 @@ export default async function PortalLogin({ searchParams }: { searchParams: Prom
         </div>
         <SubmitButton className="btn-lg w-full" pendingText={t('li_signingIn')}>{t('li_signIn')}</SubmitButton>
       </ActionForm>
-      <p className="mt-6 border-t border-line pt-4 text-[0.8125rem] leading-relaxed text-muted">{fill(t('li_newHere'), { org: brand ? brand.name : t('li_yourSpecialist') })}</p>
+      <p className="mt-6 border-t border-line pt-4 text-[0.8125rem] leading-relaxed text-muted">{fill(t(emailDisabled() ? 'li_newHereNoEmail' : 'li_newHere'), { org: brand ? brand.name : t('li_yourSpecialist') })}</p>
     </AuthLayout>
   );
 }

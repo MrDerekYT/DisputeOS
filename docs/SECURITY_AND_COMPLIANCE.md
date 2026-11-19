@@ -15,8 +15,8 @@ was verified, and what is **not** done. It is engineering documentation, **not l
 | RBAC | owner/admin/manager/specialist/client permission map + DB role tiers; nobody can mint an owner; admins can't create admins | unit + RLS tests |
 | Secrets & secret leakage | all secrets from env, validated at boot per environment; production rejects dev keys / http URLs; password hashes & TOTP secrets unreadable by tenant queries | env tests; RLS "secrets not reachable" tests; boot check |
 | Encryption at rest | SSN/DOB/TOTP secrets and every stored file are AES-256-GCM encrypted with key rotation support; account numbers are never stored (last 4 only) | unit tests; on-disk inspection after a real upload |
-| Encryption in transit | HSTS + `upgrade-insecure-requests`; TLS terminates at your host/DB (`sslmode=require`) | config |
-| Upload safety | type from file **contents** (magic bytes), 10 MB cap, sanitised names, extension/MIME ignored; download served `nosniff` + sandbox CSP | unit tests; journey (disguised executable rejected) |
+| Encryption in transit | HSTS + `upgrade-insecure-requests`; the database connection uses TLS with the server certificate verified for any host that is not this machine (`DATABASE_CA_CERT` for a private CA); `sslmode=disable` turns it off and is only for a private-network database (refused on Vercel) | unit tests (`tests/unit/deploy.test.ts`); config |
+| Upload safety | type from file **contents** (magic bytes), size cap (`MAX_UPLOAD_MB`: 10 MB by default, 4 MB on Vercel), sanitised names, extension/MIME ignored; download served `nosniff` + sandbox CSP | unit tests; journey (disguised executable rejected) |
 | Web hardening | nonce-based CSP (no `unsafe-eval`), frame-ancestors none, nosniff, referrer & permissions policies; parameterised SQL everywhere; React escaping | production headers inspected |
 | Audit log | append-only (trigger-enforced, even for the privileged connection); no FKs so user/org deletion never blocks it; no PII in metadata | RLS + offboarding tests |
 | Rate limiting | Postgres-backed fixed windows (works across serverless instances) on sign-up, login, reset, MFA, invites | auth tests |

@@ -87,4 +87,4 @@ Read [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md) for the full list. In short: *
 
 ## Docs
 
-[Engineering assessment](docs/ENGINEERING_ASSESSMENT.md) · [Environments](docs/ENVIRONMENTS.md) · [Security & compliance](docs/SECURITY_AND_COMPLIANCE.md) · [Integrations](docs/INTEGRATIONS.md) · [Credit Connect](docs/CREDIT_CONNECT.md) · [Changelog](CHANGELOG.md)
+[Engineering assessment](docs/ENGINEERING_ASSESSMENT.md) · [Environments](docs/ENVIRONMENTS.md) · [Deploying to Vercel + Supabase](docs/DEPLOY-VERCEL.md) · [Security & compliance](docs/SECURITY_AND_COMPLIANCE.md) · [Integrations](docs/INTEGRATIONS.md) · [Credit Connect](docs/CREDIT_CONNECT.md) · [Changelog](CHANGELOG.md)

@@ -11,7 +11,8 @@ import {
 } from '@/lib/auth/service';
 import type { ActionState } from '@/components/forms';
 import { portalLoginPath } from '@/lib/org-brand';
-import { portalMessage } from '@/lib/portal-i18n';
+import { portalMessage, tr } from '@/lib/portal-i18n';
+import { emailDisabled } from '@/lib/mailer';
 
 const email = z.string().trim().toLowerCase().email('Enter a valid email address').max(254);
 
@@ -93,6 +94,7 @@ export async function enrollMfaAction(_: ActionState, fd: FormData): Promise<Act
 export async function forgotPasswordAction(_: ActionState, fd: FormData): Promise<ActionState> {
   return localized(await run(async () => {
     const d = parseForm(z.object({ email }), fd);
+    if (emailDisabled()) return { error: tr('en')('e_emailOff') };
     await requestPasswordReset(d.email, await requestMeta());
     const sent = 'If an account exists for that email, a reset link is on its way. It expires in 1 hour.';
     return { ok: fd.get('lang') === 'es' ? portalMessage('es', sent) : sent };

@@ -5,6 +5,8 @@ import { ActionForm, Field, SubmitButton } from '@/components/forms';
 import { forgotPasswordAction } from '@/app/auth-actions';
 import { orgBrandBySlug } from '@/lib/org-brand';
 import { parseLang, qs, tr } from '@/lib/portal-i18n';
+import { emailDisabled } from '@/lib/mailer';
+import { Notice } from '@/components/ui';
 
 export const metadata: Metadata = { title: 'Reset password' };
 
@@ -17,16 +19,17 @@ export default async function ForgotPasswordPage({ searchParams }: { searchParam
   const t = tr(lang);
   const link = 'link';
   const portalHref = `/portal/login${qs({ org: brand?.slug, lang: lang === 'es' && 'es' })}`;
+  const off = emailDisabled();
   return (
-    <AuthLayout portal={portal} brand={brand} lang={lang} title={t('fp_title')} subtitle={t('fp_sub')}
+    <AuthLayout portal={portal} brand={brand} lang={lang} title={t('fp_title')} subtitle={off ? undefined : t('fp_sub')}
       footer={portal
         ? <Link href={portalHref} className={link}>{t('fp_back')}</Link>
         : <><Link href="/login" className={link}>{t('fp_back')}</Link> · <Link href="/portal/login" className={link}>{t('fp_portalLink')}</Link></>}>
-      <ActionForm action={forgotPasswordAction} className="space-y-4">
+      {off ? <Notice tone="warn">{t('e_emailOff')}</Notice> : <ActionForm action={forgotPasswordAction} className="space-y-4">
         <input type="hidden" name="lang" value={lang} />
         <Field label={t('email')} name="email" type="email" autoComplete="email" required />
         <SubmitButton className="btn-lg w-full" pendingText={t('sending')}>{t('fp_send')}</SubmitButton>
-      </ActionForm>
+      </ActionForm>}
     </AuthLayout>
   );
 }

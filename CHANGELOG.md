@@ -1,5 +1,30 @@
 # Changelog
 
+## Vercel + Supabase readiness (unreleased, uncommitted)
+
+Everything needed to run on Vercel (serverless, no persistent disk) against a Supabase database through its connection
+pooler. Step-by-step guide and the full variable table: `docs/DEPLOY-VERCEL.md`. Not yet exercised against the real services.
+
+- **Database-backed document storage** (`STORAGE_DRIVER=db`, migration 0014 `stored_objects`): same at-rest encryption and
+  key format as the disk driver (still the default). The table has row-level security and no tenant grants or policies.
+- **Non-superuser database owner.** Migration 0014 grants `disputeos_rls` to the owner (needed for `SET ROLE` on
+  PostgreSQL 16+) and stops with the statement to run when it cannot. It also removes the table privileges Supabase
+  gives its Data API roles (`anon`, `authenticated`, `service_role`).
+- **Connections** (`scripts/pg-config.mjs`, used by the app and every script): a remote database is always reached over
+  TLS with the certificate verified; `DATABASE_CA_CERT` supplies a private CA; `?sslmode=disable` is the only opt-out,
+  for private networks, and is refused on Vercel. **Behaviour change:** a remote `DATABASE_URL` without TLS used to connect in plaintext and is
+  now refused unless it says `sslmode=disable`. Pool size is `DB_POOL_MAX` (default 10; 3 on Vercel).
+- **`npm run vercel-build`** migrates, then builds (a Vercel Preview build skips the migrations); it fails the build when `DATABASE_URL` is missing or a migration
+  fails. Migrations now take a transaction-scoped lock so concurrent builds cannot collide. `build` is unchanged.
+- **Scheduled jobs:** `vercel.json` schedules `GET /api/jobs/run` daily; the route now answers GET as well as POST, with
+  the same `Authorization: Bearer <CRON_SECRET>` check.
+- **Upload limit** is `MAX_UPLOAD_MB` (default 10; 4 on Vercel). The server check, the browser check (now also on the
+  staff upload forms) and every message in English and Spanish use that one number.
+- **`EMAIL_DRIVER=disabled`**: an explicit way to run production without an email provider. Nothing is sent and the app
+  says so; password reset by email is unavailable in that mode. The `log` driver is still refused in production.
+- **Production on Vercel refuses** disk storage, a missing `CRON_SECRET` and an upload limit above 4 MB.
+- `npm run secrets:gen` prints fresh values for the generated secrets (writes no file).
+
 ## Night Desk redesign: review fixes (unreleased, uncommitted)
 
 Fixes from the design, accessibility and accuracy review of the redesign. Presentation only, except where noted.

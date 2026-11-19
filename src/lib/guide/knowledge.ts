@@ -339,8 +339,8 @@ export const GUIDE_ENTRIES: GuideEntry[] = [
     question: { en: 'How do I upload a document?', es: '¿Cómo subo un documento?' },
     keywords: ['upload', 'uploading', 'send a document', 'send documents', 'send my id', 'photo id', 'proof of address', 'attach', 'file', 'pdf', 'subir', 'subir documento', 'enviar documento', 'enviar documentos', 'identificacion', 'comprobante', 'archivo', 'adjuntar'],
     answer: {
-      en: 'Open Documents, choose what the file is (for example Photo ID or Credit report), pick the file and upload it. PDF, PNG and JPG files up to 10 MB are accepted, and it works from a phone. If your specialist asked for something specific, it is listed on your Home page under “What we need from you”. Credit reports should be sent as PDFs so they can be read automatically.',
-      es: 'Abra Documentos, elija qué es el archivo (por ejemplo Identificación con foto o Informe de crédito), seleccione el archivo y súbalo. Se aceptan archivos PDF, PNG y JPG de hasta 10 MB, y funciona desde el teléfono. Si su especialista le pidió algo específico, aparece en su página de Inicio bajo “Lo que necesitamos de usted”. Los informes de crédito deben enviarse en PDF para que puedan leerse automáticamente.',
+      en: 'Open Documents, choose what the file is (for example Photo ID or Credit report), pick the file and upload it. PDF, PNG and JPG files are accepted (the size limit is shown on the upload form), and it works from a phone. If your specialist asked for something specific, it is listed on your Home page under “What we need from you”. Credit reports should be sent as PDFs so they can be read automatically.',
+      es: 'Abra Documentos, elija qué es el archivo (por ejemplo Identificación con foto o Informe de crédito), seleccione el archivo y súbalo. Se aceptan archivos PDF, PNG y JPG (el límite de tamaño aparece en el formulario), y funciona desde el teléfono. Si su especialista le pidió algo específico, aparece en su página de Inicio bajo “Lo que necesitamos de usted”. Los informes de crédito deben enviarse en PDF para que puedan leerse automáticamente.',
     },
     links: [DOCS],
   },

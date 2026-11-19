@@ -35,7 +35,7 @@ const GROUPS: { title: string; lede: string; items: [string, string][] }[] = [
     items: [
       ['Encrypted identifiers and files', 'Social Security numbers, dates of birth and every uploaded file are encrypted with AES-256-GCM, with support for rotating the key.'],
       ['Account numbers are not kept', 'Only the last four digits of an account number are stored.'],
-      ['Upload checks', 'A file’s type is read from its contents, not its name, and uploads are capped at 10 MB. Downloads are served so a browser will not run them.'],
+      ['Upload checks', 'A file’s type is read from its contents, not its name, and upload size is capped. Downloads are served so a browser will not run them.'],
       ['Export and deletion', 'One client’s data can be exported as JSON, or deleted permanently after a typed confirmation.'],
     ],
   },

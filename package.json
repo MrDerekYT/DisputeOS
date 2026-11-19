@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "vercel-build": "node scripts/migrate.mjs && next build",
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
@@ -19,6 +20,7 @@
     "env:setup": "bash scripts/setup-local-db.sh",
     "jobs:run": "node scripts/run-jobs.mjs",
     "credits:grant": "node scripts/grant-credits.mjs",
+    "secrets:gen": "node scripts/gen-secrets.mjs",
     "check": "npm run typecheck && npm run lint && npm test && npm run build"
   },
   "dependencies": {

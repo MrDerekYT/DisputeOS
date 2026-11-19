@@ -47,7 +47,7 @@ export default function PricingPage() {
       </PageIntro>
 
       <section className={cn(WRAP, 'pt-10')} aria-label="Plans">
-        <ul className="grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
+        <ul className="grid gap-5 md:grid-cols-3">
           {PLANS.map((p) => (
             <li key={p.key} className={cn('panel flex flex-col p-6', p.highlight && 'ring-2 ring-brand')}>
               <h2 className="display text-2xl">{p.name}</h2>

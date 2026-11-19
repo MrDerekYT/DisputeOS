@@ -1,5 +1,6 @@
 import pg from 'pg';
 import { getEnv } from './env';
+import { pgConnectionConfig, pgPoolMax } from '../../scripts/pg-config.mjs';
 
 // int8 (cents, counts) -> number; numeric -> number; DATE stays a 'YYYY-MM-DD' string (no timezone drift).
 pg.types.setTypeParser(20, (v) => Number(v));
@@ -22,7 +23,15 @@ const g = globalThis as unknown as { __dosPool?: pg.Pool };
 
 export function pool(): pg.Pool {
   if (!g.__dosPool) {
-    g.__dosPool = new pg.Pool({ connectionString: getEnv().DATABASE_URL, max: 10, idleTimeoutMillis: 30_000 });
+    // Every query runs inside an explicit transaction and all per-request state is transaction-local (SET LOCAL ROLE,
+    // set_config(..., true), pg_advisory_xact_lock), with no named prepared statements, LISTEN or temp tables. That is
+    // what makes a transaction-mode connection pooler (Supabase port 6543, PgBouncer) safe to put in front. Keep it so.
+    const env = getEnv();
+    g.__dosPool = new pg.Pool({
+      ...pgConnectionConfig(env.DATABASE_URL, env), max: pgPoolMax(),
+      // Serverless instances are frozen between requests; give connections back quickly instead of holding them.
+      idleTimeoutMillis: process.env.VERCEL ? 5_000 : 30_000, connectionTimeoutMillis: 15_000,
+    });
     g.__dosPool.on('error', (e) => console.error('[db] idle client error', e.message));
   }
   return g.__dosPool;

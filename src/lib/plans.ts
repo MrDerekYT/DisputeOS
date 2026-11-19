@@ -8,7 +8,7 @@
  * src/lib/ai/credits.ts (AI_COSTS), which the pricing page reads directly.
  */
 export interface Plan {
-  key: 'solo' | 'starter' | 'growth' | 'scale';
+  key: 'starter' | 'growth' | 'scale';
   name: string;
   /** Who the plan is for, in a few words. */
   blurb: string;
@@ -23,10 +23,9 @@ export interface Plan {
 }
 
 export const PLANS: readonly Plan[] = [
-  { key: 'solo', name: 'Solo', blurb: 'One person getting started', priceMonthly: 59, seats: 1, activeClients: 25, aiCredits: 150 },
-  { key: 'starter', name: 'Starter', blurb: 'A small team with a steady book', priceMonthly: 119, seats: 3, activeClients: 150, aiCredits: 600, highlight: true },
-  { key: 'growth', name: 'Growth', blurb: 'An established agency', priceMonthly: 229, seats: 8, activeClients: 600, aiCredits: 2500 },
-  { key: 'scale', name: 'Scale', blurb: 'Several teams or locations', priceMonthly: 449, seats: 20, activeClients: 2000, aiCredits: 7000 },
+  { key: 'starter', name: 'Starter', blurb: 'One person getting started', priceMonthly: 120, seats: 1, activeClients: 25, aiCredits: 600 },
+  { key: 'growth', name: 'Growth', blurb: 'A growing agency', priceMonthly: 229, seats: 2, activeClients: 100, aiCredits: 2500, highlight: true },
+  { key: 'scale', name: 'Scale', blurb: 'An established team', priceMonthly: 449, seats: 3, activeClients: 250, aiCredits: 7000 },
 ];
 
 /** Optional extras, the same price on every plan. */

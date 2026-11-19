@@ -9,7 +9,7 @@ import { parseForm, run, UserError, zUuid } from '@/lib/action';
 import { audit } from '@/lib/audit';
 import { requireStaff } from '@/lib/auth/context';
 import { adminResetMfa, createInviteToken, normEmail } from '@/lib/auth/service';
-import { sendEmail } from '@/lib/mailer';
+import { delivers, sendEmail } from '@/lib/mailer';
 import { getEnv } from '@/lib/env';
 import { grantableRoles, type Role } from '@/lib/rbac';
 import { PRODUCT } from '@/lib/product';
@@ -27,7 +27,7 @@ export async function inviteStaffAction(_: ActionState, fd: FormData): Promise<A
     });
     const sent = await sendEmail({ to: d.email, subject: `Join ${ctx.session.orgName} on ${PRODUCT.name}`, text: `${ctx.session.fullName || 'A colleague'} invited you to ${ctx.session.orgName} on ${PRODUCT.name} as ${d.role}.\n\nAccept: ${link}\n\nThe link expires in 7 days.` });
     revalidatePath('/app/team');
-    return sent.provider === 'log' ? { ok: `Email delivery is not configured. Send this one-time link yourself: ${link}` } : sent.ok ? { ok: `Invitation sent to ${d.email}.` } : { error: `Could not send the email: ${sent.error}` };
+    return !delivers(sent) ? { ok: `Email delivery is not configured. Send this one-time link yourself: ${link}` } : sent.ok ? { ok: `Invitation sent to ${d.email}.` } : { error: `Could not send the email: ${sent.error}` };
   });
 }
 
