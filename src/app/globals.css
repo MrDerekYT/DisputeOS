@@ -1,0 +1,235 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+  Design tokens — "Night Desk". Midnight-blue surfaces, one iris accent, a moonlight "now" line.
+  Dark is the default identity; light is a true sibling, chosen with the theme toggle (data-theme on <html>).
+  RGB triplets so Tailwind opacity modifiers work (bg-brand/10).
+
+  One accent: iris means "you can act on this". Moonlight (--now) is only ever the "today" line.
+  Status colours only mean status and always travel with a word, an icon or a pattern.
+  Every text colour is at least 4.5:1 on canvas, surface and raised in its own theme.
+*/
+:root {
+  /* --font-instrument / --font-bricolage are set by next/font/local in src/app/layout.tsx (self-hosted files). */
+  --font-sans: var(--font-instrument), 'Instrument Sans', 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-display: var(--font-bricolage), 'Bricolage Grotesque', 'Segoe UI Variable Display', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --radius-sm: 6px;   /* chips and controls inside rows */
+  --radius-md: 10px;  /* buttons and inputs */
+  --radius-lg: 16px;  /* panels */
+  --radius-pill: 999px;
+}
+
+/* Dark set. `.night` re-applies it locally: the navigation rail and "night" cards stay dark in the light theme too. */
+:root, :root[data-theme='dark'], .night {
+  --canvas: 15 20 51;
+  --surface: 23 29 71;
+  --raised: 32 40 89;
+  --line: 45 54 112;
+  --line-strong: 96 108 178;   /* boundaries of inputs: 3:1 against canvas and surface */
+  --ink: 238 240 252;
+  --muted: 179 185 220;
+  --faint: 149 156 200;
+
+  --brand: 150 167 255;
+  --brand-strong: 183 194 255;
+  --brand-soft: 37 46 110;
+  --brand-ink: 11 15 42;
+  --now: 255 233 184;
+
+  /* AI-written or AI-suggested content. Fixed iris, so it reads the same inside an agency-branded portal. */
+  --ai: 183 194 255;
+  --ai-soft: 37 46 110;
+
+  --ok: 98 214 164;    --ok-soft: 20 58 58;
+  --warn: 242 188 98;  --warn-soft: 63 50 34;
+  --bad: 255 147 147;  --bad-soft: 74 34 57;
+  --info: 127 198 255; --info-soft: 23 58 97;
+
+  --shadow-panel: inset 0 1px 0 rgb(255 255 255 / 0.05), 0 1px 2px rgb(4 6 24 / 0.5);
+  --shadow-pop: inset 0 1px 0 rgb(255 255 255 / 0.07), 0 2px 6px rgb(4 6 24 / 0.5), 0 24px 48px -16px rgb(4 6 24 / 0.75);
+  --shadow-glow: 0 0 0 1px rgb(var(--now) / 0.25), 0 0 14px 1px rgb(var(--now) / 0.45);
+
+  color-scheme: dark;
+}
+:root, :root[data-theme='dark'] {
+  --rail: 11 15 42;
+  --rail-line: 32 40 89;
+  --rail-ink: 238 240 252;
+  --rail-muted: 179 185 220;
+  --rail-active: 32 40 89;
+}
+
+:root[data-theme='light'] {
+  --canvas: 241 242 250;
+  --surface: 255 255 255;
+  --raised: 232 234 247;
+  --line: 212 216 236;
+  --line-strong: 126 133 176;
+  --ink: 18 23 56;
+  --muted: 75 82 126;
+  --faint: 92 99 142;
+
+  --brand: 59 73 209;
+  --brand-strong: 42 54 168;
+  --brand-soft: 226 229 251;
+  --brand-ink: 255 255 255;
+  --now: 18 23 56;
+
+  --ai: 42 54 168;
+  --ai-soft: 226 229 251;
+
+  --rail: 15 20 51;
+  --rail-line: 37 46 110;
+  --rail-ink: 238 240 252;
+  --rail-muted: 179 185 220;
+  --rail-active: 37 46 110;
+
+  --ok: 15 110 72;     --ok-soft: 221 243 232;
+  --warn: 133 86 0;    --warn-soft: 251 235 203;
+  --bad: 176 32 58;    --bad-soft: 251 225 229;
+  --info: 27 91 163;   --info-soft: 222 235 250;
+
+  --shadow-panel: 0 0 0 1px rgb(var(--line) / 0.9), 0 1px 2px rgb(18 23 56 / 0.05);
+  --shadow-pop: 0 0 0 1px rgb(var(--line) / 0.9), 0 2px 6px rgb(18 23 56 / 0.06), 0 24px 48px -20px rgb(18 23 56 / 0.28);
+  --shadow-glow: 0 0 0 1px rgb(var(--now) / 0.12);
+
+  color-scheme: light;
+}
+
+/* Declared after the light block on purpose: a `.night` element keeps the dark set whatever the page theme is. */
+.night { color: rgb(var(--ink)); }
+
+@layer base {
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    @apply bg-canvas font-sans text-ink antialiased;
+    font-variant-numeric: tabular-nums;
+  }
+  h1, h2 { font-family: var(--font-display); letter-spacing: -0.02em; }
+  h3 { letter-spacing: -0.01em; }
+  ::selection { background: rgb(var(--brand) / 0.3); }
+  :focus-visible { outline: 2px solid rgb(var(--brand)); outline-offset: 2px; }
+  input, select, textarea { @apply text-base sm:text-sm; }
+  hr { @apply border-line; }
+  /* A grid item may always shrink to its column: a wide table or a long unbreakable string scrolls or wraps inside
+     its own box instead of pushing the page sideways. :where() keeps this at zero specificity so utilities still win. */
+  :where(.grid) > * { min-width: 0; }
+  code, kbd { overflow-wrap: anywhere; }
+}
+
+@layer components {
+  /* Panels are for things that are objects (a queue, a table, a form). Everything else is a heading, a rule and room. */
+  .card { @apply rounded-2xl border border-transparent bg-surface shadow-card; }
+  .card-pad { @apply p-5 sm:p-6; }
+  .panel { @apply rounded-2xl bg-surface shadow-card; }
+  .rule { @apply border-t border-line; }
+  .display { font-family: var(--font-display); @apply font-semibold leading-[1.1] tracking-[-0.02em]; }
+
+  .btn {
+    @apply inline-flex min-h-[2.375rem] items-center justify-center gap-2 whitespace-nowrap rounded-xl border border-transparent px-3.5 py-1.5 text-sm font-semibold
+      transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-primary { @apply btn bg-brand text-brand-ink hover:bg-brand-strong; }
+  .btn-secondary { @apply btn border-line bg-surface text-ink hover:border-line-strong hover:bg-raised; }
+  .btn-quiet { @apply btn bg-raised text-ink hover:bg-line; }
+  .btn-ghost { @apply btn text-muted hover:bg-raised hover:text-ink; }
+  .btn-danger { @apply btn bg-bad text-surface hover:opacity-90; }
+  .btn-sm { @apply min-h-[2rem] rounded-lg px-3 py-1 text-[0.8125rem]; }
+  .btn-lg { @apply min-h-[3.125rem] rounded-xl px-5 text-base; }
+  .link { @apply font-semibold text-brand-strong underline decoration-brand/40 underline-offset-[3px] hover:decoration-brand; }
+
+  .field { @apply block w-full rounded-xl border border-line-strong/70 bg-canvas px-3.5 py-2.5 text-ink placeholder:text-faint transition
+      hover:border-line-strong focus:border-brand focus:outline-none focus:ring-4 focus:ring-brand/20; }
+  :root[data-theme='light'] .field { @apply bg-surface; }
+  .night .field { background-color: rgb(var(--canvas)); }
+  .label { @apply mb-1.5 block text-sm font-medium text-ink; }
+  .hint { @apply mt-1 text-xs text-muted; }
+
+  /* Status tags: always a word, optionally an icon or dot. Never colour alone. */
+  .badge { @apply inline-flex min-h-[1.5rem] items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 text-xs font-semibold; }
+  .tag-ai { @apply inline-flex min-h-[1.5rem] items-center gap-1.5 whitespace-nowrap rounded-full bg-ai-soft px-2.5 text-xs font-semibold text-ai; }
+  .eyebrow { @apply text-[0.8125rem] font-medium text-muted; }
+
+  /* `relative` so visually-hidden (absolutely positioned) labels inside a wide table are clipped with it, not left to widen the page. */
+  .table-wrap { @apply relative overflow-x-auto rounded-2xl bg-surface shadow-card; }
+  .table { @apply w-full min-w-[40rem] text-left text-sm; }
+  .table thead th { @apply border-b border-line px-4 py-3 text-[0.8125rem] font-medium text-muted; }
+  .table tbody td { @apply border-b border-line/60 px-4 py-3 align-middle; }
+  .table tbody tr:last-child td { @apply border-b-0; }
+  .table tbody tr.row-link:hover { @apply bg-raised/60; }
+
+  /* Any sideways scroller is a positioned box, so visually-hidden (absolutely positioned) text inside it is clipped
+     with it instead of widening the page. */
+  .scroll-x { @apply relative overflow-x-auto; }
+
+  .skeleton { @apply relative overflow-hidden rounded-lg bg-line/60; }
+  .skeleton::after { content: ''; @apply absolute inset-0 -translate-x-full animate-shimmer bg-gradient-to-r from-transparent via-ink/10 to-transparent; }
+}
+
+/*
+  The investigation window (DayMeter in src/components/ui.tsx). Plain CSS so it is always emitted.
+  Elapsed days are solid, days left are outlined, days past the deadline are hatched coral, and "today" is a pin.
+  Widths come from --el / --left / --over (each a share of the whole track, 0–100).
+*/
+.meter { position: relative; display: flex; height: 14px; width: 100%; min-width: 6rem; }
+.meter-sm { height: 10px; }
+.meter > i { display: block; height: 100%; flex: none; }
+.meter-el { width: calc(var(--el) * 1%); background: rgb(var(--brand)); border-radius: 4px 0 0 4px; }
+.meter-left { width: calc(var(--left) * 1%); background: rgb(var(--brand-soft)); box-shadow: inset 0 0 0 1px rgb(var(--brand) / 0.6); border-radius: 0 4px 4px 0; }
+.meter-el:only-of-type { border-radius: 4px; }
+.meter.is-over .meter-el { background: rgb(var(--faint)); }
+.meter-over { width: calc(var(--over) * 1%); border-radius: 0 4px 4px 0; box-shadow: inset 0 0 0 1px rgb(var(--bad));
+  background: repeating-linear-gradient(135deg, rgb(var(--bad)) 0 3px, rgb(var(--bad-soft)) 3px 7px); }
+.meter-pending { width: 100%; border: 1.5px dashed rgb(var(--faint)); border-radius: 4px; }
+.meter-pin { position: absolute; top: -4px; bottom: -4px; left: calc(var(--pin) * 1%); width: 3px; margin-left: -1.5px; border-radius: 3px;
+  background: rgb(var(--now)); box-shadow: var(--shadow-glow); }
+/* Tick variant: one tick per day of the window, for places where the count itself is the message (the portal). */
+.meter-ticks { -webkit-mask: repeating-linear-gradient(90deg, #000 0 60%, transparent 60% 100%); mask: repeating-linear-gradient(90deg, #000 0 60%, transparent 60% 100%);
+  -webkit-mask-size: calc(100% / var(--days)) 100%; mask-size: calc(100% / var(--days)) 100%; }
+.meter-ticks .meter-el, .meter-ticks .meter-left, .meter-ticks .meter-over { border-radius: 0; }
+.meter-ticks .meter-left { background: rgb(var(--line-strong)); box-shadow: none; }
+.hatch-bad { background: repeating-linear-gradient(135deg, rgb(var(--bad)) 0 3px, rgb(var(--bad-soft)) 3px 7px); box-shadow: inset 0 0 0 1px rgb(var(--bad)); }
+
+/*
+  Staff tables on phones (`.table.table-stack`): one table, two shapes. From `sm` up it is an ordinary table. Below
+  `sm` each row becomes a short stack — the main cell on its own line, wrapping; the rest (status, meter, date, the
+  one action) flow underneath — so nothing important sits off-screen behind a sideways scroll.
+  `cell-main` / `cell-full` take a whole line; `data-label` puts the column name in front of a value that would be
+  ambiguous without its header; `cell-end` pushes the row's action to the right; `cell-none` drops a cell that has
+  nothing to say in this row (a dash).
+*/
+@media (max-width: 639.98px) {
+  .table.table-stack { display: block; min-width: 0; }
+  .table-stack thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
+  .table-stack tbody { display: block; }
+  .table-stack tbody tr { display: flex; flex-wrap: wrap; align-items: center; gap: 0.375rem 0.875rem; padding: 0.875rem 1rem; border-bottom: 1px solid rgb(var(--line) / 0.6); }
+  .table-stack tbody tr:last-child { border-bottom: 0; }
+  .table-stack tbody td { display: block; min-width: 0; padding: 0; border: 0; text-align: left; }
+  .table-stack tbody td:empty, .table-stack tbody td.cell-none { display: none; }
+  .table-stack tbody td.cell-main, .table-stack tbody td.cell-full { flex: 0 0 100%; }
+  .table-stack tbody td.cell-main { font-size: 0.9375rem; }
+  .table-stack tbody td.cell-end { margin-left: auto; }
+  .table-stack tbody td[data-label]::before { content: attr(data-label) '\00a0'; color: rgb(var(--muted)); font-size: 0.8125rem; font-weight: 400; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
+}
+
+@media print {
+  .no-print { display: none !important; }
+  /* Paper is always light: letters and reports print dark ink on white whatever the screen theme is. */
+  :root, :root[data-theme='dark'] {
+    --canvas: 255 255 255; --surface: 255 255 255; --raised: 244 245 250; --line: 212 216 236; --line-strong: 126 133 176;
+    --ink: 18 23 56; --muted: 75 82 126; --faint: 92 99 142;
+    --brand: 59 73 209; --brand-strong: 42 54 168; --brand-soft: 226 229 251; --brand-ink: 255 255 255; --now: 18 23 56;
+    --ok: 15 110 72; --ok-soft: 221 243 232; --warn: 133 86 0; --warn-soft: 251 235 203; --bad: 176 32 58; --bad-soft: 251 225 229; --info: 27 91 163; --info-soft: 222 235 250;
+    --shadow-panel: 0 0 0 1px rgb(212 216 236); --shadow-pop: 0 0 0 1px rgb(212 216 236);
+    color-scheme: light;
+  }
+  body { background: white; }
+}
