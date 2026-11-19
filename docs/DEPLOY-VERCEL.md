@@ -84,7 +84,7 @@ Production environment only** (see [Preview deployments](#preview-deployments)).
 | `RESEND_API_KEY` | `re_…` | Only with `EMAIL_DRIVER=resend`: your Resend account | **Yes** |
 | `EMAIL_FROM` | `Your Business <no-reply@your-domain.com>` | Only with `EMAIL_DRIVER=resend`: an address on a domain you verified in Resend | No |
 
-Production also requires `REQUIRE_STAFF_MFA` to be `true`, which is its default: leave it unset.
+`REQUIRE_STAFF_MFA` defaults to `true` (staff must set up two-step verification). Setting it to `false` is allowed but leaves staff accounts protected by a password only; the app logs a warning at every start. Turn it back on before real client data is stored.
 
 `APP_ENV` does not need to be set: Vercel sets `NODE_ENV=production`, which selects the production rules. Vercel sets
 `VERCEL=1` itself; the app uses it to choose the small connection pool, the 4 MB upload limit and the Vercel-specific
@@ -114,7 +114,6 @@ The app checks its configuration when a server instance starts and on first use 
 
 - `DATABASE_URL` missing; `APP_URL` missing, not a URL, or not `https://`
 - `PII_ENCRYPTION_KEY` missing, not 32 bytes of base64, or equal to the development key
-- `REQUIRE_STAFF_MFA` set to anything but `true`
 - `EMAIL_DRIVER` unset or `log`; or `resend` without `RESEND_API_KEY`
 - `CRON_SECRET` shorter than 24 characters
 - on Vercel only: `STORAGE_DRIVER` not `db`; `CRON_SECRET` missing; `MAX_UPLOAD_MB` above 4
