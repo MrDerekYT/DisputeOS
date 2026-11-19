@@ -37,7 +37,9 @@ const schema = z.object({
   STORAGE_DIR: z.string().default('.storage'),
   // Largest accepted upload, in MB. Default: 10, or 4 on Vercel, whose functions refuse request bodies over 4.5 MB (src/lib/upload.ts).
   MAX_UPLOAD_MB: z.coerce.number().int().min(1).max(10).optional(),
-  REQUIRE_STAFF_MFA: z.enum(['true', 'false']).default('true'),
+  // Off by default: two-step verification is offered to every user (Settings / profile) but not forced.
+  // Set to 'true' to make it mandatory for staff.
+  REQUIRE_STAFF_MFA: z.enum(['true', 'false']).default('false'),
   STAFF_IDLE_MINUTES: z.coerce.number().int().min(5).max(1440).default(120),
   // How many reverse proxies sit in front of the app; decides which x-forwarded-for entry is believed (src/lib/client-ip.ts).
   TRUSTED_PROXY_HOPS: z.coerce.number().int().min(1).max(5).default(1),
@@ -100,8 +102,6 @@ export function getEnv(): Env {
     const problems: string[] = [];
     if (env.PII_ENCRYPTION_KEY === DEV_PII_KEY) problems.push('PII_ENCRYPTION_KEY must not be the development key');
     if (!env.APP_URL.startsWith('https://')) problems.push('APP_URL must be https in staging/production');
-    // Two-step verification for staff is on by default. An owner may switch it off explicitly (REQUIRE_STAFF_MFA=false);
-    // the app then starts, warns at boot (src/instrumentation.ts), and staff can still turn it on for their own account.
     // The log driver delivers nothing and writes reset/invitation links in plaintext to disk: development and test only.
     if (env.EMAIL_DRIVER === 'log') problems.push('EMAIL_DRIVER must be resend in staging/production, or disabled to run without email (the log driver delivers nothing)');
     if (env.EMAIL_DRIVER === 'resend' && !env.RESEND_API_KEY) problems.push('RESEND_API_KEY is required when EMAIL_DRIVER=resend');

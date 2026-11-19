@@ -84,7 +84,7 @@ Production environment only** (see [Preview deployments](#preview-deployments)).
 | `RESEND_API_KEY` | `re_…` | Only with `EMAIL_DRIVER=resend`: your Resend account | **Yes** |
 | `EMAIL_FROM` | `Your Business <no-reply@your-domain.com>` | Only with `EMAIL_DRIVER=resend`: an address on a domain you verified in Resend | No |
 
-`REQUIRE_STAFF_MFA` defaults to `true` (staff must set up two-step verification). Setting it to `false` is allowed but leaves staff accounts protected by a password only; the app logs a warning at every start. Turn it back on before real client data is stored.
+`REQUIRE_STAFF_MFA` defaults to `false`: two-step verification is optional, and each user can turn it on for their own account. Set it to `true` to make it mandatory for staff, which is recommended once real client data is stored.
 
 `APP_ENV` does not need to be set: Vercel sets `NODE_ENV=production`, which selects the production rules. Vercel sets
 `VERCEL=1` itself; the app uses it to choose the small connection pool, the 4 MB upload limit and the Vercel-specific

@@ -10,7 +10,7 @@ was verified, and what is **not** done. It is engineering documentation, **not l
 | Tenant isolation | PostgreSQL row-level security on every table; tenant requests run as role `disputeos_rls` | 24 RLS tests (cross-org read/write/reassign, role tiers, portal isolation, no-membership user, every table has RLS on); browser journey with a second business |
 | Client sees only own records | RLS policies keyed to `portal_user_id`; column guard trigger limits portal edits to phone/address/language | RLS tests; journey (client redirected away from `/app/*`) |
 | Authentication | scrypt (N=2¹⁵), constant-time compare, dummy hash for unknown emails, lockout after 5 failures, per-IP and per-email rate limits | auth tests |
-| Two-step verification | TOTP (RFC 6238), replay-proof; **required for staff by default** (`REQUIRE_STAFF_MFA`; an owner can switch it off, which logs a warning at every start) | RFC test vectors; auth tests; browser MFA setup |
+| Two-step verification | TOTP (RFC 6238), replay-proof; optional by default, **mandatory for staff when `REQUIRE_STAFF_MFA=true`** | RFC test vectors; auth tests; browser MFA setup |
 | Sessions | random 256-bit token, only its hash stored; HttpOnly, SameSite=Lax, Secure on https; absolute + idle expiry; revoked on password change/reset | auth tests; journey (old cookie rejected after sign-out) |
 | RBAC | owner/admin/manager/specialist/client permission map + DB role tiers; nobody can mint an owner; admins can't create admins | unit + RLS tests |
 | Secrets & secret leakage | all secrets from env, validated at boot per environment; production rejects dev keys / http URLs; password hashes & TOTP secrets unreadable by tenant queries | env tests; RLS "secrets not reachable" tests; boot check |

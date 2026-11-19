@@ -1,3 +1,4 @@
+import { getEnv } from '@/lib/env';
 import type { Metadata } from 'next';
 import { ActionForm, ConfirmButton, Field, Select, SubmitButton } from '@/components/forms';
 import { Avatar, Badge, Notice, PageHeader, Section } from '@/components/ui';
@@ -67,7 +68,7 @@ export default async function TeamPage({ searchParams }: { searchParams: Promise
                 <Field label="Work email" name="email" type="email" required />
                 <Select label="Role" name="role" defaultValue="specialist" options={grant.map((r) => ({ value: r, label: titleCase(r) }))} />
                 <SubmitButton>Send invitation</SubmitButton>
-                <p className="text-xs text-muted">New staff must set up two-step verification before they can open any client data.</p>
+                {getEnv().REQUIRE_STAFF_MFA === 'true' && <p className="text-xs text-muted">New staff must set up two-step verification before they can open any client data.</p>}
               </ActionForm>
             </Section>
           )}
