@@ -165,6 +165,7 @@ async function signUpAgency(browser, label) {
       await staff.getByLabel('How was it sent?').selectOption('first_class_mail');
       await staff.getByLabel('Date sent').fill(sentOn);
       await staff.getByLabel('Tracking reference').fill('WF-TRACK-0001');
+      await staff.getByLabel('Send without the identity documents').check(); // no identity documents on file yet: an explicit yes is required
       await staff.getByRole('button', { name: 'Record submission' }).click();
       await staff.getByRole('button', { name: 'Mark as under investigation' }).waitFor();
       await staff.reload();

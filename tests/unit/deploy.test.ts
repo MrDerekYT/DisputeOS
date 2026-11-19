@@ -156,7 +156,9 @@ describe('upload size limit', () => {
 describe('Vercel project files', () => {
   it('schedules the jobs route, which answers GET (what Vercel Cron sends) and refuses a request without the secret', async () => {
     const cfg = JSON.parse(readFileSync(path.join(root, 'vercel.json'), 'utf8')) as { crons: { path: string; schedule: string }[] };
-    expect(cfg.crons).toEqual([{ path: '/api/jobs/run', schedule: expect.stringMatching(/^\S+ \S+ \S+ \S+ \S+$/) }]);
+    // Two daily runs of the same idempotent job. The second (17:00 UTC: midday Eastern, morning Pacific) exists because the
+    // first falls inside text-message quiet hours everywhere in the US, so texts held overnight need a daytime run to go out.
+    expect(cfg.crons).toEqual([{ path: '/api/jobs/run', schedule: '0 9 * * *' }, { path: '/api/jobs/run', schedule: '0 17 * * *' }]);
     const route = await import('@/app/api/jobs/run/route');
     expect(route.maxDuration).toBeGreaterThan(0);
     const call = (method: 'GET' | 'POST', auth?: string) => route[method](new Request('http://localhost/api/jobs/run', { method, headers: auth ? { authorization: auth } : {} }));

@@ -105,6 +105,11 @@ checks.
 | `ANTHROPIC_API_KEY` | unset | With `AI_PROVIDER=anthropic` | **Yes** |
 | `AI_BASE_URL`, `AI_API_KEY`, `AI_MODEL` | unset | With `AI_PROVIDER=openai` (any OpenAI-compatible endpoint); `AI_MODEL` also overrides the Anthropic model | `AI_API_KEY`: **Yes** |
 | `STORAGE_DIR` | `.storage` | Not used on Vercel (`STORAGE_DRIVER=db`) | No |
+| `SMS_DRIVER` | `disabled` | `twilio` to send client updates by text. See [Text messages](#text-messages-twilio). `log` is refused in production | No |
+| `TWILIO_ACCOUNT_SID` | unset | With `SMS_DRIVER=twilio`: `AC…` from the Twilio Console | No |
+| `TWILIO_AUTH_TOKEN` | unset | With `SMS_DRIVER=twilio`: the primary Auth Token. Also verifies Twilio's webhooks | **Yes** |
+| `TWILIO_MESSAGING_SERVICE_SID` | unset | With `SMS_DRIVER=twilio`: `MG…` of the Messaging Service (recommended) | No |
+| `TWILIO_FROM_NUMBER` | unset | Only without a Messaging Service: the sending number as `+15551234567` | No |
 
 ### What production refuses to start with
 
@@ -139,7 +144,7 @@ The app checks its configuration when a server instance starts and on first use 
      cause and redeploy.
 5. Open `https://<your-app>/api/health`. `{"ok":true}` means the app reached the database and the row-level-security
    role exists. `{"ok":false}` (HTTP 503) means it could not: read the function log.
-6. In Vercel → Settings → Cron Jobs, confirm `/api/jobs/run` is listed.
+6. In Vercel → Settings → Cron Jobs, confirm `/api/jobs/run` is listed (twice: 09:00 and 17:00 UTC).
 
 ### Preview deployments
 
@@ -220,13 +225,34 @@ honest choices:
   there is no other self-service recovery: someone who forgets their password cannot get back in until you connect
   email. For a launch with one or two careful users this is workable; connect email before you onboard clients at scale.
 
-### Scheduled jobs: once a day
-`vercel.json` asks Vercel to call `GET /api/jobs/run` every day at 09:00 UTC. Vercel sends
+### Text messages (Twilio)
+Off by default: with `SMS_DRIVER` unset no text is ever sent and Settings → Client updates says “Not connected”.
+To turn it on:
+
+1. Twilio account, a number with SMS, and the carrier registration (**A2P 10DLC** brand and campaign for a ten-digit
+   number, or toll-free verification). Allow several days; unregistered traffic to US numbers is blocked.
+2. A Messaging Service with that number, linked to the approved campaign.
+3. In the Messaging Service → Integration, “Send a webhook”, Request URL
+   `https://<your-app-domain>/api/webhooks/twilio`, HTTP POST. The domain must be the one in `APP_URL`.
+4. In Vercel → Settings → Environment Variables (Production): `SMS_DRIVER=twilio`, `TWILIO_ACCOUNT_SID`,
+   `TWILIO_AUTH_TOKEN` (mark it Sensitive), `TWILIO_MESSAGING_SERVICE_SID`. Redeploy.
+5. Settings → Client updates should show “Text messages: Connected”. Switch on the events you want; each client must
+   also agree to texts in their portal profile.
+
+The full steps, what is and is not sent, the consent record and the Resend DNS records are in
+[docs/INTEGRATIONS.md](INTEGRATIONS.md#client-updates-by-text-message-and-email). Setting `SMS_DRIVER=twilio` without
+the other values does not stop the app from starting: it reads as “Not connected” and lists what is missing.
+The webhook only works on the production domain; preview deployments have a different URL, so Twilio's signature does
+not match there and the request is refused.
+
+### Scheduled jobs: twice a day
+`vercel.json` asks Vercel to call `GET /api/jobs/run` every day at 09:00 and at 17:00 UTC. The second run exists for
+text messages: 09:00 UTC is night-time across the US, when texts are held, so they need a daytime run to go out. Vercel sends
 `Authorization: Bearer <CRON_SECRET>` using the project's `CRON_SECRET` variable, and the route refuses anything else
-(404 when no secret is configured, 401 when it does not match). The schedule is daily because Vercel's Hobby plan only
+(404 when no secret is configured, 401 when it does not match). Each schedule is daily because Vercel's Hobby plan only
 accepts cron jobs that run once a day, and may run them at any point within the hour. Consequences: automations that
 react to deadlines, reminders and lead follow-ups act up to a day later than on a host that runs the jobs every 15
-minutes. On a paid plan, change the schedule in `vercel.json` to `*/15 * * * *` and redeploy. Running the jobs more
+minutes. On a paid plan, replace both entries in `vercel.json` with one on `*/15 * * * *` and redeploy. Running the jobs more
 than once is safe. Cron jobs only run for the production deployment.
 
 To run the jobs by hand: `curl -H "Authorization: Bearer $CRON_SECRET" https://<your-app>/api/jobs/run`.
@@ -257,3 +283,5 @@ Not verified, because it needs the real services:
   the cron frequency allowed on your plan, and that multi-line `DATABASE_CA_CERT` survives the dashboard unchanged
   (a single line with `\n` in place of line breaks is also accepted).
 - Resend delivery.
+- Twilio: sending, delivery reports and the inbound webhook. Tested against a mocked API and Twilio's documented
+  signature example only. Also not verified: that your Vercel plan accepts two cron entries for the same path.

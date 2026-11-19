@@ -1,9 +1,10 @@
 import { refundUnsettled } from '../ai/credits';
 import { withSystem, type Db } from '../db';
 import { runLeadOutreach } from '../lead-outreach';
+import { runClientUpdateJobs, unmatchedInboundCount } from '../client-updates/service';
 import { runSweeps, type SweepSummary } from './engine';
 
-export interface JobsResult { orgs: number; failures: number; executed: number; pending: number; skipped: number; leadEmails: number; aiRefunds: number; cleaned: Record<string, number>; failed: { orgId: string; error: string }[] }
+export interface JobsResult { orgs: number; failures: number; executed: number; pending: number; skipped: number; leadEmails: number; clientUpdates: number; /** Inbound texts that belong to no workspace and nobody has reviewed (last 30 days). */ unmatchedInboundTexts: number; aiRefunds: number; cleaned: Record<string, number>; failed: { orgId: string; error: string }[] }
 type Sweep = (db: Db, actor: { orgId: string; userId: string | null }) => Promise<SweepSummary[]>;
 
 /**
@@ -21,7 +22,7 @@ export async function runScheduledJobs(opts: { sweep?: Sweep; onlyOrgIds?: strin
   const sweep = opts.sweep ?? runSweeps;
   const orgs = await withSystem((db) => db.rows<{ id: string }>(
     "select id from public.organizations where status = 'active' and ($1::uuid[] is null or id = any($1)) order by created_at", [opts.onlyOrgIds ?? null]));
-  const out: JobsResult = { orgs: orgs.length, failures: 0, executed: 0, pending: 0, skipped: 0, leadEmails: 0, aiRefunds: 0, cleaned: {}, failed: [] };
+  const out: JobsResult = { orgs: orgs.length, failures: 0, executed: 0, pending: 0, skipped: 0, leadEmails: 0, clientUpdates: 0, unmatchedInboundTexts: 0, aiRefunds: 0, cleaned: {}, failed: [] };
   for (const o of orgs) {
     const started = new Date();
     try {
@@ -29,6 +30,8 @@ export async function runScheduledJobs(opts: { sweep?: Sweep; onlyOrgIds?: strin
       const t = sums.reduce((a, s) => ({ executed: a.executed + s.executed, pending: a.pending + s.pending, skipped: a.skipped + s.skipped }), { executed: 0, pending: 0, skipped: 0 });
       out.executed += t.executed; out.pending += t.pending; out.skipped += t.skipped;
       out.leadEmails += (await runLeadOutreach(o.id)).sent;
+      // Client updates by text and email: queue investigation windows that ended, send what is due (src/lib/client-updates/service.ts).
+      out.clientUpdates += (await runClientUpdateJobs(o.id)).sent;
       await withSystem((db) => db.run("insert into public.job_runs (org_id, started_at, finished_at, status, executed, pending, skipped) values ($1, $2, now(), 'ok', $3, $4, $5)", [o.id, started, t.executed, t.pending, t.skipped]));
     } catch (e) {
       const error = String((e as Error).message ?? e).slice(0, 1000);
@@ -49,6 +52,9 @@ export async function runScheduledJobs(opts: { sweep?: Sweep; onlyOrgIds?: strin
   }
   // AI charges whose request died before an outcome was recorded are given back (src/lib/ai/credits.ts).
   out.aiRefunds = await refundUnsettled().catch((e) => { console.error('[jobs] AI credit sweep failed', (e as Error).message); return 0; });
+  // Texts that reached the webhook but belong to no workspace are on no tenant's screen: say how many, so an operator looks.
+  out.unmatchedInboundTexts = await unmatchedInboundCount().catch(() => 0);
+  if (out.unmatchedInboundTexts) console.warn(`[jobs] ${out.unmatchedInboundTexts} inbound text(s) matched no single workspace and are unreviewed (public.sms_inbound where org_id is null)`);
   out.cleaned = await withSystem(async (db) => ({
     sessions: await db.run("delete from public.sessions where expires_at < now() - interval '7 days' or revoked_at < now() - interval '7 days'"),
     resets: await db.run("delete from public.password_resets where expires_at < now() - interval '1 day'"),

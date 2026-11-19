@@ -7,7 +7,10 @@
 import { snapshot, type WAccount } from './credit/what-if';
 import type { Db } from './db';
 import { consentStatus, CONSENT_DOCS } from './compliance/disclosures';
+import { loadIntake } from './intake-load';
+import { intakeSummary } from './intake';
 import { BUREAU_LABEL, money, type Bureau } from './util';
+import { agencyByKey, CONCERN_AGENCIES, specialtyReportStates } from './credit/agencies';
 
 export interface PlanStep { key: string; title: string; detail: string; href?: string; tone: 'ok' | 'warn' | 'info' | 'neutral' }
 
@@ -21,6 +24,8 @@ export interface PlanInput {
   reportsPendingReview: number;
   /** Titles of required consents that are not on file. */
   missingConsents: string[];
+  /** Labels of required identity documents that are not accepted yet (missing, awaiting review, rejected or out of date). */
+  missingIdentityDocs?: string[];
   findingsToReview: number;
   /** Creditor names of collection accounts on the latest approved reports that have no dispute yet. */
   collections: string[];
@@ -31,6 +36,8 @@ export interface PlanInput {
   disputesOverdue: number;
   disputesDueSoon: number;
   lettersToSend: number;
+  /** Short names of the specialty reports (ChexSystems, LexisNexis) still to request. Filled only when staff marked a banking or background concern. */
+  specialtyToRequest?: string[];
 }
 
 export const MAX_PLAN_STEPS = 6;
@@ -61,6 +68,18 @@ export function buildPlan(x: PlanInput): PlanStep[] {
   if (x.missingConsents.length > 0) {
     steps.push({ key: 'consents', tone: 'warn', href: `${tab('overview')}#compliance`, title: `Collect ${n(x.missingConsents.length, 'required consent')}`,
       detail: `Not on file: ${x.missingConsents.join('; ')}. A dispute cannot be submitted until these are signed.` });
+  }
+
+  const idDocs = x.missingIdentityDocs ?? [];
+  if (idDocs.length > 0) {
+    steps.push({ key: 'identity-docs', tone: 'warn', href: `${tab('documents')}#intake`, title: `Collect ${n(idDocs.length, 'identity document')}`,
+      detail: `Not accepted yet: ${idDocs.join('; ')}. Credit bureaus usually ask for these with a mailed dispute, so it helps to have them on file before the first letter goes out.` });
+  }
+
+  const specialty = x.specialtyToRequest ?? [];
+  if (specialty.length > 0) {
+    steps.push({ key: 'specialty-reports', tone: 'info', href: `${tab('reports')}#specialty`, title: `Request the ${specialty.join(' and ')} ${specialty.length === 1 ? 'report' : 'reports'}`,
+      detail: `These are free to request and are separate from the three credit reports. ${x.self ? 'You' : x.firstName} can ask each agency directly; the links are under Specialty reports. They show what is on file, which is the place to start.` });
   }
 
   if (x.findingsToReview > 0) {
@@ -130,8 +149,18 @@ export async function loadPlanInput(db: Db, clientId: string): Promise<Omit<Plan
   return {
     clientId, reports: c.reports, reportsPendingReview: c.pending, findingsToReview: c.findings, disputesOverdue: c.overdue, disputesDueSoon: c.due_soon, lettersToSend: c.letters,
     missingConsents: consentStatus(consents).missing.map((k) => CONSENT_DOCS.find((d) => d.kind === k)?.title.split(' (')[0] ?? k),
+    missingIdentityDocs: intakeSummary(await loadIntake(db, clientId)).notAccepted.map((st) => st.item.label.en),
     collections: collections.map((r) => r.creditor_name),
     accounts: rows.map((r) => ({ creditor: r.creditor_name, type: r.account_type, status: r.account_status, balanceCents: r.balance_cents == null ? null : Number(r.balance_cents), limitCents: r.credit_limit_cents == null ? null : Number(r.credit_limit_cents), opened: r.date_opened })),
     accountsBureau: latest[0]?.bureau ?? null,
+    specialtyToRequest: await specialtyToRequest(db, clientId),
   };
+}
+
+/** The specialty reports to suggest: none unless staff ticked the banking or background concern on the client record. */
+async function specialtyToRequest(db: Db, clientId: string): Promise<string[]> {
+  const c = await db.row<{ banking_concern: boolean; specialty_reports: unknown }>('select banking_concern, specialty_reports from public.clients where id = $1', [clientId]);
+  if (!c?.banking_concern) return [];
+  const states = specialtyReportStates(c.specialty_reports);
+  return CONCERN_AGENCIES.filter((k) => states[k]?.status === 'not_requested').map((k) => agencyByKey(k)!.shortName);
 }

@@ -3,37 +3,51 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 import type { ActionState } from '@/components/forms';
-import { parseForm, run, UserError, zBool, zOpt, zText, zUuid } from '@/lib/action';
+import { parseForm, run, zBool, zOpt, zText, zUuid } from '@/lib/action';
 import { audit } from '@/lib/audit';
 import { requireStaff } from '@/lib/auth/context';
 import { logEvent } from '@/lib/crm';
 import { PRODUCT } from '@/lib/product';
+import { recordPayment, setSoldByPhone } from '@/lib/billing/records';
+import { isMonth } from '@/lib/business-days';
+import { getEnv } from '@/lib/env';
+import { businessToday } from '@/lib/letters/service';
 
 const dollars = z.string().trim().regex(/^\d{1,7}(\.\d{1,2})?$/, 'Enter an amount like 99 or 99.50').transform((v) => Math.round(Number(v) * 100));
 
 /**
  * CROA § 404(b) (15 U.S.C. § 1679b(b)): a credit repair organization may not charge or receive payment before the
  * service is fully performed. We cannot decide that for you, so recording a payment requires an explicit confirmation
- * that it is for work already completed, and the confirmation is stored in the audit log.
+ * that it is for work already completed. The charge check (src/lib/billing/eligibility.ts) is run again on the server:
+ * when it says "hold", the payment is recorded only with the acknowledgement, and both are stored in the audit log.
  */
 export async function recordPaymentAction(_: ActionState, fd: FormData): Promise<ActionState> {
   const ctx = await requireStaff('billing:write');
   return run(async () => {
     const d = parseForm(
-      z.object({ clientId: zUuid, amount: dollars.refine((c) => c > 0, 'Enter an amount greater than zero'), method: z.enum(['card', 'ach', 'cash', 'check', 'other']), note: zOpt(500), subscriptionId: zUuid.optional().or(z.literal('')), performed: zBool }),
+      z.object({
+        clientId: zUuid, amount: dollars.refine((c) => c > 0, 'Enter an amount greater than zero'), method: z.enum(['card', 'ach', 'cash', 'check', 'other']), note: zOpt(500),
+        subscriptionId: zUuid.optional().or(z.literal('')), performed: zBool, ackHold: zBool, period: z.string().optional(),
+      }),
       fd,
     );
-    if (!d.performed) throw new UserError('Confirm that this payment is for services already performed. Charging in advance of performance is prohibited for credit repair organizations.');
-    await ctx.tx(async (db) => {
-      const p = await db.row<{ id: string }>(
-        `insert into public.payments (org_id, client_id, subscription_id, amount_cents, method, note, recorded_by) values ($1,$2,$3,$4,$5,$6,$7) returning id`,
-        [ctx.orgId, d.clientId, d.subscriptionId || null, d.amount, d.method, d.note ?? null, ctx.userId]);
-      await logEvent(db, ctx, d.clientId, 'payment', `Payment recorded: $${(d.amount / 100).toFixed(2)}`);
-      await audit(db, { orgId: ctx.orgId, actorId: ctx.userId, action: 'payment.recorded', entityType: 'payment', entityId: p!.id, ip: ctx.meta.ip, meta: { amount_cents: d.amount, services_performed_confirmed: true } });
-    });
+    const tz = getEnv().APP_TIMEZONE;
+    const month = isMonth(d.period) ? d.period : businessToday().slice(0, 7);
+    const r = await ctx.tx((db) => recordPayment(db, ctx, { clientId: d.clientId, amountCents: d.amount, method: d.method, note: d.note, subscriptionId: d.subscriptionId || null, month, performed: d.performed, holdAcknowledged: d.ackHold }, tz));
     revalidatePath(`/app/clients/${d.clientId}`);
     revalidatePath('/app/billing');
-    return { ok: 'Payment recorded.' };
+    return { ok: r.check.status === 'hold' ? 'Payment recorded. The hold and your acknowledgement are in the audit log.' : 'Payment recorded.' };
+  });
+}
+
+/** How the service was sold to this client. Only adds a caution where payments are recorded; see eligibility.ts. */
+export async function setSoldByPhoneAction(_: ActionState, fd: FormData): Promise<ActionState> {
+  const ctx = await requireStaff('billing:write');
+  return run(async () => {
+    const d = parseForm(z.object({ clientId: zUuid, soldByPhone: z.enum(['', 'yes', 'no']) }), fd);
+    await ctx.tx((db) => setSoldByPhone(db, ctx, d.clientId, d.soldByPhone === '' ? null : d.soldByPhone === 'yes'));
+    revalidatePath(`/app/clients/${d.clientId}`);
+    return { ok: 'Saved.' };
   });
 }
 

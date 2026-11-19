@@ -51,6 +51,14 @@ const schema = z.object({
   EMAIL_DRIVER: z.enum(['log', 'resend', 'disabled']).default('log'),
   EMAIL_FROM: z.string().default(`${PRODUCT.name} <no-reply@localhost>`),
   RESEND_API_KEY: z.string().optional(),
+  // Text messages (src/lib/sms.ts)
+  // disabled (default): no text is ever sent · twilio: sent through Twilio · log: written to a local file, nothing is
+  // delivered (development/test only). Without the Twilio values below, twilio reads as "not connected" in Settings.
+  SMS_DRIVER: z.enum(['disabled', 'twilio', 'log']).default('disabled'),
+  TWILIO_ACCOUNT_SID: z.string().optional(),
+  TWILIO_AUTH_TOKEN: z.string().optional(),
+  TWILIO_MESSAGING_SERVICE_SID: z.string().optional(),
+  TWILIO_FROM_NUMBER: z.string().optional(),
   // AI
   AI_PROVIDER: z.enum(['rules', 'anthropic', 'openai']).default('rules'),
   AI_MODEL: z.string().optional(),
@@ -105,6 +113,7 @@ export function getEnv(): Env {
     // The log driver delivers nothing and writes reset/invitation links in plaintext to disk: development and test only.
     if (env.EMAIL_DRIVER === 'log') problems.push('EMAIL_DRIVER must be resend in staging/production, or disabled to run without email (the log driver delivers nothing)');
     if (env.EMAIL_DRIVER === 'resend' && !env.RESEND_API_KEY) problems.push('RESEND_API_KEY is required when EMAIL_DRIVER=resend');
+    if (env.SMS_DRIVER === 'log') problems.push('SMS_DRIVER must be twilio in staging/production, or disabled to run without text messages (the log driver delivers nothing)');
     // Vercel: the filesystem is read-only and not shared between instances, request bodies stop at 4.5 MB, and
     // vercel.json schedules /api/jobs/run, which answers 404 until CRON_SECRET is set.
     if (process.env.VERCEL) {

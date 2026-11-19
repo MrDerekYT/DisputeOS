@@ -1,5 +1,251 @@
 # Changelog
 
+## Review fixes to the five new features (unreleased, uncommitted)
+
+Twelve reviewer findings on client updates, the dispute clock, the charge check and fall-off dates; all twelve were
+real. Migrations 0018, 0019 and 0020 (none of them deployed yet) were edited in place and stay additive and safe to
+run again.
+
+- **Confirmed accurate means closed** (15 U.S.C. 1679b(a)(1)). Ticking "the client has confirmed this item is reported
+  accurately" now also refuses another round and any new letter for that dispute, in the service and on the page.
+  Before, the page still offered "Start round N+1".
+- **Stop words** (47 CFR 64.1200(a)(10)). A reply containing stop, quit, end, revoke, cancel, unsubscribe or "opt out"
+  anywhere, or a plain refusal ("no more texts", "no más mensajes"), revokes consent. This errs towards stopping. Any
+  other reply pauses texts to that client until staff have read it on the client's profile.
+- **A STOP is the client's to undo.** Staff can no longer record a consent over a STOP reply: refused in the app, the
+  form is hidden, and a trigger on `sms_consents` refuses it for every connection (0018).
+- **Quiet hours where the client is.** A workspace has its own time zone (Settings → Client updates), and a text is
+  held unless it is 8 a.m. to 9 p.m. there and in every time zone of the state on the client's address; with no state
+  on file, Eastern and Pacific both apply.
+- **Replies cannot be pulled away by another workspace.** A reply goes to the client whose consent is in force for the
+  number, then to the one texted most recently. What stays ambiguous is counted in the scheduled job's result.
+- **"No response recorded" waits for the mail.** The no-response steps, the complaint summary and the client message
+  start after the period end + 5 business days (15 U.S.C. 1681i(a)(6)(A)) + 7 days, not the day after the period ends.
+- **Dates are the agency's days, not UTC days.** The legal clock, the 30/45-day check, the complaint summary and the
+  dates written into letters no longer run a day ahead for anything recorded on a US evening; a letter's "I sent you a
+  dispute on" uses the sent date staff recorded.
+- **Citations and scope.** A 45-day period ticked at submission cites 15 U.S.C. 1681j(a)(3), not 1681i(a)(1)(B). A
+  direct dispute with the furnisher is offered only for a dispute about an account on a report (12 CFR 1022.43(b)(1)).
+- **Charge check.** The badge reads "No hold found" (it described the record, not the law). "Sold by phone" is now a
+  three-way answer and starts unanswered (`clients.sold_by_phone` is nullable); until answered, the check says the
+  phone-sale rule (16 CFR 310.4(a)(2)) was not considered.
+- **Fall-off dates.** For an account that is only late, the line reads "Late-payment information from <date> is
+  generally reportable until ...": the account itself keeps being reported.
+- **Letters drafted before this release** are not held to the new specificity check (`letters.checks_version`, null on
+  existing rows, 0019). A template of your own without `{{enclosures}}` gets the enclosures section added at the end.
+  **If you have custom bureau templates:** new letters from them are still checked for the account number and a
+  concrete reason; add `{{account_text}}` and `{{enclosures}}` where you want them to appear.
+- **Not done:** no automatic text confirming an opt-out worded in free text (Twilio only confirms its own keywords).
+  Nothing was sent through live Twilio or Resend.
+
+## Protect your file: freezes, fraud alerts and opt-outs the client places personally (unreleased, uncommitted)
+
+Migration 0022 (additive, safe to run again, no superuser): `clients.file_protections` (jsonb, default `{}`) and a
+trigger that lets only the client write it, and only as option -> day. No table, no policy change.
+
+- **Registry** (`src/lib/credit/protections.ts`): security freezes, fraud alerts, opt-outs, consumer statements and
+  file disclosures for Experian, Equifax, TransUnion, Innovis, ChexSystems, Early Warning, LexisNexis, NCTUE and
+  OptOutPrescreen.com. Each says in one sentence what it does and what it does not do (a freeze does not remove or
+  correct information; an opt-out does not delete records), and is always requested by the consumer. A link, phone
+  number or "Free" mark is stored only with the official page it was read on and the day (all read 2026-11-19).
+  Not confirmed, so not stored: an Early Warning freeze, a ChexSystems page for consumer statements, bureau phone numbers.
+- **Portal** (`/portal/protect`, English and Spanish, linked from the portal home): the options by agency with the
+  official links and a tick "I placed this on <date>". The agency never submits these and no agency login, PIN or
+  password is collected (a freeze is requested directly by the consumer, 15 U.S.C. 1681c-1(i)(2)).
+- **Staff**: "Freezes, alerts and opt-outs" on the client's Reports tab shows the client's ticks, read-only. The
+  database refuses a tick from staff.
+- **Credit guide**: the freeze and fraud alert entries now say what they do not do and link to the page; new entries
+  for the prescreen opt-out (15 U.S.C. 1681b(e)) and for freeze vs fraud alert vs opt-out vs dispute.
+
+## Work statement, charge check and evidence pack (unreleased, uncommitted)
+
+Migration 0020 (additive, safe to run again, no superuser): `clients.sold_by_phone` (nullable = not answered, staff-only by
+trigger) and two narrow read functions, `app.client_document_reviews` and `app.client_portal_signins`. No table, no
+policy change. The statement is never stored; it is built on request from existing records.
+
+- **Work statement** (`src/lib/billing/statement.ts`): per client and month, from records only: letters sent (date,
+  recipient, method, tracking reference, "recorded by staff" or "confirmed by carrier"), letters approved, responses
+  with the outcome as recorded, documents reviewed, messages sent and received, and what is waiting on whom today.
+  Staff: "Work statement" on the client record (`/app/clients/[id]/statement`, prints cleanly). Client: "What we did
+  for you" in the portal (`/portal/statement`, English and Spanish), linked from the portal home. A month with no
+  records says "No work is recorded for this month."
+- **Charge check** (`src/lib/billing/eligibility.ts`, pure): "Eligible to charge" only when a signed service agreement
+  is in force and its 3-business-day cancellation period has ended (15 U.S.C. § 1679e(a)), at least one letter is
+  recorded as sent in the work period on or before the charge date (15 U.S.C. § 1679b(b)), and the client is not
+  cancelled. Otherwise "Hold" with the reasons. Shown on the client's Billing tab above "Record a payment". Recording
+  a payment on hold needs a confirmation; the acknowledgement and the reason codes go to the audit log
+  (`payment.recorded`). The server re-runs the check, so a stale page cannot skip it.
+- **Sold by phone**: a checkbox on the Billing tab. It adds a caution citing the Telemarketing Sales Rule
+  (16 CFR 310.4(a)(2)) to review with counsel. It is not a legal determination.
+- **Evidence pack** (`/app/clients/[id]/evidence`, settings or billing access, prints cleanly): signed agreements and
+  disclosures with timestamp, typed signature and IP; the cancellation notice acknowledgement if one is on record;
+  letters sent; the communications log; portal sign-in dates; payments recorded.
+- **Business days** (`src/lib/business-days.ts`): the one import point for business-day arithmetic. It re-exports the
+  holiday table and helpers from `src/lib/disputes/clock.ts`, so there is still a single table.
+- **Changed**: the new-plan form on Billing no longer preselects "Monthly"; the person chooses. Billing states that
+  pricing and billing practices are the agency's responsibility. No fee model is built or recommended.
+
+## Reinsertion watch, date-of-first-delinquency check and fall-off dates (unreleased, uncommitted)
+
+No migration: the existing `findings`, `tradelines` and `public_records` columns hold everything (0021 is unused).
+
+- **Reinsertion watch** (`src/lib/disputes/reinsertion.ts`): when findings are regenerated (a report is approved, a
+  line is edited, or "Re-run analysis"), the newest approved report of each bureau is checked against bureau disputes
+  recorded as deleted. A finding "Possible reinsertion" is created when the same client, same bureau and exact match
+  key (creditor plus account last 4) appears on a report dated after the response was recorded. It states both facts
+  and asks staff to check whether the client received the written notice (15 U.S.C. § 1681i(a)(5)(B)). It does not
+  say a violation occurred. One finding per deleted dispute; "Start dispute" works as for any finding.
+- **Fall-off date** (`src/lib/credit/reporting-period.ts`, 15 U.S.C. § 1681c): 7 years from the reported date of first
+  delinquency; for collections and charge-offs the 7 years start 180 days after it; bankruptcies 10 years from the
+  filing date. Shown as "Generally reportable until <date>" on negative items in the report review and the
+  three-bureau comparison, or "Fall-off date not available" when the report gives no date. The client's Reports tab
+  lists "Aging off within 12 months" (hidden when empty). No score is predicted anywhere.
+- **Date mismatch**: the cross-bureau date-of-first-delinquency finding now needs the account's last 4 and says the
+  dates differ and should be checked against the client's records. New: a collection whose date of first delinquency
+  is later than the one on the original creditor's account (same bureau, exactly one candidate account).
+- **Changed**: the "older than 7 years" finding now uses the same arithmetic, so a collection or charge-off is flagged
+  only after 7 years plus 180 days. "Charged off" (with a d) is now recognised as negative.
+
+## Legal clock, optional next steps and letter specificity check (unreleased, uncommitted)
+
+Every deadline on a dispute with a credit bureau or specialty agency is now computed in one pure module with its
+section of 15 U.S.C. § 1681i beside it. Migration 0019 (additive, safe to run again, no superuser): outcome
+`frivolous`; `disputes.more_info_on`, `investigation_completed_on`, `frivolous_missing`, `client_confirmed_accurate`;
+`letters.received_on`, `reply_due_on`, `reply_received_on`.
+
+- **Legal clock** (`src/lib/disputes/clock.ts`, shown on the dispute): 30 days from receipt; up to 45 when staff record
+  "client sent more information on <date>" (only a date inside the first 30 days); written results due 5 business days
+  after a recorded completion date. Business days skip weekends and the federal holidays for 2025 to 2030 (OPM). The
+  45-day tick at submission stays as the manual choice (for example a dispute that follows a free annual report).
+- **Optional next steps** after "verified as reported": a request for the description of the reinvestigation
+  procedure (a normal draft letter, English and Spanish, with a 15-day clock once it is recorded as sent), a consumer
+  statement, the client's own direct dispute with the furnisher, and the client's own CFPB complaint with a plain
+  summary of recorded dates. Each says what it is and is not. Nothing is automatic, and nothing is offered once staff
+  record that the client confirmed the item is accurate.
+- **No response recorded by the deadline**: the same block asks staff to check the mail and portal first, then offers a
+  follow-up for the results, the direct dispute and the complaint. It describes the record and asserts nothing else.
+- **Specificity check**: a bureau or specialty dispute letter cannot be sent for approval, or approved, until it names
+  the account with a masked number or reference, states what is disputed, gives a concrete reason and lists its
+  enclosures or says "none". The letter page lists what is missing. Drafted letters now list accepted identity
+  documents as enclosures, or "Enclosures: none".
+- **Frivolous or irrelevant notice**: staff type what the agency said was missing; that becomes a task and a document
+  request the client sees. Portal outcome text added in English and Spanish.
+
+## Client updates by text message and email (unreleased, uncommitted)
+
+Clients can be told by text and by email that there is something new in their portal. Off everywhere until switched on.
+Migration 0018 (additive, safe to run again, no superuser): `sms_consents`, `client_updates`, `sms_inbound`, an index
+on client phone digits, and the inbound-message trigger now says "text message" for a text.
+
+- **SMS driver** (`src/lib/sms.ts`): `SMS_DRIVER` = `disabled` (default), `twilio`, or `log` (development and test
+  only; refused in staging and production). Twilio is called with `fetch`; no new dependency. It never throws.
+- **Consent.** A client turns texts on or off in Portal → Profile (English and Spanish). The exact wording shown, the
+  number, the time and the source are stored. Staff can record a verbal consent only with a note, and it is labelled
+  "Recorded by staff". Records are revoked, never edited. No consent in force for the number on file: no text.
+- **Six events**, each with a text and an email in both languages: dispute sent, response recorded, document needed,
+  document rejected, investigation window passed with no response, new message from the team. A text never names an
+  account, an amount or a result. Settings → Client updates has a switch per event and channel; a channel that is not
+  connected shows why and cannot be switched on.
+- **Rules.** One message per client, event, subject and channel; 3 texts and 6 emails a day per client; texts held from
+  9 p.m. to 8 a.m. (`APP_TIMEZONE`); sent after the triggering request finishes or by the scheduled job. Every attempt is
+  on the client's Messages tab with its status and provider id; failures are listed in Settings.
+- **Twilio webhook** `POST /api/webhooks/twilio`: signature-verified, rate limited. STOP revokes consent; START does not
+  restore it; other replies are saved on the matching client or kept unmatched for review.
+- **Scheduled jobs** now run twice a day on Vercel (09:00 and 17:00 UTC), because the 09:00 run is inside quiet hours.
+- **Docs:** Twilio and Resend setup steps in `docs/INTEGRATIONS.md` and `docs/DEPLOY-VERCEL.md`. No calls, no dialer.
+- **Not verified:** nothing was sent through the live Twilio or Resend services. The Twilio request, signature and
+  keywords follow its documentation (signature checked against the documented example). Delivery right after a request
+  (Next.js `after`) was not exercised in a running server; the scheduled job path is covered by tests.
+
+## Review fixes for agency websites, intake documents and specialty agencies (unreleased, uncommitted)
+
+- **Website claims check rewritten.** It no longer deletes text before checking. A guarantee word (English, Spanish,
+  and the "guarentee" misspelling) passes only when a negation directly governs it ("no result is guaranteed", "we
+  cannot guarantee", "nadie puede garantizar"). Removal claims are matched as a removal verb near a negative item, in
+  either order. Added: improve/better/higher score wording, "within / as few as / N-day" results, promises and
+  money-back offers, no-cost wording, "qualify for", tradelines for sale. "Free credit consultation" and "Free
+  15-minute call" are now accepted. It is still a safety net, not a legal review.
+- **Business name** is checked when a site is published, and renaming to a prohibited claim is refused while it is.
+- **Unpublish** is a direct write that validates nothing and never rewrites the saved text.
+- **Database backstops.** 0015: a client's own upload must start unreviewed (`documents_self_insert`). 0017: the portal
+  guard trigger also covers `clients.banking_concern` and `specialty_reports`. 0015 now widens the kind lists instead of
+  rewriting them, so it is safe to run again after 0017.
+- **Specialty letters.** ChexSystems, NCTUE and Early Warning: what each agency's page says a mailed dispute must carry
+  is quoted on the new-dispute step, the dispute and the letter, with the page and date. The letter has marked lines
+  for date of birth and Social Security number (ChexSystems, NCTUE) or the consumer ID (Early Warning, a new optional
+  item field); the app never fills these in and the letter cannot be approved until a person does. The
+  identity-document warning and the "Enclose with this letter" list now apply to specialty disputes too.
+- **Addresses.** LexisNexis no longer has a stored dispute address (its page could not be opened in review), so staff
+  type it. TransUnion now cites its dispute-by-mail page; Equifax cites the Experian page that prints its address.
+- **Not confirmed:** nobody re-opened the TransUnion page behind the "two months" proof-of-address advice; it is marked
+  as such in `src/lib/intake.ts`. The agency pages could not be opened from the build environment at all, so the
+  ChexSystems, Early Warning and NCTUE addresses and quotations rest on the review, not on a second reading.
+
+## Specialty reporting agencies (unreleased, uncommitted)
+
+Disputes are no longer limited to the three credit bureaus. Migration 0017 (additive): `disputes.agency`, `agency_item`
+and `recipient_address`; `agency` added to the dispute target types and `specialty` to the workflows;
+`clients.banking_concern` and `specialty_reports`; document kind `specialty_report`. The `disputes.bureau` column and its
+three-bureau check are unchanged, so every existing dispute, report, comparison and count behaves as before.
+
+- **Registry** (`src/lib/credit/agencies.ts`): the three bureaus plus ChexSystems, Early Warning, LexisNexis, Innovis,
+  NCTUE, TeleCheck and Clarity Services: what each reports, how to request the free disclosure, and the dispute address.
+  An address is stored only with the official page it was read on and the date; where the agency's page does not state
+  one, none is stored and staff type it in. Nothing is prefilled from memory.
+- **Staff:** New dispute gains "Enter a specialty agency item": agency, the item as it appears on the disclosure, and a
+  required reason. It then runs through the same draft, review, approval, letter, submission, 30-day window and outcome.
+- **Letters:** one specialty template per kind of agency, in English and Spanish. It states only what was entered, refers
+  to the right to dispute under the FCRA in general terms and asks for a reinvestigation and a written result.
+- **Client record:** a "Specialty reports" block on the Reports tab (how to request each free report, a status staff set,
+  the received file) and a "banking or background-screening concern" tick box. These reports are not read by the system.
+- **Portal and guide:** specialty items appear in the client's items list with the same statuses and day meter and a
+  one-line "About" for the agency; the guide gains entries on ChexSystems / Early Warning and LexisNexis (EN/ES). The
+  client plan suggests requesting the ChexSystems and LexisNexis reports only when the concern box is ticked.
+- No data feed from any of these agencies exists; see docs/INTEGRATIONS.md.
+
+## Identity document intake (unreleased, uncommitted)
+
+The identity documents a credit bureau normally asks for with a mailed dispute are collected from day one. Migration
+0015 (additive): `documents.review_note`, `doc_date`, `expires_on`, and three more document kinds (`previous_address`,
+`name_change`, `power_of_attorney`).
+
+- **One definition** (`src/lib/intake.ts`): photo ID, proof of current address, proof of Social Security number, each
+  with what counts and plain tips in English and Spanish; five "only if this applies" items that are never required.
+  The bureaus' own instructions are cited in the file. Status per client is computed from real documents: missing,
+  awaiting review, accepted, rejected (with the reason), expired or no longer recent (only from a date a reviewer recorded).
+- **Portal:** "Your documents checklist" at the top of Documents, with progress and one upload button per item that opens
+  the existing upload form with the type chosen. The portal home next step points to it after agreements and named requests.
+- **Staff:** an "Intake documents" block on the client's Documents tab: accept (optionally recording the expiry or
+  document date), reject with a reason the client sees, and "Ask the client for the missing ones" (ordinary document
+  requests; no email is sent). The client plan gains "Collect identity documents".
+- **Sending:** recording a bureau dispute as sent without accepted identity documents shows a warning and needs
+  "Send without the identity documents" ticked. It is a confirmation, not a block, and is noted on the dispute.
+  The consent and approved-letter gates are unchanged.
+- **Letters:** an approved letter to a bureau lists "Enclose with this letter" from the accepted documents. Nothing is
+  attached to the PDF.
+- e2e: `journey.cjs` and `dispute-workflow.cjs` tick the new confirmation before "Record submission".
+
+## Agency websites (unreleased, uncommitted)
+
+Every agency workspace can publish its own public website, hosted by the app at `/a/<workspace-slug>`. No migration:
+the content is one key (`website`) in `organizations.settings`, so the existing tenant policies decide who may edit it.
+
+- **Public site** (`src/app/a/[slug]`): the agency's name, mark and brand colour; hero, services, the fixed "how it
+  works" steps, about, questions, contact details and the enquiry form (same `submitLead` checks; source `website`);
+  a "Client sign in" link; and a fixed footer with the required notices, the agency's name and mailing address.
+  English, or Spanish with `?lang=es` (fixed copy is translated; the agency's own text is shown as written).
+- **Editor** at `/app/website` (owners and admins, agency workspaces): plain text with length limits, starter text,
+  publish/unpublish. An unpublished site answers "page not found".
+- **Claims check on save** (`findMarketingClaims` in `src/lib/compliance/claims.ts`): promises of results or removal,
+  quoted scores, timed results, approval promises and "free" offers other than a first consultation are refused, in
+  English and Spanish, with the field and the reason. The existing guard for system-generated text is unchanged.
+- **SEO**: per-site title, description, canonical and Open Graph; `ProfessionalService` and FAQ structured data with
+  only the fields provided; published sites listed in `/a/sitemap.xml`, which `robots.txt` now names next to
+  `/sitemap.xml`.
+- **Leads page** offers the published site first; the enquiry-form links stay. `/start/<slug>` links back to the site.
+- **Not built:** custom domains (listed as manual under Settings → Integrations) and a per-agency link-preview image
+  (previews use the app's default image).
+
 ## Vercel + Supabase readiness (unreleased, uncommitted)
 
 Everything needed to run on Vercel (serverless, no persistent disk) against a Supabase database through its connection

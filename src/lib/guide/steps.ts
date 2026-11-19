@@ -25,7 +25,7 @@ const NONE: PersonalSteps = { steps: [], redact: [] };
 const nameParts = (full: string) => full.split(/\s+/).filter((p) => p.length >= 2);
 
 const PORTAL_HREF: Record<NextKey, string> = {
-  sign: '/portal/profile#agreements', upload: '/portal#needs', review: '/portal/disputes', wait: '/portal/disputes', prep: '/portal', done: '/portal',
+  sign: '/portal/profile#agreements', upload: '/portal#needs', intake: '/portal/documents#checklist', review: '/portal/disputes', wait: '/portal/disputes', prep: '/portal', done: '/portal',
 };
 
 export interface PortalStepInput { needSign: boolean; needDocs: boolean; reviewing: boolean; nextDue: string | null; stage: string }

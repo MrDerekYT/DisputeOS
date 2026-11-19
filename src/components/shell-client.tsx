@@ -4,11 +4,11 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react';
 import {
-  BarChart3, Bell, CheckSquare, CreditCard, FileText, Gavel, Home, Inbox, Menu, Moon, ScrollText, Settings, Sparkles, Sun, UserPlus, Users, UsersRound, X, Zap,
+  BarChart3, Bell, CheckSquare, CreditCard, FileText, Gavel, Globe, Home, Inbox, Menu, Moon, ScrollText, Settings, Sparkles, Sun, UserPlus, Users, UsersRound, X, Zap,
 } from 'lucide-react';
 import { cn } from '@/lib/util';
 
-const ICONS = { home: Home, users: Users, gavel: Gavel, file: FileText, tasks: CheckSquare, inbox: Inbox, zap: Zap, chart: BarChart3, card: CreditCard, team: UsersRound, settings: Settings, audit: ScrollText, spark: Sparkles, bell: Bell, lead: UserPlus };
+const ICONS = { home: Home, users: Users, gavel: Gavel, file: FileText, tasks: CheckSquare, inbox: Inbox, zap: Zap, chart: BarChart3, card: CreditCard, team: UsersRound, settings: Settings, audit: ScrollText, spark: Sparkles, bell: Bell, lead: UserPlus, globe: Globe };
 export type IconKey = keyof typeof ICONS;
 export interface NavItem { href: string; label: string; icon: IconKey; badge?: number; group?: string }
 

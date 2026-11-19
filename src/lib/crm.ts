@@ -6,11 +6,13 @@ export const CLIENT_STAGES = ['intake', 'analysis', 'disputing', 'monitoring', '
 export const STAGE_LABEL: Record<(typeof CLIENT_STAGES)[number], string> = {
   intake: 'Intake', analysis: 'Analysis', disputing: 'Disputing', monitoring: 'Monitoring', graduated: 'Graduated',
 };
-export const DOC_KINDS = ['id', 'proof_of_address', 'ssn_proof', 'credit_report', 'bureau_response', 'ftc_report', 'police_report', 'contract', 'evidence', 'other'] as const;
+export const DOC_KINDS = ['id', 'proof_of_address', 'ssn_proof', 'credit_report', 'bureau_response', 'ftc_report', 'police_report', 'contract', 'evidence', 'other', 'previous_address', 'name_change', 'power_of_attorney', 'specialty_report'] as const;
 export const DOC_KIND_LABEL: Record<string, string> = {
   id: 'Photo ID', proof_of_address: 'Proof of address', ssn_proof: 'Proof of SSN', credit_report: 'Credit report',
   bureau_response: 'Bureau response', ftc_report: 'FTC identity theft report', police_report: 'Police report',
   contract: 'Contract', evidence: 'Supporting evidence', other: 'Other',
+  previous_address: 'Proof of previous address', name_change: 'Name change document', power_of_attorney: 'Power of attorney',
+  specialty_report: 'Specialty report',
 };
 
 export const SEGMENTS = [

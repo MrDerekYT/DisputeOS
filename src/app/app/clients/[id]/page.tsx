@@ -15,7 +15,7 @@ import { CONSENT_DOCS, consentStatus } from '@/lib/compliance/disclosures';
 import { CLIENT_STAGES, DOC_KIND_LABEL, DOC_KINDS, memberLabel, STAGE_LABEL, staffMembers } from '@/lib/crm';
 import type { DisputeStatus } from '@/lib/disputes/workflow';
 import { BUREAU_LABEL, cn, fmtDate, isUuid, money, relTime, type Bureau } from '@/lib/util';
-import { cancelSubscriptionAction, recordPaymentAction, refundPaymentAction, subscribeClientAction } from '../../billing/actions';
+import { cancelSubscriptionAction, refundPaymentAction, subscribeClientAction } from '../../billing/actions';
 import { addNoteAction, createTaskAction, invitePortalAction, markInboundReadAction, polishProgressAction, recordConsentAction, requestDocumentAction, reviewDocumentAction, revokeConsentAction, sendMessageAction, setTaskStatusAction, togglePinAction, uploadDocumentAction } from '../actions';
 import { importDocumentAsReportAction, pullReportAction, uploadReportAction } from '../../reports/actions';
 import { listProviders } from '@/lib/credit/providers';
@@ -25,13 +25,22 @@ import { emailIsLive } from '@/lib/lead-outreach';
 import { FileInput } from '@/components/file-input';
 import { maxUploadBytes, maxUploadMb, tooLargeMessage } from '@/lib/upload';
 import { buildPlan, loadPlanInput } from '@/lib/plan';
+import { loadIntake } from '@/lib/intake-load';
+import { IntakeBlock } from './intake-block';
+import { SpecialtyBlock } from './specialty-block';
+import { ProtectionsBlock } from './protections-block';
+import { AgingOffBlock } from './aging-off-block';
+import { SmsConsentBlock } from './sms-consent-block';
+import { ChargeBlock } from './charge-block';
+import { loadSpecialty } from '@/lib/credit/specialty-reports';
+import { businessToday } from '@/lib/letters/service';
 
 export const metadata: Metadata = { title: 'Client' };
 
 const TAB_KEYS = ['overview', 'reports', 'disputes', 'documents', 'letters', 'messages', 'tasks', 'notes', 'timeline', 'billing'] as const;
 type Tab = (typeof TAB_KEYS)[number];
 
-export default async function ClientPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ tab?: string; draft?: string }> }) {
+export default async function ClientPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ tab?: string; draft?: string; period?: string }> }) {
   const { id } = await params;
   const sp = await searchParams;
   if (!isUuid(id)) notFound();
@@ -98,6 +107,7 @@ export default async function ClientPage({ params, searchParams }: { params: Pro
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            <Link href={`/app/clients/${id}/statement`} className="btn-secondary">Work statement</Link>
             <Link href={`/app/clients/${id}/edit`} className="btn-secondary"><Pencil size={15} aria-hidden /> Edit</Link>
             <Link href={`/app/disputes/new?clientId=${id}`} className="btn-primary"><Gavel size={15} aria-hidden /> New dispute</Link>
           </div>
@@ -141,7 +151,7 @@ export default async function ClientPage({ params, searchParams }: { params: Pro
       {tab === 'tasks' && <TasksTab id={id} ctx={ctx} />}
       {tab === 'notes' && <NotesTab id={id} ctx={ctx} />}
       {tab === 'timeline' && <TimelineTab id={id} ctx={ctx} />}
-      {tab === 'billing' && <BillingTab id={id} ctx={ctx} />}
+      {tab === 'billing' && <BillingTab id={id} ctx={ctx} period={sp.period} />}
     </>
   );
 }
@@ -267,6 +277,8 @@ async function Overview({ id, ctx, c, first }: { id: string; ctx: Ctx; c: C; fir
           </details>
         </Section>
 
+        <SmsConsentBlock ctx={ctx} clientId={id} phone={c.phone} lang={c.preferred_language} />
+
         <Section plain title="Draft an update for the client">
           <p className="text-sm text-muted">Creates a plain-language progress note from the dispute data above. You review and send it.</p>
           <Link href={`/app/clients/${id}?tab=messages&draft=progress`} className="btn-secondary mt-3">Draft update for {first}</Link>
@@ -278,7 +290,9 @@ async function Overview({ id, ctx, c, first }: { id: string; ctx: Ctx; c: C; fir
 
 // ------------------------------------------------------------------ reports
 async function ReportsTab({ id, ctx }: { id: string; ctx: Ctx }) {
-  const { reports, authorized, pulls } = await ctx.tx(async (db) => ({
+  const { reports, authorized, pulls, specialty, specialtyFiles } = await ctx.tx(async (db) => ({
+    specialty: await loadSpecialty(db, id),
+    specialtyFiles: await db.rows<{ id: string; file_name: string }>("select id, file_name from public.documents where client_id = $1 and kind = 'specialty_report' order by created_at desc", [id]),
     reports: await db.rows<{ id: string; bureau: Bureau; status: string; report_date: string | null; created_at: string; n: number; source: string }>(
       `select r.id, r.bureau, r.status, r.report_date, r.created_at, r.source, (select count(*)::int from public.tradelines t where t.report_id = r.id) as n from public.credit_reports r where r.client_id = $1 order by r.created_at desc`, [id]),
     authorized: !!(await db.row("select 1 from public.client_consents where client_id = $1 and kind = 'fcra_authorization' and revoked_at is null", [id])),
@@ -319,6 +333,9 @@ async function ReportsTab({ id, ctx }: { id: string; ctx: Ctx }) {
             <Link href={`/app/clients/${id}/what-if`} className="btn-secondary">What-if calculator</Link>
           </div>
         )}
+        <AgingOffBlock ctx={ctx} clientId={id} />
+        {specialty && <SpecialtyBlock clientId={id} states={specialty.states} bankingConcern={specialty.bankingConcern} files={specialtyFiles} today={businessToday()} />}
+        <ProtectionsBlock ctx={ctx} clientId={id} />
       </div>
       <div className="space-y-6">
       <Section title="Upload a report">
@@ -371,15 +388,17 @@ async function DisputesTab({ id, ctx }: { id: string; ctx: Ctx }) {
 
 // ------------------------------------------------------------------ documents
 async function DocumentsTab({ id, ctx }: { id: string; ctx: Ctx }) {
-  const { docs, reqs } = await ctx.tx(async (db) => ({
-    docs: await db.rows<{ id: string; kind: string; file_name: string; size_bytes: number; source: string; review_status: string; created_at: string; uploader: string | null; mime_type: string; report_id: string | null }>(
-      `select d.id, d.kind, d.file_name, d.size_bytes, d.source, d.review_status, d.created_at, u.full_name as uploader, d.mime_type, (select r.id from public.credit_reports r where r.document_id = d.id order by r.created_at limit 1) as report_id from public.documents d left join public.users u on u.id = d.uploaded_by where d.client_id = $1 order by d.created_at desc`, [id]),
+  const { docs, reqs, intake } = await ctx.tx(async (db) => ({
+    intake: await loadIntake(db, id),
+    docs: await db.rows<{ id: string; kind: string; file_name: string; size_bytes: number; source: string; review_status: string; review_note: string | null; created_at: string; uploader: string | null; mime_type: string; report_id: string | null }>(
+      `select d.id, d.kind, d.file_name, d.size_bytes, d.source, d.review_status, d.review_note, d.created_at, u.full_name as uploader, d.mime_type, (select r.id from public.credit_reports r where r.document_id = d.id order by r.created_at limit 1) as report_id from public.documents d left join public.users u on u.id = d.uploaded_by where d.client_id = $1 order by d.created_at desc`, [id]),
     reqs: await db.rows<{ id: string; kind: string; note: string | null; due_at: string | null; fulfilled_document_id: string | null }>('select id, kind, note, due_at, fulfilled_document_id from public.document_requests where client_id = $1 order by created_at desc', [id]),
   }));
   const kindOpts = DOC_KINDS.map((k) => ({ value: k, label: DOC_KIND_LABEL[k]! }));
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_22rem]">
       <div className="space-y-6">
+        <IntakeBlock clientId={id} statuses={intake} />
         <Section title="Requested from the client">
           {reqs.length === 0 ? <p className="text-sm text-muted">No requests. Use the form to ask the client for a document — they will see it in their portal.</p> : (
             <ul className="divide-y divide-line/70 text-sm">{reqs.map((r) => (<li key={r.id} className="flex items-center justify-between gap-3 py-2.5"><span>{DOC_KIND_LABEL[r.kind] ?? r.kind}{r.note && <span className="text-muted"> — {r.note}</span>}</span>{r.fulfilled_document_id ? <Badge tone="ok">Received</Badge> : <Badge tone="warn">{r.due_at ? `Due ${fmtDate(r.due_at)}` : 'Waiting'}</Badge>}</li>))}</ul>
@@ -390,7 +409,7 @@ async function DocumentsTab({ id, ctx }: { id: string; ctx: Ctx }) {
             <ul className="divide-y divide-line/70">{docs.map((x) => (
               <li key={x.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
                 <div className="min-w-0"><a href={`/api/documents/${x.id}`} className="flex items-center gap-2 font-medium hover:underline"><Download size={14} aria-hidden className="shrink-0 text-muted" /><span className="truncate">{x.file_name}</span></a>
-                  <div className="text-xs text-muted">{DOC_KIND_LABEL[x.kind] ?? x.kind} · {(x.size_bytes / 1024).toFixed(0)} KB · {x.source === 'client' ? 'uploaded by client' : `by ${x.uploader ?? 'staff'}`} · {relTime(x.created_at)}</div></div>
+                  <div className="text-xs text-muted">{DOC_KIND_LABEL[x.kind] ?? x.kind} · {(x.size_bytes / 1024).toFixed(0)} KB · {x.source === 'client' ? 'uploaded by client' : `by ${x.uploader ?? 'staff'}`} · {relTime(x.created_at)}{x.review_status === 'rejected' && x.review_note ? ` · ${x.review_note}` : ''}</div></div>
                 <div className="flex flex-wrap items-center gap-2"><StatusBadge status={x.review_status} />
                   {x.report_id && <Link href={`/app/reports/${x.report_id}`} className="btn-ghost btn-sm">Open report</Link>}
                   {!x.report_id && x.kind === 'credit_report' && x.review_status !== 'rejected' && ['application/pdf', 'text/plain', 'text/html', 'text/csv'].includes(x.mime_type) && (
@@ -543,7 +562,7 @@ async function TimelineTab({ id, ctx }: { id: string; ctx: Ctx }) {
 }
 
 // ------------------------------------------------------------------ billing
-async function BillingTab({ id, ctx }: { id: string; ctx: Ctx }) {
+async function BillingTab({ id, ctx, period }: { id: string; ctx: Ctx; period?: string }) {
   const { subs, payments, plans } = await ctx.tx(async (db) => ({
     subs: await db.rows<{ id: string; status: string; plan_name: string; price_cents: number; interval: string; started_at: string }>(`select s.id, s.status, p.name as plan_name, p.price_cents, p.interval, s.started_at from public.client_subscriptions s join public.service_plans p on p.id = s.plan_id where s.client_id = $1 order by s.created_at desc`, [id]),
     payments: await db.rows<{ id: string; amount_cents: number; method: string; status: string; paid_at: string; note: string | null }>('select id, amount_cents, method, status, paid_at, note from public.payments where client_id = $1 order by paid_at desc', [id]),
@@ -566,16 +585,7 @@ async function BillingTab({ id, ctx }: { id: string; ctx: Ctx }) {
       </div>
       {ctx.can('billing:write') && (
         <div className="space-y-6">
-          <Section title="Record a payment">
-            <ActionForm action={recordPaymentAction} resetOnSuccess className="space-y-3">
-              <input type="hidden" name="clientId" value={id} /><input type="hidden" name="subscriptionId" value={active?.id ?? ''} />
-              <Field label="Amount ($)" name="amount" inputMode="decimal" required defaultValue={active ? (active.price_cents / 100).toFixed(2) : ''} />
-              <Select label="Method" name="method" defaultValue="card" options={[{ value: 'card', label: 'Card' }, { value: 'ach', label: 'ACH / bank' }, { value: 'check', label: 'Check' }, { value: 'cash', label: 'Cash' }, { value: 'other', label: 'Other' }]} />
-              <Field label="Note" name="note" />
-              <Check name="performed" required>This payment is for services <strong>already performed</strong>. (Credit repair organizations may not collect payment in advance.)</Check>
-              <SubmitButton>Record payment</SubmitButton>
-            </ActionForm>
-          </Section>
+          <ChargeBlock id={id} ctx={ctx} period={period} subscription={active} />
           {plans.length > 0 && (<Section plain title="Assign a plan"><ActionForm action={subscribeClientAction} className="space-y-3"><input type="hidden" name="clientId" value={id} />
             <Select label="Plan" name="planId" required options={plans.map((p) => ({ value: p.id, label: `${p.name} — ${money(p.price_cents)}${p.interval === 'month' ? '/mo' : ''}` }))} /><SubmitButton variant="secondary">Assign</SubmitButton></ActionForm></Section>)}
         </div>

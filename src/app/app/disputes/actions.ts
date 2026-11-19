@@ -8,10 +8,12 @@ import { parseForm, run, UserError, zBool, zDate, zOpt, zText, zUuid } from '@/l
 import { requireStaff, type Ctx } from '@/lib/auth/context';
 import { classifyResponse } from '@/lib/ai/assistant';
 import { findBlockedClaims } from '@/lib/compliance/claims';
-import { createDispute, draftDisputesFromFindings, recordResponse, startNextRound, transitionDispute, addEvidence, type DActor } from '@/lib/disputes/service';
+import { createDispute, createSpecialtyDispute, draftDisputesFromFindings, recordResponse, startNextRound, transitionDispute, addEvidence, type DActor } from '@/lib/disputes/service';
 import { CATEGORIES, DISPUTE_STATUSES, FIELD_OPTIONS, OUTCOMES } from '@/lib/disputes/workflow';
+import { confirmIdentityDocs } from '@/lib/intake-load';
 import { createLetter } from '@/lib/letters/service';
 import { BUREAUS } from '@/lib/util';
+import { SPECIALTY_KEYS } from '@/lib/credit/agencies';
 
 const actorOf = (ctx: Ctx): DActor => ({ orgId: ctx.orgId, userId: ctx.userId, role: ctx.role, meta: ctx.meta });
 
@@ -42,17 +44,49 @@ export async function createDisputeAction(_: ActionState, fd: FormData): Promise
   });
 }
 
+/** A specialty agency item (ChexSystems, LexisNexis, ...) typed in by a person from the consumer's disclosure. Same pipeline as any dispute. */
+export async function createSpecialtyDisputeAction(_: ActionState, fd: FormData): Promise<ActionState> {
+  const ctx = await requireStaff('disputes:write');
+  return run(async () => {
+    const d = parseForm(
+      z.object({
+        clientId: zUuid, agency: z.string().refine((a) => SPECIALTY_KEYS.includes(a), 'Choose the reporting agency'),
+        itemName: zText(160), itemReference: zOpt(60), itemDate: zOpt(40), itemAmount: zOpt(40), consumerId: zOpt(60),
+        reason: z.string().trim().min(10, 'Explain what is inaccurate, incomplete or unverifiable, and why').max(4000),
+        recipientAddress: zOpt(400), makeLetter: zBool,
+      }),
+      fd,
+    );
+    const warn = findBlockedClaims(d.reason);
+    if (warn.length) throw new UserError(`The reason contains a claim we cannot allow: “${warn[0]!.excerpt}” — ${warn[0]!.why}`);
+    let newId = '';
+    await ctx.tx(async (db) => {
+      newId = await createSpecialtyDispute(db, actorOf(ctx), {
+        clientId: d.clientId, agency: d.agency, reason: d.reason, recipientAddress: d.recipientAddress,
+        item: { name: d.itemName, reference: d.itemReference, date: d.itemDate, amount: d.itemAmount, consumerId: d.consumerId },
+      });
+      if (d.makeLetter) await createLetter(db, actorOf(ctx), { clientId: d.clientId, disputeId: newId, orgName: ctx.session.orgName });
+    });
+    revalidatePath('/app/disputes');
+    redirect(`/app/disputes/${newId}`);
+  });
+}
+
 export async function transitionAction(_: ActionState, fd: FormData): Promise<ActionState> {
   const ctx = await requireStaff('disputes:write');
   return run(async () => {
     const d = parseForm(
       z.object({
         id: zUuid, to: z.enum(DISPUTE_STATUSES), receivedOn: zDate.optional().or(z.literal('')), extended: zBool,
-        sentMethod: z.enum(['certified_mail', 'first_class_mail', 'portal', 'manual']).optional(), tracking: zOpt(80), sentOn: zDate.optional().or(z.literal('')), note: zOpt(2000),
+        sentMethod: z.enum(['certified_mail', 'first_class_mail', 'portal', 'manual']).optional(), tracking: zOpt(80), sentOn: zDate.optional().or(z.literal('')), note: zOpt(2000), sendAnyway: zBool,
       }),
       fd,
     );
-    await ctx.tx((db) => transitionDispute(db, actorOf(ctx), d.id, d.to, { receivedOn: d.receivedOn || null, extended: d.extended, sentMethod: d.sentMethod, tracking: d.tracking, sentOn: d.sentOn || null, note: d.note }));
+    await ctx.tx(async (db) => {
+      // A warning that needs an explicit yes, not a gate: the bureau or agency may ask for identity documents that are not on file.
+      if (d.to === 'submitted') await confirmIdentityDocs(db, ctx, d.id, d.sendAnyway);
+      await transitionDispute(db, actorOf(ctx), d.id, d.to, { receivedOn: d.receivedOn || null, extended: d.extended, sentMethod: d.sentMethod, tracking: d.tracking, sentOn: d.sentOn || null, note: d.note });
+    });
     revalidatePath(`/app/disputes/${d.id}`);
     revalidatePath('/app/disputes');
     return { ok: 'Status updated.' };
@@ -62,8 +96,9 @@ export async function transitionAction(_: ActionState, fd: FormData): Promise<Ac
 export async function recordResponseAction(_: ActionState, fd: FormData): Promise<ActionState> {
   const ctx = await requireStaff('disputes:write');
   return run(async () => {
-    const d = parseForm(z.object({ id: zUuid, outcome: z.enum(OUTCOMES), notes: zOpt(4000), receivedOn: zDate.optional().or(z.literal('')) }), fd);
-    await ctx.tx((db) => recordResponse(db, actorOf(ctx), d.id, { outcome: d.outcome, notes: d.notes, receivedOn: d.receivedOn || undefined }));
+    // A "frivolous or irrelevant" notice has its own form (frivolousNoticeAction): it must say what the agency asked for.
+    const d = parseForm(z.object({ id: zUuid, outcome: z.enum(OUTCOMES).exclude(['frivolous']), notes: zOpt(4000), receivedOn: zDate.optional().or(z.literal('')), completedOn: zDate.optional().or(z.literal('')) }), fd);
+    await ctx.tx((db) => recordResponse(db, actorOf(ctx), d.id, { outcome: d.outcome, notes: d.notes, receivedOn: d.receivedOn || undefined, completedOn: d.completedOn || undefined }));
     revalidatePath(`/app/disputes/${d.id}`);
     return { ok: 'Response recorded.' };
   });

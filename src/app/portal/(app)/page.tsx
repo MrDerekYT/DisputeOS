@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { AlertTriangle, ArrowRight, Check, CheckCircle2, Clock3, FileUp, Hourglass, MessageCircle, PenLine, Scale, Search } from 'lucide-react';
+import { AlertTriangle, ArrowRight, Check, CheckCircle2, Clock3, FileUp, Hourglass, ListChecks, MessageCircle, PenLine, Scale, Search } from 'lucide-react';
 import { ActionForm, SubmitButton } from '@/components/forms';
 import { DatedRow, PortalBlock, PortalTitle } from '@/components/portal-kit';
 import { ScoreHistory, type ScoreRow } from '@/components/score-history';
@@ -8,6 +8,8 @@ import { DayMeter, Notice, StatFigure } from '@/components/ui';
 import { CONSENT_DOCS } from '@/lib/compliance/disclosures';
 import { CLIENT_STAGES, DOC_KINDS } from '@/lib/crm';
 import { dayWindow, windowStart, windowText } from '@/lib/day-meter';
+import { intakeSummary } from '@/lib/intake';
+import { loadIntake } from '@/lib/intake-load';
 import { portalContext, specialistFirstName } from '@/lib/portal';
 import { nextStep, type NextKey } from '@/lib/portal-next-step';
 import { fill, type PortalKey } from '@/lib/portal-i18n';
@@ -18,7 +20,7 @@ import { PortalFileInput } from '../file-input';
 export const metadata: Metadata = { title: 'Your case' };
 
 const STEPS = ['intake', 'analysis', 'disputing', 'monitoring'] as const;
-const NEXT_ICON: Record<NextKey, typeof Check> = { sign: PenLine, upload: FileUp, review: Search, wait: Hourglass, prep: Clock3, done: CheckCircle2 };
+const NEXT_ICON: Record<NextKey, typeof Check> = { sign: PenLine, upload: FileUp, intake: ListChecks, review: Search, wait: Hourglass, prep: Clock3, done: CheckCircle2 };
 
 export default async function PortalHome() {
   const { ctx, client, t, lang } = await portalContext();
@@ -37,6 +39,8 @@ export default async function PortalHome() {
       "select submitted_at, due_at, deadline_extended from public.disputes where status in ('submitted','under_investigation') and due_at is not null order by due_at limit 1"),
     requests: await db.rows<{ id: string; kind: string; note: string | null; due_at: string | null }>('select id, kind, note, due_at from public.document_requests where fulfilled_document_id is null order by created_at'),
     consents: await db.rows<{ kind: string }>('select kind from public.client_consents where revoked_at is null'),
+    // The identity documents a bureau normally asks for, from this client's own uploads (row-level security).
+    intake: intakeSummary(await loadIntake(db, ctx.clientId)),
     events: await db.rows<{ id: string; note: string | null; to_status: string | null; kind: string; created_at: string }>('select id, note, to_status, kind, created_at from public.dispute_events order by created_at desc limit 6'),
     scores: await db.rows<ScoreRow>('select bureau, model, score, scored_on from public.credit_scores order by scored_on'),
     msgs: await db.rows<{ id: string; body: string; created_at: string }>("select id, body, created_at from public.communications where direction = 'outbound' order by created_at desc limit 2"),
@@ -49,7 +53,7 @@ export default async function PortalHome() {
   const kindLabel = (k: string) => ((DOC_KINDS as readonly string[]).includes(k) ? t(`kind_${k}` as PortalKey) : k);
   const s = d.stats!;
   const stLabel = (k: string | null) => (k ? t(`st_${k}` as PortalKey) : '');
-  const next = nextStep({ needSign: needSign.length > 0, needDocs: d.requests.length > 0, reviewing: s.reviewing > 0, nextDue: s.next_due, stage: client.stage });
+  const next = nextStep({ needSign: needSign.length > 0, needDocs: d.requests.length > 0, needIntake: d.intake.needed.length > 0, reviewing: s.reviewing > 0, nextDue: s.next_due, stage: client.stage });
   // One clock for the sentence and the bar, so they can never disagree.
   const now = new Date();
   const days = s.next_due ? daysUntil(s.next_due, now) : null;
@@ -102,12 +106,13 @@ export default async function PortalHome() {
             <div className="mt-6 flex flex-col gap-2.5 sm:flex-row">
               {next.key === 'sign' && <Link href="/portal/profile#agreements" className="btn-primary btn-lg">{t('sign')} <ArrowRight size={17} aria-hidden /></Link>}
               {next.key === 'upload' && <a href="#needs" className="btn-primary btn-lg">{t('uploadNow')} <ArrowRight size={17} aria-hidden /></a>}
+              {next.key === 'intake' && <Link href="/portal/documents#checklist" className="btn-primary btn-lg">{t('ck_open')} <ArrowRight size={17} aria-hidden /></Link>}
               <Link href="/portal/messages" className={cn('btn-quiet btn-lg', !next.mine && 'sm:min-w-[16rem]')}><MessageCircle size={17} aria-hidden /> {messageLabel}</Link>
             </div>
           </section>
 
           <PortalBlock id="needs" title={t('needFromYou')} className="order-3">
-            {d.requests.length === 0 && needSign.length === 0 ? <Notice tone="ok">{t('nothingNeeded')}</Notice> : (
+            {d.requests.length === 0 && needSign.length === 0 && d.intake.needed.length === 0 ? <Notice tone="ok">{t('nothingNeeded')}</Notice> : (
               <ul className="space-y-3">
                 {needSign.map((c) => (
                   <li key={c.kind}>
@@ -116,6 +121,14 @@ export default async function PortalHome() {
                       <span className="inline-flex shrink-0 items-center gap-1 text-sm font-semibold text-brand-strong">{t('sign')} <ArrowRight size={15} aria-hidden /></span>
                     </Link>
                   </li>))}
+                {d.intake.needed.length > 0 && (
+                  <li>
+                    <Link href="/portal/documents#checklist" className="card flex items-center justify-between gap-3 p-4 text-[0.9375rem] transition-colors hover:bg-raised">
+                      <span className="flex min-w-0 items-center gap-3"><ListChecks size={18} className="shrink-0 text-warn" aria-hidden />
+                        <span className="min-w-0"><span className="block font-semibold">{t('ck_title')}</span><span className="block text-[0.8125rem] text-muted">{fill(t('ck_progress'), { n: d.intake.provided, total: d.intake.total })}</span></span></span>
+                      <span className="inline-flex shrink-0 items-center gap-1 text-sm font-semibold text-brand-strong">{t('ck_open')} <ArrowRight size={15} aria-hidden /></span>
+                    </Link>
+                  </li>)}
                 {d.requests.map((r) => (
                   <li key={r.id} className="card p-4">
                     <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[0.9375rem]"><FileUp size={18} className="shrink-0 text-brand" aria-hidden /><span className="font-semibold">{kindLabel(r.kind)}</span>{r.due_at && <span className="text-[0.8125rem] text-muted">· {fmtDate(r.due_at, lang)}</span>}</div>
@@ -151,6 +164,8 @@ export default async function PortalHome() {
                 <p className="mt-5"><Link href="/portal/disputes" className="link inline-flex items-center gap-1.5 text-sm">{t('disputes')} <ArrowRight size={14} aria-hidden /></Link></p>
               </>
             )}
+            <p className="mt-5"><Link href="/portal/statement" className="link inline-flex items-center gap-1.5 text-sm">{t('ws_link')} <ArrowRight size={14} aria-hidden /></Link></p>
+            <p className="mt-3"><Link href="/portal/protect" className="link inline-flex items-center gap-1.5 text-sm">{t('pf_link')} <ArrowRight size={14} aria-hidden /></Link></p>
             <p className="mt-4 max-w-2xl text-[0.8125rem] leading-relaxed text-muted">{t('progressNote')}</p>
           </PortalBlock>
 

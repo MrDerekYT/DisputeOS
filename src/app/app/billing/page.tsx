@@ -30,7 +30,7 @@ export default async function BillingPage() {
   return (
     <>
       <PageHeader title="Billing" subtitle="Your plans, your clients’ subscriptions and payment history." />
-      <div className="mb-6"><Notice tone="warn" title="Payments are recorded manually">{PRODUCT.name} does not process cards or bank transfers. Record payments your team collected elsewhere. Under the Credit Repair Organizations Act you may not charge for services before they are fully performed — every payment requires you to confirm that.</Notice></div>
+      <div className="mb-6"><Notice tone="warn" title="Payments are recorded manually">{PRODUCT.name} does not process cards or bank transfers. Record payments your team collected elsewhere. Under the Credit Repair Organizations Act you may not charge for services before they are fully performed — every payment requires you to confirm that, and each client’s Billing tab shows a charge check before you record one. Pricing and billing practices are your agency’s responsibility; {PRODUCT.name} does not recommend a fee model.</Notice></div>
       <div className="mb-8 grid grid-cols-2 gap-x-6 gap-y-6 lg:grid-cols-4">
         <Stat label="Monthly recurring" value={moneyShort(d.totals?.mrr ?? 0)} sub={`${d.totals?.subs ?? 0} active plans`} /><Stat label="Collected this month" value={moneyShort(d.totals?.month ?? 0)} /><Stat label="Collected · 90 days" value={moneyShort(d.totals?.ninety ?? 0)} /><Stat label="Plans offered" value={d.plans.filter((p) => p.active).length} />
       </div>
@@ -48,7 +48,7 @@ export default async function BillingPage() {
             {ctx.can('billing:write') && (
               <ActionForm action={createPlanAction} resetOnSuccess className="space-y-3 border-t border-line pt-4">
                 <Field label="Plan name" name="name" required /><Field label="Price ($)" name="price" inputMode="decimal" required />
-                <Select label="Billing" name="interval" defaultValue="month" options={[{ value: 'month', label: 'Monthly' }, { value: 'one_time', label: 'One time' }]} />
+                <Select label="Billing" name="interval" required placeholder="Choose…" options={[{ value: 'month', label: 'Monthly' }, { value: 'one_time', label: 'One time' }]} />
                 <TextArea label="Description" name="description" rows={2} /><SubmitButton variant="secondary">Add plan</SubmitButton>
               </ActionForm>
             )}

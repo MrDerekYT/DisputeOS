@@ -11,6 +11,8 @@ import type { FieldMeta } from '@/lib/reports/types';
 import { BUREAU_LABEL, fmtDate, isUuid, money, type Bureau } from '@/lib/util';
 import { decideReportAction, deleteTradelineAction, updateTradelineAction } from '../actions';
 import { PRODUCT } from '@/lib/product';
+import { FallOffNote } from '@/components/fall-off';
+import { publicRecordFallOff, tradelineFallOff } from '@/lib/credit/reporting-period';
 
 export const metadata: Metadata = { title: 'Review report' };
 
@@ -89,6 +91,7 @@ export default async function ReportReview({ params }: { params: Promise<{ id: s
                     {([['Balance', money(t.balance_cents)], ['Credit limit', money(t.credit_limit_cents)], ['Opened', fmtDate(t.date_opened)], ['Reported', fmtDate(t.date_reported)]] as const).map(([k, v]) => (
                       <div key={k}><dt className="text-xs text-muted">{k}</dt><dd className="text-sm tabular-nums">{v}</dd></div>))}
                   </dl>
+                  <FallOffNote fallOff={tradelineFallOff(t)} className="mt-2" />
                   {low.length > 0 && (
                     <div className="mt-3 rounded-xl bg-warn-soft p-3 text-xs text-ink">
                       {low.map((f) => <p key={f}><strong className="text-warn">{f.replace(/_/g, ' ')}</strong>: source line “{t.field_meta[f]?.snippet}”</p>)}
@@ -137,7 +140,7 @@ export default async function ReportReview({ params }: { params: Promise<{ id: s
           {inquiries.length ? <ul className="divide-y divide-line/70 text-sm">{inquiries.map((i, n) => <li key={n} className="flex justify-between gap-3 py-2"><span>{i.name}</span><span className="text-muted">{fmtDate(i.inquiry_date)}</span></li>)}</ul> : <p className="text-sm text-muted">None found.</p>}
         </Section>
         <Section plain title={`Public records (${records.length})`}>
-          {records.length ? <ul className="divide-y divide-line/70 text-sm">{records.map((x, n) => <li key={n} className="py-2"><div className="font-medium">{x.kind}</div><div className="text-muted">{x.court ?? '—'} · {fmtDate(x.filed_date)} · {money(x.amount_cents)}</div></li>)}</ul> : <p className="text-sm text-muted">None found.</p>}
+          {records.length ? <ul className="divide-y divide-line/70 text-sm">{records.map((x, n) => <li key={n} className="py-2"><div className="font-medium">{x.kind}</div><div className="text-muted">{x.court ?? '—'} · {fmtDate(x.filed_date)} · {money(x.amount_cents)}</div><FallOffNote fallOff={publicRecordFallOff(x)} missing="no filing date reported" className="mt-0.5" /></li>)}</ul> : <p className="text-sm text-muted">None found.</p>}
         </Section>
         <Section plain title={`Personal information (${identity.length})`}>
           {identity.length ? <ul className="divide-y divide-line/70 text-sm">{identity.map((x, n) => <li key={n} className="py-2"><span className="text-xs text-muted">{label(x.kind)}</span><div>{x.value}</div></li>)}</ul> : <p className="text-sm text-muted">None found.</p>}

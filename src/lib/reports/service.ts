@@ -6,6 +6,7 @@ import { fireTrigger } from '../automation/engine';
 import { BUREAUS, type Bureau } from '../util';
 import { analyze, normCreditor, type AnalysisIdentity, type AnalysisInquiry, type AnalysisPublicRecord, type AnalysisTradeline } from './analysis';
 import type { ParsedReport } from './types';
+import { watchReinsertions } from '../disputes/reinsertion';
 
 export interface Actor { orgId: string; userId: string; meta?: { ip?: string | null } }
 
@@ -103,6 +104,8 @@ export async function regenerateFindings(db: Db, actor: Actor, clientId: string,
       [actor.orgId, clientId, f.category, f.severity, f.title, f.explanation, JSON.stringify(f.evidence), f.basis, f.tradeline_ids, f.dedupe_key],
     );
   }
+  // Reinsertion watch: the newest approved report of each bureau against this client's recorded deletions (idempotent).
+  for (const r of input.reports) created += await watchReinsertions(db, actor, r.id);
   return { created, removed };
 }
 

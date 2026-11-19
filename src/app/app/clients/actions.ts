@@ -13,6 +13,8 @@ import { createInviteToken } from '@/lib/auth/service';
 import { fireTrigger } from '@/lib/automation/engine';
 import { consentDoc, type ConsentKind } from '@/lib/compliance/disclosures';
 import { DOC_KINDS, CLIENT_STAGES, CLIENT_STATUSES, logEvent } from '@/lib/crm';
+import { intakeSummary } from '@/lib/intake';
+import { loadIntake } from '@/lib/intake-load';
 import { encryptPII } from '@/lib/crypto';
 import { getEnv } from '@/lib/env';
 import { delivers, sendEmail } from '@/lib/mailer';
@@ -21,6 +23,7 @@ import { readUpload, UploadError } from '@/lib/upload';
 import { sha256Hex } from '@/lib/crypto';
 import { portalLoginPath } from '@/lib/org-brand';
 import { PRODUCT } from '@/lib/product';
+import { dayBucket, hourBucket, queueClientUpdate } from '@/lib/client-updates/service';
 
 const email = z.string().trim().toLowerCase().email('Enter a valid email address').max(254);
 const optEmail = z.union([email, z.literal('')]).transform((v) => v || undefined);
@@ -279,6 +282,7 @@ export async function sendMessageAction(_: ActionState, fd: FormData): Promise<A
       // A reply that actually went out answers the client's messages, so they stop counting as unread.
       if (direction === 'outbound' && status !== 'failed') await db.run("update public.communications set read_at = now() where client_id = $1 and direction = 'inbound' and read_at is null", [d.clientId]);
       await logEvent(db, ctx, d.clientId, 'message', `${direction === 'internal' ? 'Logged' : 'Sent'} ${channel} message`);
+      if (channel === 'portal') await queueClientUpdate(db, { orgId: ctx.orgId, clientId: d.clientId, event: 'team_message', subjectId: hourBucket() });
     });
     revalidatePath(`/app/clients/${d.clientId}`);
     revalidatePath('/app', 'layout');
@@ -338,6 +342,7 @@ export async function requestDocumentAction(_: ActionState, fd: FormData): Promi
       await db.run('insert into public.document_requests (org_id, client_id, kind, note, due_at, created_by) values ($1, $2, $3, $4, $5, $6)',
         [ctx.orgId, d.clientId, d.kind, d.note ?? null, d.due ? `${d.due}T23:59:00Z` : null, ctx.userId]);
       await logEvent(db, ctx, d.clientId, 'document_requested', `Requested: ${d.kind.replace(/_/g, ' ')}`);
+      await queueClientUpdate(db, { orgId: ctx.orgId, clientId: d.clientId, event: 'document_needed', subjectId: dayBucket() });
     });
     revalidatePath(`/app/clients/${d.clientId}`);
     return { ok: 'Request added. The client sees it in their portal.' };
@@ -346,12 +351,47 @@ export async function requestDocumentAction(_: ActionState, fd: FormData): Promi
 
 export async function reviewDocumentAction(fd: FormData) {
   const ctx = await requireStaff('clients:write');
-  const d = parseForm(z.object({ id: zUuid, clientId: zUuid, decision: z.enum(['accepted', 'rejected']) }), fd);
+  // `reason` is shown to the client when a document is rejected. The two dates are optional and only ever come from
+  // what the reviewer read on the document: the date printed on a proof of address, and the expiry of an ID.
+  const d = parseForm(z.object({ id: zUuid, clientId: zUuid, decision: z.enum(['accepted', 'rejected']), reason: zOpt(300), docDate: zDate.optional().or(z.literal('')), expiresOn: zDate.optional().or(z.literal('')) }), fd);
   await ctx.tx(async (db) => {
-    await db.run('update public.documents set review_status = $2 where id = $1', [d.id, d.decision]);
+    await db.run('update public.documents set review_status = $2, review_note = $3, doc_date = coalesce($4::date, doc_date), expires_on = coalesce($5::date, expires_on) where id = $1 and client_id = $6',
+      [d.id, d.decision, d.decision === 'rejected' ? d.reason ?? null : null, d.docDate || null, d.expiresOn || null, d.clientId]);
     await logEvent(db, ctx, d.clientId, 'document_reviewed', `Document ${d.decision}`);
+    if (d.decision === 'rejected') await queueClientUpdate(db, { orgId: ctx.orgId, clientId: d.clientId, event: 'document_rejected', subjectId: d.id });
   });
   revalidatePath(`/app/clients/${d.clientId}`);
+}
+
+/**
+ * One click: a portal request for every required identity document the client still has to send (missing, rejected,
+ * expired or no longer recent) that is not already requested. Uses the ordinary document requests, so the client sees
+ * them on their portal home and an upload of that kind fulfils them. No email is sent from here.
+ */
+export async function requestMissingIntakeAction(_: ActionState, fd: FormData): Promise<ActionState> {
+  const ctx = await requireStaff('clients:write');
+  return run(async () => {
+    const d = parseForm(z.object({ clientId: zUuid }), fd);
+    const out = await ctx.tx(async (db) => {
+      const c = await db.row<{ preferred_language: string; portal_user_id: string | null }>('select preferred_language, portal_user_id from public.clients where id = $1', [d.clientId]);
+      if (!c) throw new UserError('Client not found.');
+      const needed = intakeSummary(await loadIntake(db, d.clientId)).needed;
+      const open = await db.rows<{ kind: string }>('select kind from public.document_requests where client_id = $1 and fulfilled_document_id is null', [d.clientId]);
+      const toAsk = needed.filter((n) => !open.some((o) => o.kind === n.item.key));
+      const lang = c.preferred_language === 'es' ? 'es' : 'en';
+      for (const n of toAsk) {
+        await db.run('insert into public.document_requests (org_id, client_id, kind, note, created_by) values ($1, $2, $3, $4, $5)', [ctx.orgId, d.clientId, n.item.key, n.item.accepts[lang], ctx.userId]);
+      }
+      if (toAsk.length) await logEvent(db, ctx, d.clientId, 'document_requested', `Requested identity documents: ${toAsk.map((n) => n.item.label.en).join(', ')}`);
+      if (toAsk.length) await queueClientUpdate(db, { orgId: ctx.orgId, clientId: d.clientId, event: 'document_needed', subjectId: dayBucket() });
+      return { asked: toAsk.map((n) => n.item.label.en), already: needed.length - toAsk.length, nothing: needed.length === 0, portal: !!c.portal_user_id };
+    });
+    revalidatePath(`/app/clients/${d.clientId}`);
+    if (out.nothing) return { ok: 'Nothing to ask for: every required identity document is uploaded or accepted.' };
+    const where = out.portal ? 'The client sees this in their portal.' : 'The client has no portal login yet, so they will see it once you invite them.';
+    if (out.asked.length === 0) return { ok: `Already requested. ${where} No email was sent.` };
+    return { ok: `Requested: ${out.asked.join(', ')}. ${where} No email was sent.` };
+  });
 }
 
 // ---------------------------------------------------------------- consents & portal

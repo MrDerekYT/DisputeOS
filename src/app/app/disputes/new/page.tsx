@@ -10,6 +10,7 @@ import { CATEGORIES, FIELD_OPTIONS, FINDING_TO_CATEGORY } from '@/lib/disputes/w
 import type { Evidence } from '@/lib/reports/analysis';
 import { BUREAU_LABEL, BUREAUS, isUuid, type Bureau } from '@/lib/util';
 import { createDisputeAction } from '../actions';
+import { SpecialtySteps } from './specialty';
 
 export const metadata: Metadata = { title: 'New dispute' };
 
@@ -65,12 +66,15 @@ export default async function NewDisputePage({ searchParams }: { searchParams: P
   const { client, tradelines, finding, consents } = data;
   const cs = consentStatus(consents);
 
+  // ---- A specialty agency item (ChexSystems, LexisNexis, ...) is typed in by hand; it has its own two steps.
+  if (sp.specialty || sp.agency) return <SpecialtySteps client={client} agencyKey={sp.agency} />;
+
   const tradelineId = sp.tradelineId ?? (finding?.tradeline_ids.find((id) => tradelines.some((t) => t.id === id)) ?? '');
   const category = sp.category ?? (finding ? FINDING_TO_CATEGORY[finding.category] : undefined);
   const tl = tradelines.find((t) => t.id === tradelineId);
 
   // ---- Step 2: what are we disputing?
-  if (!category || !CATEGORIES[category]) {
+  if (!category || !CATEGORIES[category] || CATEGORIES[category].target === 'agency') {
     return (
       <>
         <PageHeader title="New dispute" subtitle={`Step 2 of 3 · What is being disputed for ${client.full_name}?`} back={{ href: '/app/disputes/new', label: 'Choose client' }} />
@@ -80,9 +84,12 @@ export default async function NewDisputePage({ searchParams }: { searchParams: P
             options={tradelines.map((t) => ({ value: t.id, label: `${t.creditor_name}${t.account_last4 ? ` ••${t.account_last4}` : ''} — ${BUREAU_LABEL[t.bureau]}${t.item_type === 'collection' ? ' (collection)' : ''}` }))}
             hint={tradelines.length ? undefined : 'No approved reports yet. Upload and approve a report first, or continue without an account.'} />
           <Select label="Type of dispute" name="category" required defaultValue={tl?.item_type === 'collection' ? 'unverifiable_collection' : ''} placeholder="Choose…"
-            options={Object.entries(CATEGORIES).map(([k, v]) => ({ value: k, label: v.label }))} />
+            options={Object.entries(CATEGORIES).filter(([, v]) => v.target !== 'agency').map(([k, v]) => ({ value: k, label: v.label }))} />
           <div className="flex justify-end"><button className="btn-primary" type="submit">Continue</button></div>
         </form>
+        <p className="mx-auto mt-4 max-w-2xl text-sm text-muted">
+          Not on a credit report? <Link className="link" href={`/app/disputes/new?clientId=${client.id}&specialty=1`}>Enter a specialty agency item</Link> (ChexSystems, Early Warning, LexisNexis and others).
+        </p>
       </>
     );
   }

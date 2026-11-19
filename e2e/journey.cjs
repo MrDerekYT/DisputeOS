@@ -216,6 +216,7 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
 
     await check('submit the dispute: 30-day clock starts, letter marked sent', async () => {
       await staff.goto(disputeUrl);
+      await staff.getByLabel('Send without the identity documents').check(); // no identity documents on file yet: an explicit yes is required
       await staff.getByRole('button', { name: 'Record submission' }).click();
       await staff.getByRole('button', { name: 'Mark as under investigation' }).waitFor(); // only shown once status = Submitted
       await staff.reload();
