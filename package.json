@@ -3,7 +3,9 @@
   "version": "0.2.0",
   "private": true,
   "description": "Credit repair operations platform: CRM, report analysis, dispute workflow, letters, automation, client portal.",
-  "engines": { "node": ">=20.11" },
+  "engines": {
+    "node": ">=20.11"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -24,6 +26,7 @@
     "check": "npm run typecheck && npm run lint && npm test && npm run build"
   },
   "dependencies": {
+    "@vercel/analytics": "^2.0.1",
     "lucide-react": "^1.65.0",
     "next": "^15.5.28",
     "pg": "^8.23.1",
