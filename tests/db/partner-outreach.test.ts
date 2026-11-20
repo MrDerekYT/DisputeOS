@@ -1254,7 +1254,10 @@ describe('the scheduled job sends everything with no approval step', () => {
     expect(calls.some((c) => c.body.includes('5550199'))).toBe(false);
     expect(await steps(pid)).toMatchObject([{ step: 'intro', status: 'sent' }]);
 
-    // Running again, as a scheduler does, sends nothing twice.
+    // Running again, as a scheduler does, sends nothing twice. The job ran on the clock `when` while the database
+    // stamped the sends with the real time; put both on one clock, as they are in production, so this does not
+    // depend on how many days away the next business day happens to be.
+    await withSystem((db) => db.run('update public.lead_outreach set sent_at = $2 where org_id = $1 and sent_at is not null', [a.orgId, when]));
     const second = await runScheduledJobs({ onlyOrgIds: [a.orgId], now: when });
     expect(second).toMatchObject({ failures: 0, leadEmails: 0, leadTexts: 0, partnerEmails: 0 });
     expect(calls).toHaveLength(3);

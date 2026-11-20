@@ -5,7 +5,7 @@ import { addDays, isBusinessDay } from '@/lib/business-days';
 import { resetEnvCache } from '@/lib/env';
 import { addPartners } from '@/lib/partner-outreach';
 import { transitionDispute } from '@/lib/disputes/service';
-import { checkSentOn, markSent } from '@/lib/letters/service';
+import { businessToday, checkSentOn, markSent } from '@/lib/letters/service';
 import { recordConsentRows } from './consents';
 import { addClient, addDispute, addMember, addPortalClient, approveOutreach, asUser, closePool, makeOrg, uniq, withSystem } from './helpers';
 
@@ -93,7 +93,8 @@ describe('scheduled jobs', () => {
 });
 
 describe('delivery records', () => {
-  const today = new Date().toISOString().slice(0, 10);
+  // The default sent date is today in the business time zone, which is not the UTC date for part of every evening.
+  const today = businessToday();
   const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString().slice(0, 10);
 
   async function approvedLetter() {
