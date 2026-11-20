@@ -1,10 +1,13 @@
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { runSweeps } from '@/lib/automation/engine';
-import { runScheduledJobs } from '@/lib/automation/jobs';
+import { JOBS_DEADLINE_MS, runScheduledJobs } from '@/lib/automation/jobs';
+import { addDays, isBusinessDay } from '@/lib/business-days';
+import { resetEnvCache } from '@/lib/env';
+import { addPartners } from '@/lib/partner-outreach';
 import { transitionDispute } from '@/lib/disputes/service';
 import { checkSentOn, markSent } from '@/lib/letters/service';
 import { recordConsentRows } from './consents';
-import { addClient, addDispute, addMember, addPortalClient, asUser, closePool, makeOrg, withSystem } from './helpers';
+import { addClient, addDispute, addMember, addPortalClient, approveOutreach, asUser, closePool, makeOrg, uniq, withSystem } from './helpers';
 
 afterAll(closePool);
 
@@ -154,5 +157,86 @@ describe('delivery records', () => {
     await expect(asUser(x.ownerId, (db) => transitionDispute(db, x.actor, x.disputeId, 'submitted', { sentOn: today, receivedOn: daysAgo(5) }))).rejects.toThrow(/before the sent date/);
     await asUser(x.ownerId, (db) => markSent(db, x.actor, x.letterId, 'manual', undefined, today));
     await expect(withSystem((db) => db.run('update public.letters set carrier_delivered_at = now() where id = $1', [x.letterId]))).rejects.toThrow(/letters_carrier_delivery_chk/);
+  });
+});
+
+// ================================================================ running out of time, fairly
+describe('scheduled jobs: a run that runs out of time', () => {
+  const saved = { ...process.env };
+  afterEach(() => { vi.unstubAllGlobals(); process.env = { ...saved }; resetEnvCache(); });
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  it('stops starting work at its deadline, says who was not reached, still cleans up, and takes those organizations first next time', async () => {
+    const [a, b, c] = [await makeOrg('JobsFairA'), await makeOrg('JobsFairB'), await makeOrg('JobsFairC')];
+    const ids = [a.orgId, b.orgId, c.orgId];
+    const order: string[] = [];
+    // Every sweep takes longer than the whole run is allowed: only the first organization is started.
+    const slow = async (_: unknown, actor: { orgId: string }) => { order.push(actor.orgId); await sleep(120); return []; };
+    const first = await runScheduledJobs({ onlyOrgIds: ids, sweep: slow, deadlineMs: 40 });
+    expect(order).toEqual([a.orgId]);
+    expect(first).toMatchObject({ orgs: 3, failures: 0, notReached: 2, outreachCutShort: true });
+    // The clean-up at the end is not behind the deadline.
+    expect(Object.keys(first.cleaned).sort()).toEqual(['invites', 'jobRuns', 'rateLimits', 'resets', 'sessions']);
+    expect(await count('select count(*)::int as n from public.job_runs where org_id = any($1::uuid[])', [ids])).toBe(1);
+
+    // The next run takes the two that went without first, and the one that was served last time last.
+    order.length = 0;
+    const second = await runScheduledJobs({ onlyOrgIds: ids, sweep: async (_, actor) => { order.push(actor.orgId); return []; } });
+    expect(order).toEqual([b.orgId, c.orgId, a.orgId]);
+    expect(second).toMatchObject({ orgs: 3, failures: 0, notReached: 0, outreachCutShort: false });
+    // Cut short again after two: the one left out this time is the one that waited least before, and it is first in the run after.
+    order.length = 0;
+    await runScheduledJobs({ onlyOrgIds: ids, sweep: async (_, actor) => { order.push(actor.orgId); await sleep(order.length === 2 ? 150 : 0); return []; }, deadlineMs: 100 });
+    expect(order).toEqual([b.orgId, c.orgId]);
+    order.length = 0;
+    await runScheduledJobs({ onlyOrgIds: ids, sweep: async (_, actor) => { order.push(actor.orgId); return []; } });
+    expect(order[0]).toBe(a.orgId);
+    expect(JOBS_DEADLINE_MS).toBeLessThan(60_000 - 15_000); // room for a send in flight inside the route's 60 seconds
+  });
+
+  it('outreach comes after every organization’s own work, and an organization whose outreach was cut off is first in the next run', async () => {
+    // Email is "connected": the real driver, with the provider's HTTP API stood in for, and slow to answer.
+    Object.assign(process.env, { EMAIL_DRIVER: 'resend', RESEND_API_KEY: 're_test_key_for_vitest' });
+    resetEnvCache();
+    const sentTo: string[] = [];
+    let delay = 1500;
+    vi.stubGlobal('fetch', async (url: string | URL, init?: RequestInit) => {
+      if (String(url) !== 'https://api.resend.com/emails') throw new Error(`unexpected request to ${String(url)}`);
+      const to = (JSON.parse(String(init?.body ?? '{}')) as { to: string[] }).to[0]!;
+      sentTo.push(to);
+      await sleep(delay);
+      return new Response(JSON.stringify({ id: `re_${uniq()}` }), { status: 200 });
+    });
+    let next = addDays(new Date().toISOString().slice(0, 10), 1);
+    while (!isBusinessDay(next)) next = addDays(next, 1);
+    const when = new Date(`${next}T20:00:00Z`);
+    const orgs = [await makeOrg('JobsOutreachA'), await makeOrg('JobsOutreachB'), await makeOrg('JobsOutreachC')];
+    const emails: string[] = [];
+    for (const o of orgs) {
+      await withSystem((db) => db.run("update public.organizations set settings = settings || $2::jsonb where id = $1", [o.orgId, JSON.stringify({ partner_outreach_enabled: true, lead_mailing_address: '12 Main St, Austin, TX 78701', lead_reply_email: 'hello@agency.example.test' })]));
+      await approveOutreach(o.orgId, new Date('2025-06-02T15:00:00Z'));
+      const email = `p-${uniq()}@biz.example.test`;
+      emails.push(email);
+      await asUser(o.ownerId, (db) => addPartners(db, { orgId: o.orgId, userId: o.ownerId }, [{ businessName: 'Hill Realty', contactName: 'Dana Whitfield', category: 'real_estate_agent', email, phone: null, city: 'Austin', state: 'TX', language: 'en', sourceNote: null }], 'Added by hand.'));
+    }
+    const ids = orgs.map((o) => o.orgId);
+    const swept: string[] = [];
+    const sweep = async (_: unknown, actor: { orgId: string }) => { swept.push(actor.orgId); return []; };
+
+    // One email takes longer than the time the run has left: the first organization's partner is emailed, and the run
+    // does not start on the next organization's outreach.
+    const first = await runScheduledJobs({ onlyOrgIds: ids, sweep, now: when, deadlineMs: 1000 });
+    // Every organization's own work was done before any outreach started.
+    expect(swept).toEqual(ids);
+    expect(first).toMatchObject({ failures: 0, notReached: 0, partnerEmails: 1, outreachCutShort: true });
+    expect(sentTo).toEqual([emails[0]]);
+    // The email that was in flight when the time ran out was finished and recorded: nothing is left half-sent.
+    expect(await withSystem((db) => db.rows('select status from public.partner_outreach where org_id = any($1::uuid[])', [ids]))).toEqual([{ status: 'sent' }]);
+
+    // Next run, with time: the two that were left out go first, in turn, and the first is not written to again.
+    delay = 0;
+    const second = await runScheduledJobs({ onlyOrgIds: ids, sweep, now: when });
+    expect(second).toMatchObject({ failures: 0, partnerEmails: 2, outreachCutShort: false });
+    expect(sentTo).toEqual([emails[0], emails[1], emails[2]]);
   });
 });

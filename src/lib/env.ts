@@ -59,9 +59,9 @@ const schema = z.object({
   // The signing secret of the Resend webhook (whsec_...), for bounce and complaint reports (/api/webhooks/resend).
   RESEND_WEBHOOK_SECRET: z.string().optional(),
   // Most partner emails, and most lead follow-up texts, this whole deployment sends in any 24 hours, across every
-  // workspace. Each workspace has its own lower limit; these stop a deployment-wide run-away.
-  OUTREACH_PLATFORM_DAILY_EMAILS: z.coerce.number().int().min(0).max(100_000).default(500),
-  OUTREACH_PLATFORM_DAILY_TEXTS: z.coerce.number().int().min(0).max(100_000).default(300),
+  // workspace. Each workspace has its own lower limit; these stop a deployment-wide run-away. 0 sends none.
+  OUTREACH_PLATFORM_DAILY_EMAILS: z.coerce.number().int().min(0).max(10_000_000).default(500),
+  OUTREACH_PLATFORM_DAILY_TEXTS: z.coerce.number().int().min(0).max(10_000_000).default(300),
   // Text messages (src/lib/sms.ts)
   // disabled (default): no text is ever sent · twilio: sent through Twilio · log: written to a local file, nothing is
   // delivered (development/test only). Without the Twilio values below, twilio reads as "not connected" in Settings.

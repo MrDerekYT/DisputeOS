@@ -65,7 +65,7 @@ const RESULTS = 'send me the results in writing, along with an updated copy of m
 
 /**
  * A dispute to a credit bureau about one account. `about` finishes "I am writing under Section 611 … about"; `extra` is
- * a line of recorded facts placed above the reason (it resolves to nothing when the fact is not on file, and the
+ * a paragraph of recorded facts placed above the reason (it resolves to nothing when the fact is not on file, and the
  * library refuses the letter in that case); `request` finishes "Please conduct a reasonable reinvestigation" (`ask` replaces
  * that paragraph; it still opens "Please conduct", which is where the specificity check ends the reason). The earlier
  * round is stated above the reason heading, so it is never read as part of the reason; `ownHistory` leaves it out for a
@@ -82,7 +82,7 @@ To whom it may concern:
 ${o.opening ?? `I am writing under ${SECTION_611} about ${o.about}{{lead_in}}`}
 
 Item: {{item_label}}
-{{reported_text}}{{fields_text}}${o.extra ? `${o.extra}\n` : ''}
+{{reported_text}}{{fields_text}}${o.extra ? `\n${o.extra}\n` : ''}
 ${o.ownHistory ? '' : '{{history_text}}'}
 Reason for my request:
 {{reason}}
@@ -170,7 +170,7 @@ ${CLOSE}`,
   bureauTemplate({
     key: 'inaccurate_history_dates_en', name: 'Inaccurate payment history or dates', description: 'A late payment or a reported date does not match the client’s records.',
     // {{disputed_subject}} is "the payment history", "the dates" or both, from what was ticked on the dispute (./render.ts).
-    subject: 'Dispute of reported payment history or dates', about: '{{disputed_subject}} reported for the account below.',
+    subject: 'Dispute of {{disputed_subject}} reported', about: '{{disputed_subject}} reported for the account below.',
     request: `of {{disputed_subject}} reported for this account, consider the information I have provided, and ${RESULTS}.`,
   }),
   bureauTemplate({

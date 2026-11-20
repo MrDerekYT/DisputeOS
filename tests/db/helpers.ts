@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { encryptPII } from '@/lib/crypto';
 import { withSystem, withTenant, closePool, type Db } from '@/lib/db';
 import { signUp } from '@/lib/auth/service';
 import type { Role } from '@/lib/rbac';
@@ -31,14 +32,37 @@ export async function addMember(orgId: string, role: Role, label: string = role)
   });
 }
 
-export async function addClient(orgId: string, name = 'Test Client', opts: { portalUserId?: string; status?: string } = {}): Promise<string> {
+/** What a letter to a credit bureau prints to identify the client: stored as the client form stores it. */
+export const TEST_DOB = '1985-03-03';
+export const TEST_SSN_LAST4 = '4321';
+
+/**
+ * A client row. It has a date of birth and the last four digits of a Social Security number on file, as a real client
+ * who went through intake does (a letter to a credit bureau states both); pass `identity: false` for one without.
+ */
+export async function addClient(orgId: string, name = 'Test Client', opts: { portalUserId?: string; status?: string; identity?: boolean } = {}): Promise<string> {
   return withSystem(async (db) => {
     const r = await db.row<{ id: string }>(
       'insert into public.clients (org_id, full_name, email, portal_user_id, status) values ($1, $2, $3, $4, $5) returning id',
       [orgId, name, `c-${uniq()}@client.dev`, opts.portalUserId ?? null, opts.status ?? 'active'],
     );
+    if (opts.identity !== false) await giveIdentity(r!.id, db);
     return r!.id;
   });
+}
+
+/** Puts a date of birth and SSN digits on a client created some other way (the client form, intake, a direct insert). */
+export async function giveIdentity(clientId: string, db?: Db): Promise<void> {
+  const run = (d: Db) => d.run('update public.clients set ssn_last4 = $2, dob_encrypted = $3 where id = $1', [clientId, TEST_SSN_LAST4, encryptPII(TEST_DOB)]);
+  await (db ? run(db) : withSystem(run));
+}
+
+/**
+ * The platform operator's approval for unattended outreach (partner emails, lead texts), as `npm run outreach:approve`
+ * records it. Dated well in the past by default, so the lower sending rate of a newly approved workspace does not apply.
+ */
+export async function approveOutreach(orgId: string, at: Date = new Date(Date.now() - 60 * 86_400_000)): Promise<void> {
+  await withSystem((db) => db.run('update public.organizations set outreach_approved_at = $2, outreach_approved_name = name where id = $1', [orgId, at]));
 }
 
 export async function addPortalClient(orgId: string, name = 'Portal Client') {

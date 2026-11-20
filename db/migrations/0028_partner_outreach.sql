@@ -141,6 +141,12 @@ create table if not exists public.partner_outreach (
   unique (partner_id, step)
 );
 create index if not exists partner_outreach_org_idx on public.partner_outreach (org_id, claimed_at desc);
+-- The deployment-wide 24-hour limit is counted by claim time across every workspace, and a bounce or complaint report
+-- from the email service is matched by the id that service gave the email.
+create index if not exists partner_outreach_claimed_idx on public.partner_outreach (claimed_at desc);
+create index if not exists partner_outreach_provider_ref_idx on public.partner_outreach (provider_ref) where provider_ref is not null;
+-- The same deployment-wide limit for lead follow-up texts is counted on public.lead_outreach by creation time.
+create index if not exists lead_outreach_created_idx on public.lead_outreach (created_at desc);
 
 -- ---------------------------------------------------------------- 3. per-partner timeline
 create table if not exists public.partner_events (

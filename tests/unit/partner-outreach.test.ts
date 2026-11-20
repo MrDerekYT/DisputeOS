@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import * as React from 'react';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -9,13 +11,13 @@ import { findBlockedClaims, findMarketingClaims } from '@/lib/compliance/claims'
 import { SMS_MAX_CHARS } from '@/lib/client-updates/templates';
 import { decideLeadText, leadSmsConsentText, leadText, LEAD_SMS_NEEDS_PHONE, LEAD_TEXT_STEPS, type LeadTextState } from '@/lib/lead-texts';
 import {
-  acceptPersonalised, decidePartnerStep, findFamiliarityClaims, PARTNER_BODY_MAX_CHARS, PARTNER_CATEGORIES, PARTNER_CATEGORY_LABEL, PARTNER_DAILY_CAP, PARTNER_PER_RUN_CAP,
-  PARTNER_STATUSES, PARTNER_STATUS_LABEL, PARTNER_STEPS, partnerEmail, partnerPlace, partnerWordingIssue, personalisationGoal, type PartnerEmailVars, type PartnerState,
+  acceptPersonalised, decidePartnerStep, findFamiliarityClaims, isPlainCity, PARTNER_BODY_MAX_CHARS, PARTNER_CATEGORIES, PARTNER_CATEGORY_LABEL, PARTNER_DAILY_CAP, PARTNER_NAME_MAX,
+  PARTNER_PER_RUN_CAP, PARTNER_STATUSES, PARTNER_STATUS_LABEL, PARTNER_STEPS, partnerEmail, partnerPlace, partnerWordingIssue, personalisationGoal, type PartnerEmailVars, type PartnerState,
 } from '@/lib/partner-emails';
 import { detectDelimiter, parseDelimited, parsePartnerList, PARTNER_ATTESTATION, PARTNER_IMPORT_MAX_ROWS, partnerCategoryFrom, partnerSchema } from '@/lib/partner-import';
 import { getEnv, resetEnvCache } from '@/lib/env';
 import { optOutToken, verifyOptOutToken } from '@/lib/lead-outreach';
-import { partnerOptOutToken, partnerOptOutUrl, verifyPartnerOptOutToken } from '@/lib/partner-outreach';
+import { partnerOptOutToken, partnerOptOutUrl, partnerSettings, verifyPartnerOptOutToken } from '@/lib/partner-outreach';
 
 // The test runner compiles JSX to React.createElement, so React has to be in scope when a component renders.
 vi.stubGlobal('React', React);

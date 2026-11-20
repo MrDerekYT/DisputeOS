@@ -57,6 +57,7 @@ Two-step verification is optional by default (`REQUIRE_STAFF_MFA=false`); set it
 | `node e2e/journey.cjs` | browser journey against a running server; prints `<n>/<n> steps passed` (see below) |
 | `npm run db:migrate` / `db:reset` / `db:seed` | migrations / drop-and-recreate (refused in production) / demo data |
 | `npm run credits:grant -- <org-slug> <amount> [note]` | platform operator: add AI credits to a workspace (1–100000). Records a grant and an audit entry; it takes no payment. New workspaces start at 0 |
+| `npm run outreach:approve -- <org-slug> [--revoke]` | platform operator: approve a workspace for automatic outreach (partner emails, lead follow-up texts) under its current business name, or withdraw the approval. Nothing unattended is sent for a workspace until this has been run for it (docs/INTEGRATIONS.md) |
 
 ## Architecture
 

@@ -324,7 +324,7 @@ export async function runPartnerOutreach(orgId: string, opts: PartnerRunOptions 
     if (claim === 'switched_off' || claim === 'daily_cap' || claim === 'platform_cap') { out.held = claim; break; }
     if (!claim) continue; // another run has it, or something changed in the meantime
 
-    // 2. Build and send outside any transaction: no lock or pooled connection is held while waiting on the AI or the email service.
+    // 2. Build and send outside any transaction: no lock or pooled connection is held while waiting on the email service.
     const label = partnerStepLabel(step);
     const lang: PartnerLang = claim.partner.language === 'es' ? 'es' : 'en';
     const category: PartnerCategory = isPartnerCategory(claim.partner.category) ? claim.partner.category : 'other';

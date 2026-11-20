@@ -3,7 +3,7 @@ import type { OverlapLevel, WordingOverlap } from '@/lib/letters/overlap';
 
 const LEVEL: Record<OverlapLevel, { label: string; tone: Tone; says: string }> = {
   low: { label: 'Low', tone: 'ok', says: 'Most of this letter is in wording of its own.' },
-  medium: { label: 'Medium', tone: 'neutral', says: 'Part of this letter is word for word in a recent letter for another client, mostly the standard opening, request and enclosure lines.' },
+  medium: { label: 'Medium', tone: 'neutral', says: 'Part of this letter is word for word in a recent letter for another client, usually the standard request and enclosure lines.' },
   high: { label: 'High', tone: 'warn', says: 'Most of this letter is word for word in a recent letter for another client: the standard paragraphs are the same in every letter of this kind. What sets it apart is the reason and the documents, so check that the reason states this client’s own facts.' },
 };
 

@@ -36,7 +36,8 @@ const LETTER = [
   'Thank you so much for taking the time to look into this matter for me.',
 ].join('\n');
 const TERMS = ['Acme Bank', 'Experian'];
-const polish = (masked: string) => masked.replace('I would really like to ask you for some help', 'I am asking for your help').replace('Thank you so much', 'Thank you');
+// A stand-in rewording as the tailoring checks allow one: the same sentences, in the line's own words or plain courtesy words.
+const polish = (masked: string) => masked.replace('I would really like to ask you for some help', 'I would like to ask you for help').replace('Thank you so much', 'Thank you');
 
 beforeAll(async () => {
   org = await makeOrg('Credits');
@@ -137,7 +138,7 @@ describe('paying for AI results', () => {
     const ai = fake(polish);
     const r = await suggestLetterWording({ orgId: o.orgId, userId: o.ownerId, body: LETTER, protectedTerms: TERMS }, ai.provider);
     expect(r).toMatchObject({ ok: true, cost: AI_COSTS.letter_suggestion });
-    expect(r.ok && r.text).toContain('I am asking for your help');
+    expect(r.ok && r.text).toContain('I would like to ask you for help');
     expect(r.ok && r.text).toContain('$1,250');
     expect(ai.calls).toHaveLength(1);
     expect(await getBalance(o.orgId)).toBe(20 - AI_COSTS.letter_suggestion);

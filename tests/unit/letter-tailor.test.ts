@@ -72,7 +72,7 @@ describe('AI tailoring: the wording changes, the facts cannot', () => {
     // The only lines that differ are the four lines of connective wording.
     const changed = LETTER.split('\n').filter((l) => l.trim() && !r.text.split('\n').includes(l));
     expect(changed).toEqual(['To whom it may concern:', expect.stringContaining(VOICE.leadIn), COURTESY, 'Sincerely,']);
-    for (const fact of ['Jordan Rivera', '123 Main St, Unit B', 'Tampa, FL 33602', 'Date of birth: March 3, 1985', 'SSN (last 4): 4321', 'Acme Bank ••1234 (Experian)', 'date opened March 3, 2019; balance $1,200.00', REASON, 'I previously disputed this item on August 3, 2026.',
+    for (const fact of ['Jordan Rivera', '123 Main St, Unit B', 'Tampa, FL 33602', 'Date of birth: March 3, 1985', 'SSN (last 4): 4321', 'Item: Acme Bank, account ending 1234', 'date opened March 3, 2019; balance $1,200.00', REASON, 'I previously disputed this item on August 3, 2026.',
       'which I received on September 1, 2026, stated that the information was verified.', 'January 2026 statement; Letter from my landlord', '  - Copy: Government-issued photo ID', 'Section 611 of the Fair Credit Reporting Act (15 U.S.C. § 1681i)',
       'Please conduct a reasonable reinvestigation of the balance reported for this account']) expect(r.text, fact).toContain(fact);
     expect(findBlockedClaims(r.text)).toEqual([]);
@@ -184,12 +184,28 @@ describe('AI tailoring: a rewording cannot add anything', () => {
     const short: [string, RegExp][] = [
       ['I lost my job last spring.', /“lost”/], ['I know I fell behind.', /“fell”/], ['I spoke with your office by phone.', /“spoke”/], ['My family is struggling.', /“family”/],
       ['I am a loyal customer.', /“loyal”/], ['I wrote to you once before.', /“wrote”/], ['I have your letter here.', /“have”/], ['Your reply did not help me.', /“reply”/],
+      // Made of everyday words only, and still a statement about the writer or a complaint about the reader.
+      ['I am not well.', /“not”/], ['I am out of work.', /“work”/], ['I am not happy with your help.', /“not”/], ['Time is short for me.', /“short”/], ['You should look at this.', /“should”/], ['You will hear from me.', /“will”/],
     ];
     for (const [line, word] of short) {
       const r = await discarded((m) => m.replace(VOICE.leadIn, line));
       expect(r, line).toMatchObject({ usedAi: false, text: LETTER });
       expect(r.note, line).toMatch(/not plain courtesy/);
       expect(r.note, line).toMatch(word);
+    }
+  });
+
+  it('is discarded when a courtesy line thanks the reader for contact nobody recorded, although every word of it is a courtesy word', async () => {
+    for (const line of ['Thank you for writing to me.', 'Thank you for contacting me.', 'Thanks for reaching out to me.', 'It is good to hear from you.', 'I appreciate hearing from you.', 'I am glad you could get in touch; thank you for letting me know.', 'Thank you for your reply.', 'Thank you for your letter.']) {
+      const r = await discarded((m) => m.replace(COURTESY, line));
+      expect(r, line).toMatchObject({ usedAi: false, text: LETTER });
+      expect(r.note, line).toMatch(/discarded: it (refers to earlier contact that is not on file|uses wording that is not plain courtesy)/);
+      expect(tailorIssue(LETTER, LETTER.replace(COURTESY, line), INPUT), line).not.toBeNull();
+    }
+    // The courtesy that looks ahead is still fine, and so is the one negative a courtesy line uses.
+    for (const fine of ['I look forward to hearing from you.', 'Please do not hesitate to write to me at the address above.', 'Please don’t hesitate to contact me. Thank you for your time.', 'You can reach me by post at the address above. Many thanks.']) {
+      expect(rewordingIssue(LETTER, LETTER.replace(COURTESY, fine), INPUT.protectedTerms), fine).toBeNull();
+      expect(toneIssue(COURTESY, fine), fine).toBeNull();
     }
   });
 
@@ -211,7 +227,8 @@ describe('AI tailoring: a rewording cannot add anything', () => {
     // "have" and "letter" are in two of the app's own lines; a rewording may keep them on those lines and use them nowhere else.
     expect([...outside].sort()).toEqual(['have', 'letter']);
     // Nothing in the vocabulary can carry a fact about a person, an account, money, time or earlier contact.
-    for (const w of ['paid', 'customer', 'years', 'family', 'job', 'lost', 'phone', 'called', 'spoke', 'told', 'already', 'before', 'again', 'have', 'has', 'had', 'was', 'were', 'been', 'received', 'reply', 'response', 'letter', 'will', 'must', 'soon', 'today', 'balance', 'account']) {
+    for (const w of ['paid', 'customer', 'years', 'family', 'job', 'work', 'lost', 'well', 'ill', 'phone', 'called', 'spoke', 'told', 'already', 'before', 'again', 'have', 'has', 'had', 'was', 'were', 'been', 'received', 'reply', 'response', 'letter',
+      'will', 'should', 'must', 'not', 'no', 'never', 'nothing', 'soon', 'short', 'today', 'balance', 'account']) {
       expect(COURTESY_WORDS.has(w), w).toBe(false);
     }
     expect(tailorGoal(7)).toMatch(/Add nothing about the writer, their circumstances, the matter, any earlier contact or what should happen next/);
@@ -403,15 +420,19 @@ describe('wording overlap with other recent letters', () => {
   });
 
   it('takes the closest of the other letters, and grades what is partly shared', () => {
-    const half = mine.split(' ').slice(0, Math.ceil(mine.split(' ').length * 0.55)).join(' '); // the first half of the letter, word for word
+    const first = (share: number) => mine.split(' ').slice(0, Math.ceil(mine.split(' ').length * share)).join(' '); // the start of the letter, word for word
     const nothingShared = 'Dear Sir or Madam:\nMy particulars are given here.\nWith many thanks for reading.\nRespectfully,';
-    const partly = wordingOverlap(mine, [nothingShared, half])!;
-    expect(partly.compared).toBe(2);
-    expect(partly.score).toBeGreaterThan(wordingOverlap(mine, [nothingShared])!.score);
-    expect(partly.score).toBeLessThan(1);
-    expect(['medium', 'high']).toContain(partly.level);
+    const third = wordingOverlap(mine, [nothingShared, first(0.35)])!;
+    expect(third.compared).toBe(2);
+    expect(third.score).toBeGreaterThan(OVERLAP_MEDIUM);
+    expect(third.score).toBeLessThan(OVERLAP_HIGH);
+    expect(third.level).toBe('medium'); // a quarter or more of the letter, and not most of it
+    expect(wordingOverlap(mine, [nothingShared, first(0.65)])!.level).toBe('high'); // more than half
+    expect(wordingOverlap(mine, [nothingShared, first(0.15)])!.level).toBe('low');
     expect(wordingOverlap(mine, [nothingShared])!.level).toBe('low');
-    expect(wordingOverlap(mine, [nothingShared, mine, half])!.level).toBe('high');
+    expect(wordingOverlap(mine, [nothingShared, mine, first(0.35)])!.level).toBe('high');
+    // The words beside the badge are plain fractions: "most" is more than half, "part" a quarter or more.
+    expect([OVERLAP_MEDIUM, OVERLAP_HIGH]).toEqual([0.25, 0.5]);
   });
 
   it('says nothing when there is nothing to compare', () => {

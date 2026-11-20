@@ -28,7 +28,7 @@ async function submitted(reason = REASON, category = 'incorrect_balance', receiv
   const disputeId = await asUser(specialist.userId, (db) => createDispute(db, specialist, { clientId, category, bureau: 'experian', reason, fields: ['Balance'] }));
   const letterId = await asUser(specialist.userId, (db) => createLetter(db, specialist, { clientId, disputeId }));
   const body = (await withSystem((db) => currentBody(db, letterId)))!.body;
-  await asUser(specialist.userId, (db) => saveVersion(db, specialist, letterId, body.replace('Item: Item (Experian)', 'Item: Acme Bank, account ending 1234 (Experian)')));
+  await asUser(specialist.userId, (db) => saveVersion(db, specialist, letterId, body.replace('Item: Item\n', 'Item: Acme Bank, account ending 1234\n')));
   await asUser(specialist.userId, (db) => setLetterStatus(db, specialist, letterId, 'pending_approval'));
   await asUser(manager.userId, (db) => setLetterStatus(db, manager, letterId, 'approved'));
   await asUser(specialist.userId, (db) => transitionDispute(db, specialist, disputeId, 'ready_for_review'));
@@ -75,7 +75,7 @@ describe('specificity check before a dispute letter can be sent for approval', (
     await expect(asUser(specialist.userId, (db) => setLetterStatus(db, specialist, letterId, 'pending_approval'))).rejects.toThrow(/Identify the account.* · State the specific information disputed.* · Give a concrete reason/);
     expect((await letter(letterId))!.status).toBe('draft');
 
-    const fixed = body.replace('Item: Item (Experian)', 'Item: Acme Bank, account ending 1234 (Experian)').replace('Please verify this item with the furnisher.', REASON);
+    const fixed = body.replace('Item: Item\n', 'Item: Acme Bank, account ending 1234\n').replace('Please verify this item with the furnisher.', REASON);
     await asUser(specialist.userId, (db) => saveVersion(db, specialist, letterId, fixed));
     // Taking the enclosures line out is caught too, including at the approval step itself.
     await asUser(specialist.userId, (db) => saveVersion(db, specialist, letterId, fixed.replace('Enclosures: none\n', '')));

@@ -5,14 +5,14 @@ import type { Ctx } from '@/lib/auth/context';
 import type { SessionInfo } from '@/lib/auth/service';
 import { addDays, isBusinessDay } from '@/lib/business-days';
 import { resetEnvCache } from '@/lib/env';
-import { runLeadTexts } from '@/lib/lead-outreach';
+import { leadTextsOfferedBySlug, runLeadTexts } from '@/lib/lead-outreach';
 import { submitLead } from '@/lib/leads';
 import type { Email, SendResult } from '@/lib/mailer';
 import type { PartnerInput } from '@/lib/partner-import';
 import { addPartners, optOutPartner, partnerOptOutToken, runPartnerOutreach } from '@/lib/partner-outreach';
 import { markPartner, setReferredBy } from '@/lib/partners';
 import { can, type Role } from '@/lib/rbac';
-import { addClient, addMember, asUser, closePool, makeOrg, testIp, uniq, withSystem, type TestOrg } from './helpers';
+import { addClient, addMember, approveOutreach, asUser, closePool, makeOrg, testIp, uniq, withSystem, type TestOrg } from './helpers';
 
 // The pages are rendered here exactly as the server renders them, with the real queries under row-level security.
 // Only the sign-in step is stood in for: `requireStaff` returns a context for a real user of a real test workspace.
@@ -31,7 +31,8 @@ vi.mock('next/navigation', async (original) => ({ ...(await original<typeof impo
 // The test runner compiles JSX to React.createElement, so React has to be in scope when a component renders.
 vi.stubGlobal('React', React);
 
-import { saveLeadFollowUpAction } from '@/app/app/leads/actions';
+import { leadAskedToStopAction, saveLeadFollowUpAction } from '@/app/app/leads/actions';
+import { stopPartnerEmailsAction } from '@/app/unsubscribe/partner/[token]/actions';
 import {
   addPartnerAction, importPartnersAction, markPartnerAction, partnerAskedToStopAction, pausePartnerAction, removePartnerAction, retryPartnerAction,
   savePartnerOutreachAction, setReferredByAction, updatePartnerAction,
@@ -52,9 +53,11 @@ const REPLY = 'hello@agency.example.test';
 const ON = { partner_outreach_enabled: true, lead_mailing_address: ADDRESS, lead_reply_email: REPLY };
 const MON = new Date('2026-03-02T15:00:00Z');
 
-async function agency(label: string, settings: Record<string, unknown> = {}): Promise<Agency> {
+/** A workspace the platform operator has approved for outreach (long before any date used below); `approved: false` is one as sign-up leaves it. */
+async function agency(label: string, settings: Record<string, unknown> = {}, approved = true): Promise<Agency> {
   const o = await makeOrg(label);
   const r = (await withSystem((db) => db.row<{ slug: string; name: string }>('update public.organizations set settings = settings || $2::jsonb where id = $1 returning slug, name', [o.orgId, JSON.stringify(settings)])))!;
+  if (approved) await approveOutreach(o.orgId, new Date('2025-06-02T15:00:00Z'));
   return { ...o, ...r };
 }
 function signIn(a: Agency, role: Role = 'owner', userId = a.ownerId, orgMode: 'agency' | 'personal' = 'agency'): Ctx {
@@ -89,7 +92,10 @@ describe('Partners pages render from real data', () => {
     expect(page).toContain('Add one partner');
     expect(page).toContain('Import a list');
     expect(page).toContain('I compiled this myself from public business contact details and my own business contacts.');
-    expect(page).toContain('AI wording is not available: no AI provider is connected');
+    // The wording is fixed: the page says so, and offers no switch that would let a model write any of it.
+    expect(page).toContain('No AI writes any part of it.');
+    expect(markup(await PartnersPage({ searchParams: Promise.resolve({}) }))).not.toMatch(/name="ai"|AI wording/);
+    expect(page).toContain('The platform operator approves each workspace before its sequence can send, and again after a change of business name.');
     // A personal workspace has no partners at all.
     signIn(a, 'owner', a.ownerId, 'personal');
     expect(read(await PartnersPage({ searchParams: Promise.resolve({}) }))).toContain('Partners are for agency workspaces');
@@ -123,9 +129,10 @@ describe('Partners pages render from real data', () => {
     expect(page).toContain('Stopped: a reply is on file');
     expect(page).toContain('Car dealership');
     expect(page).toContain('Dallas, TX');
-    // "They replied" is offered where emails went out and no reply is on file yet.
+    // "They replied" is offered where emails went out and no reply is on file yet: for the partner still in the sequence,
+    // and for the one who opted out of the emails (they may still write or call; recording it sends nothing).
     const html = markup(await PartnersPage({ searchParams: Promise.resolve({}) }));
-    expect(html.match(/>They replied</g)).toHaveLength(1);
+    expect(html.match(/>They replied</g)).toHaveLength(2);
     expect(html).toContain(`href="/app/partners/${fresh}"`);
 
     const filtered = read(await PartnersPage({ searchParams: Promise.resolve({ status: 'opted_out' }) }));
@@ -148,6 +155,17 @@ describe('Partners pages render from real data', () => {
     const other = read(await PartnersPage({ searchParams: Promise.resolve({}) }));
     expect(other).toContain('No partners yet');
     expect(other).not.toContain('Fresh Realty');
+    // A workspace nobody at the operator has approved yet: switched on, and the page says plainly why nothing goes out.
+    const fresh2 = await agency('PagesFresh', ON, false);
+    signIn(fresh2);
+    const waiting = read(await PartnersPage({ searchParams: Promise.resolve({}) }));
+    expect(waiting).toContain('On, but not sending');
+    expect(waiting).toContain('This workspace has not been approved for automatic outreach yet. The platform operator approves each workspace before partner emails or lead texts go out; nothing is sent until then.');
+    expect(waiting).not.toContain('Email is not connected, so nothing is being sent.');
+    // Approved, then renamed: the page asks for a new approval instead of sending under a name nobody looked at.
+    await approveOutreach(fresh2.orgId, new Date('2025-06-02T15:00:00Z'));
+    await withSystem((db) => db.run("update public.organizations set name = 'Another Name LLC' where id = $1", [fresh2.orgId]));
+    expect(read(await PartnersPage({ searchParams: Promise.resolve({}) }))).toContain('Your business name changed after this workspace was approved for automatic outreach.');
     await expect(PartnerPage({ params: Promise.resolve({ id: fresh }) })).rejects.toThrow(); // "not found" for a partner of another agency
   });
 
@@ -201,10 +219,13 @@ describe('Partners pages render from real data', () => {
     expect(page).toContain('confirmed on');
 
     const gone = read(await PartnerPage({ params: Promise.resolve({ id: optedOut }) }));
-    expect(gone).toContain('This partner opted out. The address is never emailed again, and this cannot be changed.');
-    expect(gone).not.toContain('They replied');
-    expect(gone).not.toContain('Edit details');
-    expect(gone).toContain('Opted out using the link in an email.');
+    expect(gone).toMatch(/This partner opted out of the emails on [A-Z][a-z]{2} \d{1,2}, \d{4}\. The address is never emailed again, and this cannot be changed\./);
+    expect(gone).toContain('Opted out: never emailed again');
+    // They can still write or call: that they replied or are interested can be recorded, and nothing else can be done to the record.
+    expect(gone).toContain('They can still write or call you. If they do, record it here: it sends nothing and does not lift the email stop.');
+    for (const button of ['They replied', 'Interested', 'Not interested']) expect(gone).toContain(button);
+    for (const button of ['Bounced', 'Pause the sequence', 'Asked to stop', 'Try again', 'Edit details', 'Remove']) expect(gone).not.toContain(button);
+    expect(gone).toContain('Opted out from an email (the link, or the mail program’s unsubscribe button). No further email is sent to this address.');
 
     const failed = read(await PartnerPage({ params: Promise.resolve({ id: refused }) }));
     expect(failed).toContain('The email service did not accept it: domain not verified.');
@@ -231,22 +252,53 @@ describe('Partners pages render from real data', () => {
     expect(await ReferredByBlock({ ctx: signIn(a, 'owner', a.ownerId, 'personal'), clientId: client })).toBeNull();
   });
 
-  it('the partner opt-out page confirms in the partner’s language, and explains a link that does not verify', async () => {
+  it('the partner opt-out page asks first, in the partner’s language; only the button opts out; and a link that does not verify is explained', async () => {
     const a = await agency('PagesOptOut', ON);
     const [en, es] = await add(a, [P('English Realty'), P('Casa Linda', { language: 'es' })]) as [string, string];
-    const done = read(await PartnerUnsubscribePage({ params: Promise.resolve({ token: partnerOptOutToken(en) }) }));
+    const status = () => withSystem((db) => db.rows<{ status: string }>('select status from public.partners where id = any($1::uuid[]) order by business_name desc', [[en, es]])).then((r) => r.map((x) => x.status));
+    const pageFor = async (id: string) => read(await PartnerUnsubscribePage({ params: Promise.resolve({ token: partnerOptOutToken(id) }) }));
+
+    // Opening the link, as a person or as a mail gateway that fetches every link: a question and one button. Nothing changes.
+    const asked = await pageFor(en);
+    expect(asked).toContain(`Stop emails from ${a.name}?`);
+    expect(asked).toContain('Yes, stop these emails');
+    expect(asked).toContain('To change nothing, just close this page.');
+    expect(asked).not.toContain('Done: no more emails');
+    const html = markup(await PartnerUnsubscribePage({ params: Promise.resolve({ token: partnerOptOutToken(en) }) }));
+    expect(html).toContain(`<input type="hidden" name="token" value="${partnerOptOutToken(en)}"/>`);
+    expect(html.match(/<button[^>]*type="submit"/g)).toHaveLength(1);
+    const preguntado = await pageFor(es);
+    expect(preguntado).toContain(`¿Dejar de recibir correos de ${a.name}?`);
+    expect(preguntado).toContain('Sí, dejar de recibir estos correos');
+    for (let i = 0; i < 3; i++) await pageFor(en);
+    expect(await status()).toEqual(['new', 'new']);
+
+    // Pressing the button is the opt-out. The page then confirms, and opening it again still does.
+    const form = new FormData();
+    form.set('token', partnerOptOutToken(en));
+    await expect(stopPartnerEmailsAction(form)).rejects.toThrow(`REDIRECT /unsubscribe/partner/${partnerOptOutToken(en)}`);
+    const done = await pageFor(en);
     expect(done).toContain('Done: no more emails');
     expect(done).toContain(`${a.name} will not email this address again.`);
-    expect(read(await PartnerUnsubscribePage({ params: Promise.resolve({ token: partnerOptOutToken(es) }) }))).toContain(`${a.name} no volverá a escribir a esta dirección.`);
+    expect(done).not.toContain('Yes, stop these emails');
+    expect(await status()).toEqual(['opted_out', 'new']); // only the one who pressed it
+    // A token that does not verify changes nothing, whichever way it arrives.
+    const bad = new FormData();
+    bad.set('token', `${partnerOptOutToken(es).slice(0, -2)}xx`);
+    await expect(stopPartnerEmailsAction(bad)).rejects.toThrow(/REDIRECT/);
+    expect(await status()).toEqual(['opted_out', 'new']);
     expect(read(await PartnerUnsubscribePage({ params: Promise.resolve({ token: 'nonsense' }) }))).toContain('This link is not valid or has expired');
-    expect(await withSystem((db) => db.rows<{ status: string }>('select status from public.partners where id = any($1::uuid[])', [[en, es]]))).toEqual([{ status: 'opted_out' }, { status: 'opted_out' }]);
+    form.set('token', partnerOptOutToken(es));
+    await expect(stopPartnerEmailsAction(form)).rejects.toThrow(/REDIRECT/);
+    expect(await pageFor(es)).toContain(`${a.name} no volverá a escribir a esta dirección.`);
+    expect(await status()).toEqual(['opted_out', 'opted_out']);
   });
 });
 
 describe('Leads page with text follow-up', () => {
   it('shows the text switch, and a line about texts only for a lead who agreed to them on the form', async () => {
     const a = await agency('PagesLeads', { lead_followup_enabled: true, lead_followup_since: new Date(Date.now() - 60_000).toISOString(), lead_mailing_address: ADDRESS, lead_reply_email: REPLY, lead_text_followup: true });
-    const number = `+1512555${String(Math.floor(Math.random() * 10_000)).padStart(4, '0')}`;
+    const number = `+1512${2 + Math.floor(Math.random() * 7)}55${String(Math.floor(Math.random() * 10_000)).padStart(4, '0')}`;
     const enquire = (name: string, over: Record<string, unknown>) => submitLead(a.slug, { fullName: name, email: `lead-${uniq()}@example.test`, language: 'en', consent: true, ...over }, { ip: testIp(), defer: () => undefined });
     expect(await enquire('Texted Lead', { phone: number, smsConsent: true })).toEqual({ ok: true });
     expect(await enquire('Email Lead', {})).toEqual({ ok: true });
@@ -255,19 +307,44 @@ describe('Leads page with text follow-up', () => {
     const before = read(await LeadsPage({ searchParams: Promise.resolve({}) }));
     expect(before).toContain('A text is only ever sent to someone who separately agreed to texts on the form.');
     expect(before).toContain('Also text people who separately agree to text messages on the form');
-    expect(before).toContain('Text follow-up: on · 0 sent.');
+    expect(before).toContain('Text follow-up: on · 0 sent. Texts go to US mobile numbers only, between 9 a.m. and 8 p.m. where the person is.');
     expect(before).toContain('Texts need their own consent.');
     expect(before.match(/Texts: 0 of 2 sent/g)).toHaveLength(1); // only the lead who ticked the box
     expect(before).toContain('Texted Lead');
     expect(before).toContain('Email Lead');
 
     const tomorrow = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
-    expect((await runLeadTexts(a.orgId, { now: new Date(`${tomorrow}T17:00:00Z`) })).sent).toBe(1);
+    expect((await runLeadTexts(a.orgId, { now: new Date(`${tomorrow}T20:00:00Z`) })).sent).toBe(1);
     const after = read(await LeadsPage({ searchParams: Promise.resolve({}) }));
     expect(after).toContain('Text follow-up: on · 1 sent.');
     expect(after.match(/Texts: 1 of 2 sent/g)).toHaveLength(1);
     // The email counters count emails only: a text sent is not an email sent.
     expect(after).toContain('0 sent · 0 failed · 0 opted out');
+
+    // "Asked to stop": no automatic message of any kind follows, and the text consent they gave on the form is withdrawn
+    // with it, so it cannot carry over if they become a client.
+    const lead = (await withSystem((db) => db.row<{ id: string }>("select id from public.clients where org_id = $1 and full_name = 'Texted Lead'", [a.orgId])))!.id;
+    const fd = new FormData();
+    fd.set('id', lead);
+    await leadAskedToStopAction(fd);
+    expect(await withSystem((db) => db.row('select (outreach_opt_out_at is not null) as stopped from public.clients where id = $1', [lead]))).toEqual({ stopped: true });
+    expect(await withSystem((db) => db.rows('select source, revoked_via, (revoked_at is not null) as revoked from public.sms_consents where client_id = $1', [lead]))).toEqual([{ source: 'enquiry_form', revoked_via: 'asked_to_stop', revoked: true }]);
+    expect((await withSystem((db) => db.rows<{ summary: string }>("select summary from public.client_events where client_id = $1 and kind = 'lead_opt_out'", [lead]))).map((e) => e.summary))
+      .toEqual(['Asked not to be contacted automatically (recorded by the team). No automatic email or text follows; their agreement to text messages was withdrawn.']);
+    await withSystem((db) => db.run("update public.lead_outreach set created_at = created_at - interval '4 days', sent_at = sent_at - interval '4 days' where client_id = $1", [lead]));
+    expect((await runLeadTexts(a.orgId, { now: new Date(`${tomorrow}T20:00:00Z`) })).sent).toBe(0);
+    // Pressed again, it records nothing twice.
+    await leadAskedToStopAction(fd);
+    expect(await withSystem((db) => db.row<{ n: number }>("select count(*)::int as n from public.client_events where client_id = $1 and kind = 'lead_opt_out'", [lead]))).toEqual({ n: 1 });
+  });
+
+  it('a workspace that is not approved shows no text box on its form, and the Leads page says why', async () => {
+    const a = await agency('PagesLeadsFresh', { lead_followup_enabled: true, lead_followup_since: new Date(Date.now() - 60_000).toISOString(), lead_mailing_address: ADDRESS, lead_reply_email: REPLY, lead_text_followup: true }, false);
+    signIn(a);
+    const page = read(await LeadsPage({ searchParams: Promise.resolve({}) }));
+    expect(page).toContain('Text follow-up: on, but not running. This workspace has not been approved for automatic outreach yet.');
+    expect(page).toContain('The text box is not shown on your form.');
+    expect(await leadTextsOfferedBySlug(a.slug)).toBe(false);
   });
 });
 
@@ -332,8 +409,17 @@ describe('partner actions, as the forms call them', () => {
     expect(await row(id)).toMatchObject({ business_name: 'Renamed Realty', city: 'Dallas', email: before.email });
     await partnerAskedToStopAction(form({ id }));
     expect(await row(id)).toMatchObject({ status: 'opted_out' });
+    // They asked not to be emailed and then rang up, interested: that can be recorded, and the opt-out stays whatever is pressed.
     await markPartnerAction(form({ id, mark: 'interested' }));
-    expect(await row(id)).toMatchObject({ status: 'opted_out' }); // an opt-out stays whatever is pressed afterwards
+    expect(await row(id)).toMatchObject({ status: 'interested' });
+    expect(await withSystem((db) => db.row('select (opted_out_at is not null) as opted_out from public.partners where id = $1', [id]))).toEqual({ opted_out: true });
+    await markPartnerAction(form({ id, mark: 'bounced' }));
+    expect(await row(id)).toMatchObject({ status: 'interested' }); // "bounced" is about an address that is being written to
+    expect((await runPartnerOutreach(a.orgId, { live: true, send: sendWith(), now: new Date(MON.getTime() + 30 * 86_400_000), partnerId: id })).sent).toBe(0);
+    const page = read(await PartnerPage({ params: Promise.resolve({ id }) }));
+    expect(page).toContain('Interested Opted out of email'); // both are shown: what they said, and that the address is never emailed
+    expect(page).toContain('The address is never emailed again, and this cannot be changed.');
+    expect(page).toContain('Marked as interested. This address opted out of the emails and is still never emailed.');
     // Remove: refused for a partner with history, done (and back to the list) for one nothing was sent to.
     await removePartnerAction(form({ id }));
     expect(await row(id)).not.toBeNull();
@@ -353,11 +439,17 @@ describe('partner actions, as the forms call them', () => {
     expect(await savePartnerOutreachAction(undefined, form({ enabled: 'on' }))).toEqual({ error: expect.stringMatching(/enter your mailing address and a reply email address/) });
     expect(await savePartnerOutreachAction(undefined, form({ enabled: 'on', address: ADDRESS, replyTo: 'not an address' }))).toEqual({ error: expect.stringMatching(/Enter a valid reply email address/) });
     expect(await settings(a)).not.toHaveProperty('partner_outreach_enabled');
-    expect(await savePartnerOutreachAction(undefined, form({ enabled: 'on', ai: 'on', address: `  ${ADDRESS}  `, replyTo: REPLY.toUpperCase() }))).toEqual({ ok: expect.stringMatching(/^Saved\. The sequence is on/) });
-    expect(await settings(a)).toMatchObject({ partner_outreach_enabled: true, partner_outreach_ai: true, lead_mailing_address: ADDRESS, lead_reply_email: REPLY, lead_followup_enabled: true, lead_followup_since: '2026-01-05T00:00:00.000Z' });
+    // An "AI wording" setting left over from an earlier version is removed when the form is saved, and a forged field cannot set it.
+    await withSystem((db) => db.run("update public.organizations set settings = settings || '{\"partner_outreach_ai\": true}'::jsonb where id = $1", [a.orgId]));
+    expect(await savePartnerOutreachAction(undefined, form({ enabled: 'on', ai: 'on', address: `  ${ADDRESS}  `, replyTo: REPLY.toUpperCase() }))).toEqual({ ok: 'Saved. The sequence is switched on. Partners are emailed by the scheduled runs, on business days, once nothing above is in the way.' });
+    expect(await settings(a)).toMatchObject({ partner_outreach_enabled: true, lead_mailing_address: ADDRESS, lead_reply_email: REPLY, lead_followup_enabled: true, lead_followup_since: '2026-01-05T00:00:00.000Z' });
+    expect(await settings(a)).not.toHaveProperty('partner_outreach_ai');
+    // Saving the switch does not approve anything: that is the operator's, and the form cannot reach it.
+    expect(await savePartnerOutreachAction(undefined, form({ enabled: 'on', address: ADDRESS, replyTo: REPLY, outreach_approved_at: '2020-01-01', approved: 'on' }))).toMatchObject({ ok: expect.stringMatching(/^Saved/) });
+    expect(await withSystem((db) => db.row<{ at: Date }>('select outreach_approved_at as at from public.organizations where id = $1', [a.orgId]))).toEqual({ at: '2025-06-02T15:00:00.000Z' });
     // Switching it off with the fields left blank keeps the addresses the lead follow-up also uses.
     expect(await savePartnerOutreachAction(undefined, form({ address: '', replyTo: '' }))).toEqual({ ok: 'Saved. The sequence is off.' });
-    expect(await settings(a)).toMatchObject({ partner_outreach_enabled: false, partner_outreach_ai: false, lead_mailing_address: ADDRESS, lead_reply_email: REPLY, lead_followup_enabled: true });
+    expect(await settings(a)).toMatchObject({ partner_outreach_enabled: false, lead_mailing_address: ADDRESS, lead_reply_email: REPLY, lead_followup_enabled: true });
     // The lead follow-up form saves its own text switch, and leaves the partner switch alone.
     expect(await saveLeadFollowUpAction(undefined, form({ enabled: 'on', texts: 'on', address: ADDRESS, replyTo: REPLY }))).toMatchObject({ ok: expect.stringMatching(/^Saved/) });
     expect(await settings(a)).toMatchObject({ lead_followup_enabled: true, lead_text_followup: true, lead_followup_since: '2026-01-05T00:00:00.000Z', partner_outreach_enabled: false });

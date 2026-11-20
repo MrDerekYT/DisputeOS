@@ -45,18 +45,25 @@ export async function createDisputeAction(_: ActionState, fd: FormData): Promise
         clientId: zUuid, tradelineId: zUuid.optional().or(z.literal('')), findingId: zUuid.optional().or(z.literal('')), category: z.string().refine((c) => c in CATEGORIES, 'Choose a category'),
         bureau: z.enum(BUREAUS).optional().or(z.literal('')), recipientName: zOpt(160), reason: z.string().trim().min(10, 'Explain the reason (a sentence or two)').max(4000),
         fields: z.union([z.string(), z.array(z.string())]).optional().transform((v) => (v == null ? [] : Array.isArray(v) ? v : [v]).filter((x) => FIELD_OPTIONS.includes(x))),
+        // An account that is not on an imported report, named by hand. Only the last digits are taken: a full account number is never stored.
+        accountName: zOpt(100),
+        accountLast4: z.union([z.string().trim().regex(/^[0-9A-Za-z]{2,4}$/, 'Enter only the last 2 to 4 characters of the account number'), z.literal('')]).optional(),
         makeLetter: zBool,
       }),
       fd,
     );
     const warn = findBlockedClaims(d.reason);
     if (warn.length) throw new UserError(`The reason contains a claim we cannot allow: “${warn[0]!.excerpt}” — ${warn[0]!.why}`);
+    // The company the account is with: typed for a bureau dispute, and for a letter to a creditor or collector the company it goes to.
+    const accountWith = d.accountName || (CATEGORIES[d.category]!.target !== 'bureau' ? d.recipientName : undefined);
+    if (d.accountLast4 && !accountWith) throw new UserError('Enter the name of the creditor or collector the account is with.');
     let newId = '';
     let letterId = '';
     await ctx.tx(async (db) => {
       newId = await createDispute(db, actorOf(ctx), {
         clientId: d.clientId, tradelineId: d.tradelineId || null, findingId: d.findingId || null, category: d.category, reason: d.reason, fields: d.fields,
         bureau: d.bureau || null, recipientName: d.recipientName,
+        itemLabel: !d.tradelineId && accountWith && (d.accountName || d.accountLast4) ? `${accountWith}${d.accountLast4 ? ` ••${d.accountLast4}` : ''}` : undefined,
       });
       if (d.makeLetter) letterId = await draftFirstLetter(db, ctx, d.clientId, newId);
     });

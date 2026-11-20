@@ -83,6 +83,9 @@ Production environment only** (see [Preview deployments](#preview-deployments)).
 | `EMAIL_DRIVER` | `resend` or `disabled` | Type it. See [Email](#email-read-this-before-launch). The default (`log`) is refused in production. | No |
 | `RESEND_API_KEY` | `re_…` | Only with `EMAIL_DRIVER=resend`: your Resend account | **Yes** |
 | `EMAIL_FROM` | `Your Business <no-reply@your-domain.com>` | Only with `EMAIL_DRIVER=resend`: an address on a domain you verified in Resend | No |
+| `OUTREACH_EMAIL_FROM`, `OUTREACH_RESEND_API_KEY` | `Your Business <partners@outreach.your-domain.com>`, `re_…` | Optional, recommended if agencies use the partner email sequence: a separate sending address (own subdomain) and key for it, so cold business email cannot hurt the address that carries password resets | Key: **Yes** |
+| `RESEND_WEBHOOK_SECRET` | `whsec_…` | Optional: the signing secret of a Resend webhook for `email.bounced` and `email.complained` pointing at `/api/webhooks/resend` (docs/INTEGRATIONS.md) | **Yes** |
+| `OUTREACH_PLATFORM_DAILY_EMAILS`, `OUTREACH_PLATFORM_DAILY_TEXTS` | `500`, `300` (the defaults) | Most partner emails and lead follow-up texts the whole deployment sends in 24 hours, across all workspaces. `0` sends none | No |
 
 `REQUIRE_STAFF_MFA` defaults to `false`: two-step verification is optional, and each user can turn it on for their own account. Set it to `true` to make it mandatory for staff, which is recommended once real client data is stored.
 
@@ -147,7 +150,7 @@ The app checks its configuration when a server instance starts and on first use 
      cause and redeploy.
 5. Open `https://<your-app>/api/health`. `{"ok":true}` means the app reached the database and the row-level-security
    role exists. `{"ok":false}` (HTTP 503) means it could not: read the function log.
-6. In Vercel → Settings → Cron Jobs, confirm `/api/jobs/run` is listed (twice: 09:00 and 17:00 UTC).
+6. In Vercel → Settings → Cron Jobs, confirm `/api/jobs/run` is listed (twice: 09:00 and 20:00 UTC).
 
 ### Preview deployments
 
@@ -160,7 +163,7 @@ Still do not give Preview deployments the production database: a preview runs un
 requests fail, which is the safe outcome), switch preview deployments off, or give Preview
 its own Supabase project and its own complete set of variables. A Preview with its own database is not migrated by
 the build: migrate it by hand from your computer with that database's `DATABASE_URL` and `DATABASE_CA_CERT`, the same
-way as the command in step 7 but ending in `npm run db:migrate`.
+way as the command in step 8 but ending in `npm run db:migrate`.
 
 ## 6. Create the first owner account
 
@@ -175,7 +178,24 @@ Sign-up is open: anyone who knows the address can create their own, separate wor
 other's data (PostgreSQL row-level security), but if you do not want strangers creating workspaces on your deployment,
 that needs a code change; there is no switch for it today.
 
-## 7. Grant AI credits
+## 7. Approve a workspace for outreach (only if it will email partners or text leads)
+
+A workspace can switch on the email sequence to referral partners and the follow-up texts to leads, but nothing is sent
+until you, the operator, have approved it. Sign-up is open, and every workspace sends through your one email service
+and your one text number, so look at the workspace first: a real business, a name that is its own, a partner list it
+compiled itself. Then, from your own computer:
+
+```bash
+DATABASE_URL='postgresql://postgres.<ref>:<password>@aws-0-<region>.pooler.supabase.com:6543/postgres' \
+DATABASE_CA_CERT="$(cat prod-ca-2021.crt)" \
+npm run outreach:approve -- <workspace-slug>            # or: ... -- <workspace-slug> --revoke
+```
+
+The approval is for the business name shown; if the workspace is renamed, nothing is sent until you approve it again.
+A newly approved workspace sends at most 10 partner emails a day for its first 14 days. Lead follow-up emails (a reply
+to a person's own enquiry) and client updates do not need this approval. Details: docs/INTEGRATIONS.md.
+
+## 8. Grant AI credits
 
 AI wording is optional and metered. With `AI_PROVIDER=rules` (the default) nothing needs credits. If you connect an AI
 provider, add credits to a workspace from your own computer, with the repository checked out and `npm install` done:
@@ -191,7 +211,7 @@ The workspace slug is the `org=` part of the client-portal sign-in link shown in
 adds one row to the credit ledger and one to the audit log and prints the new balance. It takes no payment; no payment
 processor is connected.
 
-## 8. Known limits on Vercel
+## 9. Known limits on Vercel
 
 ### Upload size: 4 MB
 Vercel refuses any request body over about 4.5 MB before the app sees it, and the browser shows a generic failure. So
@@ -249,8 +269,11 @@ The webhook only works on the production domain; preview deployments have a diff
 not match there and the request is refused.
 
 ### Scheduled jobs: twice a day
-`vercel.json` asks Vercel to call `GET /api/jobs/run` every day at 09:00 and at 17:00 UTC. The second run exists for
-text messages: 09:00 UTC is night-time across the US, when texts are held, so they need a daytime run to go out. Vercel sends
+`vercel.json` asks Vercel to call `GET /api/jobs/run` every day at 09:00 and at 20:00 UTC. The second run exists for
+text messages: 09:00 UTC is night-time across the US, when texts are held, so they need a daytime run to go out, and
+20:00 UTC is the one hour that is daytime from Puerto Rico to Hawaii (3 or 4 p.m. Eastern, 10 a.m. in Honolulu). It was
+17:00 UTC before, which is 7 a.m. in Hawaii and 8 a.m. in Alaska. A run stops starting new work after 40 seconds, so it
+always finishes inside the route's 60; organizations it did not reach come first in the next run. Vercel sends
 `Authorization: Bearer <CRON_SECRET>` using the project's `CRON_SECRET` variable, and the route refuses anything else
 (404 when no secret is configured, 401 when it does not match). Each schedule is daily because Vercel's Hobby plan only
 accepts cron jobs that run once a day, and may run them at any point within the hour. Consequences: automations that

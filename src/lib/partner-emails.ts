@@ -203,12 +203,12 @@ const FOOTER: Record<PartnerLang, [string, string, string]> = {
   en: [
     'This is a business solicitation from {org}. You are receiving it because {org} added this address to its list of business contacts.',
     'Stop these emails: {optOut}',
-    'A reply reaches our team, but it does not stop these emails by itself. The link above does, at once.',
+    'A reply reaches our team, but it does not stop these emails by itself. The link above does: it opens a page with one button, and pressing it stops them for good.',
   ],
   es: [
     'Este mensaje es una oferta comercial de {org}. Usted lo recibe porque {org} agregó esta dirección a su lista de contactos de negocios.',
     'Dejar de recibir estos correos: {optOut}',
-    'Una respuesta llega a nuestro equipo, pero por sí sola no detiene estos correos. El enlace anterior sí, de inmediato.',
+    'Una respuesta llega a nuestro equipo, pero por sí sola no detiene estos correos. El enlace anterior sí: abre una página con un solo botón, y al pulsarlo se detienen de forma permanente.',
   ],
 };
 

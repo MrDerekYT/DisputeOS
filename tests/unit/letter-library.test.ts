@@ -209,7 +209,8 @@ describe('letter library', () => {
     // prepared by a credit repair organization, so the letter must not claim it.
     const text = body('creditor_direct_dispute');
     expect(text).not.toMatch(/623|1681s-2|U\.S\.C\.|Fair Credit Reporting Act|investigat/i);
-    expect(text).toContain('Re: Information you report about my account — Acme Bank ••1234');
+    expect(text).toContain('Re: Information you report about my account — Acme Bank, account ending 1234\n');
+    expect(text).toContain('Account: Acme Bank, account ending 1234\n');
     expect(text).toContain('I ask that you check it against your account records.');
     expect(text).toContain('Please review your account records and the information I have provided, and let me know in writing what you find.');
     expect(templateByKey('creditor_dispute_en')!.name).not.toMatch(/623|Direct dispute/);
@@ -220,7 +221,7 @@ describe('letter library', () => {
     const r = render('follow_up_no_response', (c) => ({ ...c, facts: { ...c.facts, dueOn: '2026-10-31' }, dispute: { ...c.dispute!, round: 2, submitted_at: '2026-10-01', prior_submitted_at: '2026-08-03', response_at: null } }));
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    expect(r.body).toContain('Re: Status of my dispute dated October 1, 2026 — Acme Bank ••1234 (Experian)');
+    expect(r.body).toContain('Re: Status of my dispute dated October 1, 2026 — Acme Bank, account ending 1234\n');
     expect(r.body).toContain('On October 1, 2026 I sent you a dispute about the item above.');
     expect(r.body).not.toContain('August 3, 2026');
     // The re-dispute is the one letter that names the earlier round.
@@ -272,12 +273,14 @@ describe('letter library', () => {
     const say = (category: string, fields: string[]) => { const r = render('inaccurate_history_dates', (c) => ({ ...c, dispute: { ...c.dispute!, category, fields } })); return r.ok ? r.body : ''; };
     const dates = say('incorrect_dates', ['Dates']);
     expect(dates).toContain('about the dates reported for the account below.');
+    expect(dates).toContain('Re: Dispute of the dates reported — Acme Bank, account ending 1234\n'); // the subject line names the same thing
     expect(dates).toContain('Please conduct a reasonable reinvestigation of the dates reported for this account,');
     expect(dates).not.toMatch(/payment history and dates|the payment history reported/);
     expect(say('incorrect_dates', [])).toContain('about the dates reported for the account below.');
     expect(say('incorrect_payment_history', ['Payment history'])).toContain('about the payment history reported for the account below.');
     expect(say('incorrect_payment_history', [])).not.toContain('dates reported');
     expect(say('incorrect_payment_history', ['Payment history', 'Dates'])).toContain('about the payment history and dates reported for the account below.');
+    expect(say('incorrect_payment_history', ['Payment history'])).toContain('Re: Dispute of the payment history reported — Acme Bank, account ending 1234\n');
     // Ticked fields win over the category: a "dates" dispute with the payment history ticked disputes that.
     expect(say('incorrect_dates', ['Payment history'])).toContain('about the payment history reported for the account below.');
     // Picked by hand for a dispute that names neither: neither is asserted.
@@ -429,6 +432,33 @@ describe('the reason is the client’s own facts', () => {
       expect(findBlockedClaims(text), category).toEqual([]);
     }
     expect(draftReason({ category: 'not_mine', ...tl })).toMatch(/^I do not recognize Acme Bank \(account ending 1234\)\./);
+  });
+
+  it('a drafted reason states what the reports show, and nothing they do not: no difference without two values, no empty brackets', () => {
+    const rep = (bureau: 'experian' | 'equifax' | 'transunion', field: string, value: string) => ({ bureau, field, value, source: 'reported' as const });
+    // Two bureaus report different balances: the reason says so, with both figures.
+    expect(draftReason({ category: 'incorrect_balance', ...tl, evidence: [rep('experian', 'Balance', '$1,200.00'), rep('equifax', 'Balance', '$900.00'), rep('transunion', 'Balance', '$1,200.00')] }))
+      .toBe('The balance reported for Acme Bank (account ending 1234) differs between the credit reporting agencies (Experian reports $1,200.00; Equifax reports $900.00; TransUnion reports $1,200.00). I am asking that the balance be verified with the furnisher and corrected if it is not accurate.');
+    // One bureau, or several that agree: the reported figure is stated, and no difference is claimed.
+    expect(draftReason({ category: 'incorrect_balance', ...tl, evidence: [rep('experian', 'Balance', '$980.00')] }))
+      .toBe('My Experian credit report shows a balance of $980.00 for Acme Bank (account ending 1234). I am asking that the balance be verified with the furnisher and corrected if it is not accurate.');
+    expect(draftReason({ category: 'incorrect_balance', ...tl, evidence: [rep('experian', 'Balance', '$450.00'), rep('equifax', 'Balance', '$450.00'), rep('transunion', 'Balance', '$450.00')] }))
+      .toMatch(/^My Experian, Equifax and TransUnion credit reports show a balance of \$450\.00 for Acme Bank/);
+    expect(draftReason({ category: 'incorrect_balance', ...tl, evidence: [rep('experian', 'Balance', '$450.00'), rep('equifax', 'Balance', '$450.00')] })).toMatch(/^My Experian and Equifax credit reports show a balance of/);
+    // The reported date of first delinquency is stated as it is; whether the period has ended is the letter's to work out.
+    expect(draftReason({ category: 'obsolete', ...tl, evidence: [rep('experian', 'Date of first delinquency', 'February 14, 2016')] }))
+      .toBe('My Experian credit report shows a date of first delinquency of February 14, 2016 for Acme Bank (account ending 1234), and the item is still in my file. Please verify that date with the furnisher.');
+    // With nothing from a report, no sentence has an empty bracket, a "see enclosed" or a claim that the bureaus differ.
+    for (const category of ['incorrect_balance', 'incorrect_status', 'incorrect_dates', 'duplicate', 'obsolete', 'incorrect_payment_history', 'other']) {
+      const bare = draftReason({ category, ...tl });
+      expect(bare, category).not.toMatch(/\(\)|see enclosed|differs between|do not match across|not consistent across|more than seven years/);
+      expect(bare, category).toContain('Acme Bank (account ending 1234)');
+      expect(bare, category).toMatch(/verif/i);
+    }
+    expect(draftReason({ category: 'incorrect_dates', ...tl, evidence: [rep('experian', 'Date opened', 'July 15, 2020'), rep('transunion', 'Date opened', 'August 1, 2020')] }))
+      .toMatch(/^The dates reported for Acme Bank \(account ending 1234\) \(Experian reports July 15, 2020; TransUnion reports August 1, 2020\) do not match across the credit reporting agencies\./);
+    expect(draftReason({ category: 'incorrect_dates', ...tl, evidence: [rep('experian', 'Date opened', 'July 15, 2020'), rep('equifax', 'Date opened', 'July 15, 2020')] }))
+      .toMatch(/^Please verify the dates reported for Acme Bank \(account ending 1234\) \(Experian reports July 15, 2020; Equifax reports July 15, 2020\), including the date of first delinquency/);
   });
 
   it('naming the account is not a reason: its own name and number never make a stock sentence concrete', () => {

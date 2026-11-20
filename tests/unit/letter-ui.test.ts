@@ -63,23 +63,32 @@ describe('letter tailoring screens render what the rules decided, and nothing el
     expect(html(createElement(TemplatePicker, { selected: 'bureau_dispute_en', own: [] }))).not.toContain('ecommended');
   });
 
-  it('picker: a letter that does not fit the linked dispute is shown greyed out with the reason and cannot be picked', () => {
+  it('picker: a letter that does not fit the linked dispute cannot be picked; it is folded away with its reason, so the list stays short', () => {
     const elsewhere = 'This dispute goes to a credit bureau, and this letter is written for a debt collector.';
     const out = html(createElement(TemplatePicker, {
-      selected: 'inaccurate_balance_en', own: [],
-      unavailable: { identity_theft_block_en: 'This dispute is not entered as identity theft.', validation_request_en: elsewhere, collector_communication_en: elsewhere },
+      selected: 'inaccurate_balance_en', own: [], advice: { value: 'inaccurate_balance_en', item: 'Acme Bank ••1234 (Experian)', reason: REC.reason, missing: [] },
+      unavailable: { identity_theft_block_en: 'This dispute is not entered as identity theft.', outdated_item_en: 'There is no reporting period to state.', validation_request_en: elsewhere, collector_communication_en: elsewhere },
     }));
-    // One row inside a group that otherwise fits: disabled, with why.
-    expect(out).toMatch(/<input[^>]*disabled=""[^>]*value="identity_theft_block_en"|<input[^>]*value="identity_theft_block_en"[^>]*disabled=""/);
-    expect(out).toContain('Not for this dispute. This dispute is not entered as identity theft.');
-    // A whole group ruled out for one reason is said once, with no rows to click.
+    // Not a row, not a radio button: named under its group, with why.
+    for (const key of ['identity_theft_block_en', 'outdated_item_en', 'validation_request_en', 'collector_communication_en']) expect(out).not.toContain(`value="${key}"`);
+    expect(out).toContain('<summary class="w-fit cursor-pointer rounded-md text-[0.8125rem] text-muted hover:text-ink">2 more that do not fit this dispute</summary>');
+    expect(out).toMatch(/Identity theft block request\.<\/span> This dispute is not entered as identity theft\./);
+    expect(out).toMatch(/Outdated item\.<\/span> There is no reporting period to state\./);
+    // A whole group ruled out for one reason is one line at the end, said once.
+    expect(out).toContain('Not for this dispute: letters to a debt collector</summary>');
     expect(out.match(/written for a debt collector/g)).toHaveLength(1);
-    expect(out).not.toContain('value="validation_request_en"');
-    expect(out).not.toContain('value="collector_communication_en"');
-    // Everything else is still offered, and the selected letter is still checked.
-    expect(out.match(/type="radio"/g)!.length).toBe(17);
+    expect(out).not.toContain('<legend class="mb-1.5 text-[0.8125rem] font-medium text-muted">To a debt collector</legend>');
+    // Everything else is still offered, none of it disabled, and the selected letter is still checked.
+    expect(out.match(/type="radio"/g)!.length).toBe(15);
+    expect(out).not.toContain('disabled');
     expect(out.match(/<input[^>]*checked=""[^>]*>/g)).toEqual([expect.stringContaining('value="inaccurate_balance_en"')]);
-    expect(out.match(/disabled=""/g)).toHaveLength(1);
+    expect(out.match(/data-unavailable=""/g)).toHaveLength(3);
+    // One letter folded away reads in the singular.
+    const one = html(createElement(TemplatePicker, { selected: 'bureau_dispute_en', own: [], advice: { value: null, item: 'x', reason: 'y', missing: [] }, unavailable: { outdated_item_en: 'No date.' } }));
+    expect(one).toContain('>1 more that does not fit this dispute</summary>');
+    // A letter that was selected but does not fit is not left checked anywhere.
+    const gone = html(createElement(TemplatePicker, { selected: 'outdated_item_en', own: [], unavailable: { outdated_item_en: 'No date.' } }));
+    expect(gone.match(/checked=""/g)).toBeNull();
   });
 
   it('the agency setting says what it costs and that a person still approves', () => {

@@ -85,9 +85,11 @@ Settings → Integrations labels every integration by what happens **in the conf
 
 ## Referral partners and lead text follow-up
 
-Code: `src/lib/partner-emails.ts` (wording, timing, the familiarity check), `src/lib/partner-import.ts` (reading a list),
-`src/lib/partner-outreach.ts` (sending, opt-out), `src/lib/partners.ts` (what staff record), `src/lib/lead-texts.ts` and
-`src/lib/lead-outreach.ts` (lead texts), the pages under `/app/partners`, migration `0028_partner_outreach.sql`.
+Code: `src/lib/partner-emails.ts` (wording, timing), `src/lib/partner-import.ts` (reading a list),
+`src/lib/partner-outreach.ts` (sending, opt-out, bounces), `src/lib/outreach-approval.ts` (the operator's approval),
+`src/lib/partners.ts` (what staff record), `src/lib/lead-texts.ts`, `src/lib/lead-outreach.ts` and `src/lib/us-phone.ts`
+(lead texts), the pages under `/app/partners`, `/unsubscribe/partner/<token>`, `/api/unsubscribe/partner/<token>` and
+`/api/webhooks/resend`, migration `0028_partner_outreach.sql`.
 
 **Who is on the list.** Businesses that can refer clients (real estate agents, loan officers, mortgage brokers, car
 dealerships, tax preparers, property managers), added by the agency itself: one at a time, or as a list pasted or
@@ -104,46 +106,106 @@ the agency's published website when there is one. Every email says it is a busin
 shows the agency's name and postal address and carries a one-click opt-out link (CAN-SPAM, 15 U.S.C. § 7704). Subject
 lines name the agency and say what the email is. All of it passes the marketing claims guard.
 
-**What has to be true before anything goes out.** An owner or admin switched the sequence on (Partners page; off by
-default); the mailing address and reply address are saved (the same two the lead follow-up uses); email is really
-connected; and the agency's own name does not read as a prohibited claim. Then the scheduled job sends with **no
-approval of each message**: on business days in the workspace's time zone, at most 10 per run and 40 per agency in any 24
-hours, each (partner, step) once. A step is claimed through a unique key before the email is handed over, under a
-per-agency lock that also makes the 24-hour limit exact when runs overlap. A run spends at most about 20 seconds on one
-agency; what is left goes out with the next run. With the two runs a day scheduled in `vercel.json` that is at most 20
-emails a day (one of them in the early morning, US time); schedule more runs during the day to reach the limit.
+**What has to be true before anything goes out.** The platform operator has approved the workspace for outreach (see
+"Operator approval" below); an owner or admin switched the sequence on (Partners page; off by default); the mailing
+address and reply address are saved (the same two the lead follow-up uses); email is really connected; and the agency's
+own name does not read as a prohibited claim, carry a web address or run past 80 characters (it is in every subject and
+From line). Then the scheduled job sends with **no approval of each message**: on business days in the workspace's time
+zone, at most 10 per run and 40 per agency in any 24 hours (10 during the first 14 days after approval), and at most
+`OUTREACH_PLATFORM_DAILY_EMAILS` (default 500) across every workspace of the deployment. Each (partner, step) goes once.
+A step is claimed through a unique key before the email is handed over, under one lock for the deployment that makes
+all of these limits exact when runs overlap. With the two runs a day scheduled in `vercel.json` that is at most 20
+emails a day per agency (one run is in the early morning, US time); schedule more runs during the day to reach the limit.
 
-**When it stops.** The opt-out link (at once, and for good: the database refuses to undo it, to change the address, or
-to add that address to the agency's list again); staff recording a reply, "interested", "not interested" or a bounce; a
-manual pause; and a message the email service refuses (that partner stops until someone presses "Try again", three
-attempts at most). Two refusals in a row mean the sending side is probably broken, so the whole sequence then holds for
-24 hours, or until someone presses "Try again" on one of them, and the owners and admins get an in-app notification
-with the reason: a domain that is not verified stops two partners, not the list. A send whose result was never
-recorded is never repeated.
+**The wording is fixed.** No model writes any part of a partner email. An earlier option to let an AI provider reword
+the connecting sentences was removed: its only safeguard on free text was a list of phrases, which can always be worded
+around, and nobody read the result before it was sent. The setting `partner_outreach_ai` is no longer read and is
+deleted when the Partners form is saved. The checks that were written for it (`acceptPersonalised` and
+`findFamiliarityClaims` in `src/lib/partner-emails.ts`) are kept, with their tests, for a future version in which a
+person approves each reworded email; the sender does not import them.
 
-**Replies and bounces are not read.** A reply goes to the agency's reply address and a bounce shows in the email
-service's own dashboard; neither reaches this app (there is no inbound-email or bounce webhook). Staff record them on
-the partner's page. A mail security scanner that opens the opt-out link counts as an opt-out: it errs towards stopping.
+**Operator approval.** Sign-up is open and unverified, and every workspace sends through the deployment's one email
+service and one text number. So nothing unattended (partner emails, lead follow-up texts) goes out for a workspace until
+a person at the operator has looked at it and run
 
-**Optional AI wording** (off by default; 1 credit per email it rewords; introduction and follow-up only). It goes
-through the same protected rewriting as letters (`rewriteSafely`): every sentence that names the agency, the reader or
-the place, or says what the agency does or cannot promise, is hidden from the model and put back unchanged; the model
-is told only the partner's category and place and one line of the agency's own website text. The result must also keep
-its paragraphs, stay under the length cap, link nowhere new, pass the marketing claims guard and say nothing about the
-reader that is not on file ("I saw your recent listing…", "as we discussed", praise, a mutual contact, a track record).
-Otherwise the standard wording is sent and the credit is returned. The footer never reaches the model. Tested against a
-fake provider only.
+    npm run outreach:approve -- <org-slug>          # approve under the business name it has now
+    npm run outreach:approve -- <org-slug> --revoke # withdraw
+
+The approval is two columns on `organizations` (`outreach_approved_at`, `outreach_approved_name`; migration 0028) that
+no tenant request can write. It is for the business name the workspace had at that moment: after a rename nothing is
+sent until it is approved again. What to look at before approving: is it a real credit repair business, is the name its
+own (the code refuses a name with a link in it; it cannot tell that "Wells Fargo Home Mortgage" is not theirs), and
+where does its partner list come from. The Partners and Leads pages tell the agency plainly when it is waiting for this.
+
+**When it stops.** An opt-out (at once, and for good: the database refuses to undo it, to change the address, or to add
+that address to the agency's list again); staff recording a reply, "interested", "not interested" or a bounce; a manual
+pause; and a message the email service refuses (that partner stops until someone presses "Try again", three attempts
+at most). Two refusals in a row mean the sending side is probably broken, so the whole sequence then holds for 24
+hours, or until someone presses "Try again" on one of them, and the owners and admins get an in-app notification with
+the reason: a domain that is not verified stops two partners, not the list. A send whose result was never recorded is
+never repeated.
+
+**How a partner opts out.** The link in every email opens a page that asks "Stop emails from <agency>?" with one
+button; pressing it is the opt-out, with no sign-in. Opening the page changes nothing, because mail security gateways
+fetch the links in incoming mail: if a fetch were the opt-out, the first email would opt out every partner behind such
+a gateway for good. Every email also carries `List-Unsubscribe` and `List-Unsubscribe-Post: List-Unsubscribe=One-Click`
+(RFC 8058), pointing at `POST /api/unsubscribe/partner/<token>`, so the "unsubscribe" button of a mail program does the
+same. An opt-out goes on one list for the whole deployment, read by normalised address (lower case, without a "+tag",
+and for Gmail without dots): an address that stopped these emails is not written to through another workspace or as
+`dana+1@` either. Staff can still record that an opted-out partner replied or is interested (they may telephone); that
+sends nothing and does not lift the stop.
+
+**Bounces and complaints.** A reply goes to the agency's reply address; this app does not read that mailbox, so staff
+record replies on the partner's page. Bounces and spam complaints can be reported by the email service: add a webhook
+in Resend for `email.bounced` and `email.complained` pointing at `POST /api/webhooks/resend`, and put its signing
+secret in `RESEND_WEBHOOK_SECRET` (the route answers 404 until then, and trusts a request only when its Svix signature
+verifies; `src/lib/resend-webhook.ts`). A bounce stops that partner; a complaint opts the address out for good. With
+three or more bounces since the workspace was approved, and more than one in ten of what was sent, the whole sequence
+holds until the list is cleaned and the operator approves the workspace again. Without the webhook, staff press
+"Bounced" themselves, and the same hold applies. **Not verified:** the webhook is written to Resend's and Svix's
+published documentation and tested against signatures computed the same way; it has not received a live event.
+
+**A separate sending address (recommended).** Set `OUTREACH_EMAIL_FROM` (an address on its own subdomain, for example
+`partners@outreach.yourdomain.com`) and `OUTREACH_RESEND_API_KEY`, and partner emails leave through them instead of
+`EMAIL_FROM` and `RESEND_API_KEY`, so unsolicited business email cannot hurt the reputation of the address that
+carries password resets, invitations and client updates. Unset, they share the main address.
 
 **Referred by.** A client can be linked to the partner who sent them (client page → Referred by); each partner shows
 how many clients are linked.
 
-**Text follow-up to leads.** Off by default, with its own switch on the Leads page. When it is on and a text service is
-connected, the public enquiry forms (`/start/<slug>` and the agency website) show a second box for text messages:
-unticked, optional and worded on its own. Ticking it stores a consent in `sms_consents` with source `enquiry_form`: the
-exact wording shown, the number, the time, the IP address and the browser. Only such a lead is texted: a welcome text
-and one follow-up three days later, to that number, outside quiet hours, naming the agency and ending with STOP and
-HELP. No tick means email only, and a consent recorded by staff or given in the portal (for file updates) never unlocks
-these texts. STOP withdraws the consent, and the public form cannot switch texts back on for a number that replied STOP.
+**Text follow-up to leads.** Off by default, with its own switch on the Leads page, and effective only once the
+operator has approved the workspace (above). When it is on and a text service is connected, the public enquiry forms
+(`/start/<slug>` and the agency website) show a second box for text messages: unticked, optional and worded on its own.
+Ticking it stores a consent in `sms_consents` with source `enquiry_form`: the exact wording shown, the number, the
+time, the IP address and the browser. Only such a lead is texted: a welcome text and one follow-up three days later, to
+that number, naming the agency and ending with STOP and HELP. No tick means email only, and a consent recorded by staff
+or given in the portal (for file updates) never unlocks these texts.
+
+What keeps the public form from being a way to text anyone:
+
+- **US numbers only.** The number has to be a "+1" number whose area code belongs to a state, DC or Puerto Rico
+  (`src/lib/us-phone.ts`). Another country, Canada, the Caribbean, toll-free, 900 and 976 numbers are refused with a
+  message that asks for a US mobile number. The area-code list is an allowlist written from the numbering plan as known
+  in 2026; **it was not checked against NANPA's published list from the build environment**, so compare it with
+  nationalnanpa.com before relying on it. A code missing from it only means that number gets no text. Guam, the Northern
+  Marianas, American Samoa and the US Virgin Islands are not texted.
+- **The person's own hours.** These are marketing texts, so they go out between 9:00 and 20:00 only, judged in the
+  workspace's zone, in Eastern and Pacific, and in the zones of the state the number's area code belongs to. A text
+  held for the night goes out with the 20:00 UTC run, which is inside that window in every US time zone.
+- **Limits.** One text consent per number per agency; at most 40 lead texts per agency and
+  `OUTREACH_PLATFORM_DAILY_TEXTS` (default 300) for the deployment in any 24 hours, counted under a lock when a text is
+  claimed.
+- **The business name.** It starts every text, so a name that carries a web address sends nothing.
+- **Stopping.** STOP withdraws the consent for good. "Asked to stop" on a lead does the same (and ends the emails), so
+  the consent cannot carry over if the lead becomes a client. Neither the public form nor staff can switch texts back
+  on for such a number; only the person can, signed in to the portal. A consent staff switched off is not brought back
+  by the form either.
+- **Replies and delivery reports.** A reply goes to the record of the workspace that texted the number last, counts as
+  "replied" and ends the automatic follow-up there. When that cannot be told (the same person agreed to texts from two
+  workspaces and neither was texted more recently), each record is told that a reply arrived and texts to it pause, but
+  the wording is shown to neither; the message itself is kept with no workspace and counted in the job's result. A
+  carrier failure report marks the step failed, so no second text goes to a number that does not take them.
+
 Have your attorney review the consent wording, and note that a carrier registration made for account notifications
 (A2P 10DLC) does not cover marketing follow-up: the campaign has to describe this use.
 
@@ -190,7 +252,8 @@ both applied (11 a.m. to 9 p.m. Eastern). The state must be a two-letter postal 
 **When it is sent.** Right after the request that caused it has finished (Next.js `after`), or by the scheduled job
 (`/api/jobs/run`) for anything still queued, including texts held overnight and the “window passed” event, which only
 the scheduled job detects. The job must therefore run at least once during the day; `vercel.json` schedules it at
-09:00 and 17:00 UTC.
+09:00 and 20:00 UTC. 09:00 UTC is night across the US, so texts go out with the 20:00 UTC run (3 or 4 p.m. Eastern,
+noon or 1 p.m. Pacific, 10 a.m. in Hawaii).
 
 **What is recorded.** Each attempt is a row in `client_updates` and a message on the client's Messages tab with its
 channel, status and the provider's id. A failure is saved as failed with the reason and listed under Settings → Client
@@ -311,7 +374,7 @@ Call it every 15–60 minutes from your host's scheduler.
 AI wording is metered so the platform operator can charge for it. Nothing about AI is free.
 
 - **Prices** (one place: `AI_COSTS` in `src/lib/ai/credits.ts`): letter wording suggestion 5, client progress note polish 2,
-  credit guide answer worded by AI 1, partner email reworded by AI 1. These are credits, not money; what a credit costs is the operator's decision and is
+  credit guide answer worded by AI 1. These are credits, not money; what a credit costs is the operator's decision and is
   not stored in the app.
 - **When credits are taken.** At the moment the model is called, and only kept if an AI result passes the safety checks and
   is returned. If the provider fails, or its output is discarded, the same amount is written back as a `refund` row that

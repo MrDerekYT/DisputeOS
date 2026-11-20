@@ -332,14 +332,19 @@ export async function recordSmsStatus(sid: string, status: string, errorCode?: s
  *    whose consent is in force for exactly this number; if that is still more than one, to the one this deployment
  *    texted most recently, whatever the text was (a client update or a follow-up to their enquiry). A record that
  *    merely carries the number, or once had a consent, cannot pull the message away from the client who is actually
- *    being texted. When even that does not decide it (two workspaces texted the same person at the same time, or
- *    neither text was recorded), the reply is filed on EVERY record that holds a consent in force for the number:
- *    each of those workspaces was told it may text this person, and a reply nobody can see would leave the follow-up
- *    running. Only when no record holds a consent is it kept unmatched, never guessed; rows with no workspace are
+ *    being texted. When even that does not decide it (two records were texted at the same time, or neither text was
+ *    recorded), the reply is filed on EVERY record that holds a consent in force for the number: a reply nobody can
+ *    see would leave the follow-up running. Records of one workspace get the message itself. Records of different
+ *    workspaces get a note that a reply arrived (SHARED_REPLY_NOTE) and not its wording: the person wrote to one
+ *    business, and what they wrote is not shown to another. The message itself is then kept with no workspace, for
+ *    the operator. Only when no record holds a consent is nothing filed, never guessed; rows with no workspace are
  *    counted in the scheduled job's result (unmatchedInboundCount) so they are not lost.
  *    A matched free-text reply stays unreviewed: texts to that client pause until staff have read it (it may be a
  *    request to stop in the client's own words).
  */
+/** What each workspace sees when a free-text reply could not be told apart between records of different workspaces. */
+export const SHARED_REPLY_NOTE = 'A reply arrived by text from this number. The number is also on file with another business that uses this service, and it could not be told which one the reply was for, so its wording is not shown here. Texts to this number are paused. Call or email the person to ask what they need.';
+
 export async function recordInboundSms(m: { sid: string; from: string; to?: string | null; body: string; optOutType?: string | null }): Promise<InboundResult> {
   const from = toE164(m.from);
   const kind = classifyInbound(m.body, m.optOutType);
@@ -387,20 +392,24 @@ export async function recordInboundSms(m: { sid: string; from: string; to?: stri
       } else targets = pool;
     }
     const orgs = [...new Set(candidates.map((c) => c.org_id))];
-    const first = targets[0] ?? null;
+    // A free-text reply that could belong to records of more than one workspace: each is told a reply arrived, none is
+    // shown its wording, and the message itself stays with no workspace (the row the provider's id is on).
+    const shared = kind === 'message' && new Set(targets.map((t) => t.org_id)).size > 1;
+    const first = shared ? null : targets[0] ?? null;
+    const shown = shared ? SHARED_REPLY_NOTE : body;
     // A keyword reply needs no reading. A free-text one stays unreviewed until a person has read it.
     await db.run('update public.sms_inbound set org_id = $2, client_id = $3, reviewed_at = case when $3::uuid is null or $4 then null else now() end where id = $1',
       [row.id, first?.org_id ?? (orgs.length === 1 ? orgs[0]! : null), first?.id ?? null, kind === 'message']);
     for (const [i, t] of targets.entries()) {
       // Filed on more than one record: each gets its own row to review (the first keeps the provider's id, which is what makes a retried webhook a no-op).
-      if (i > 0) {
+      if (i > 0 || shared) {
         await db.run(
           `insert into public.sms_inbound (provider_ref, org_id, client_id, from_phone, to_phone, kind, body, reviewed_at) values ($1, $2, $3, $4, $5, $6, $7, case when $8 then null else now() end)
-           on conflict (provider_ref) do nothing`, [`${m.sid.slice(0, 64)}:${i + 1}`, t.org_id, t.id, (from ?? m.from).slice(0, 30), m.to?.slice(0, 40) ?? null, kind, body, kind === 'message']);
+           on conflict (provider_ref) do nothing`, [`${m.sid.slice(0, 64)}:${i + 1}`, t.org_id, t.id, (from ?? m.from).slice(0, 30), m.to?.slice(0, 40) ?? null, kind, shown, kind === 'message']);
       }
       await db.run(
         "insert into public.communications (org_id, client_id, direction, channel, body, status, provider_ref) values ($1, $2, 'inbound', 'sms', $3, 'received', $4)",
-        [t.org_id, t.id, body.trim() || '(empty message)', m.sid.slice(0, 64)]);
+        [t.org_id, t.id, shown.trim() || '(empty message)', m.sid.slice(0, 64)]);
       if (kind === 'start') {
         await db.run("insert into public.client_events (org_id, client_id, kind, summary) values ($1, $2, 'sms_consent', 'Client replied START by text. Texts stay off until they turn them on again in the portal.')", [t.org_id, t.id]);
       }

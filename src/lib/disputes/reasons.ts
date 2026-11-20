@@ -36,7 +36,18 @@ export const REASON_PROMPT: Record<string, string> = {
 export const reasonIsClientsOwn = (category: string) => category in REASON_PROMPT;
 
 const who = (i: ReasonInput) => `${i.creditor}${i.last4 ? ` (account ending ${i.last4})` : ''}`;
-const list = (ev: Evidence[] = []) => ev.filter((e) => e.source === 'reported' && e.bureau).map((e) => `${BUREAU_LABEL[e.bureau!]} reports ${e.value}`).join('; ');
+const reported = (ev: Evidence[] = []) => ev.filter((e) => e.source === 'reported' && e.bureau);
+const list = (ev: Evidence[] = []) => reported(ev).map((e) => `${BUREAU_LABEL[e.bureau!]} reports ${e.value}`).join('; ');
+/** True when the bureaus in the evidence report different values: only then does a reason say that they differ. */
+const differs = (ev: Evidence[] = []) => new Set(reported(ev).map((e) => e.value.trim().toLowerCase())).size > 1;
+/**
+ * "My Experian credit report shows", "My Experian and Equifax credit reports show". Said this way, and not "Experian
+ * reports", because the sentence usually goes in a letter to that same bureau.
+ */
+const reportsShow = (ev: Evidence[]) => {
+  const names = [...new Set(reported(ev).map((e) => BUREAU_LABEL[e.bureau!]))];
+  return names.length > 1 ? `My ${names.slice(0, -1).join(', ')} and ${names.at(-1)} credit reports show` : `My ${names[0]} credit report shows`;
+};
 
 /** The drafted reason for a category, or '' when the reason has to be the client's own words (reasonIsClientsOwn). */
 export function draftReason(i: ReasonInput): string {
@@ -45,16 +56,26 @@ export function draftReason(i: ReasonInput): string {
   const base = ((): string => {
     switch (i.category) {
       case 'incorrect_balance':
-        return `The balance reported for ${who(i)} differs between the credit reporting agencies (${list(ev)}). I am asking that the balance be verified with the furnisher and corrected if it is not accurate.`;
+        // Stated as the reports show it: a difference only when there is one, the reported figure when there is no
+        // other to compare it with, and nothing in brackets when no report value was passed in.
+        if (differs(ev)) return `The balance reported for ${who(i)} differs between the credit reporting agencies (${list(ev)}). I am asking that the balance be verified with the furnisher and corrected if it is not accurate.`;
+        if (reported(ev).length) return `${reportsShow(ev)} a balance of ${reported(ev)[0]!.value} for ${who(i)}. I am asking that the balance be verified with the furnisher and corrected if it is not accurate.`;
+        return `I am asking that the balance reported for ${who(i)} be verified with the furnisher and corrected if it is not accurate.`;
       case 'incorrect_status':
-        return `The account or payment status reported for ${who(i)} is not consistent across the credit reporting agencies (${list(ev)}). Please verify the status with the furnisher and correct it if needed.`;
+        if (differs(ev)) return `The account or payment status reported for ${who(i)} is not consistent across the credit reporting agencies (${list(ev)}). Please verify the status with the furnisher and correct it if needed.`;
+        return `Please verify the account and payment status reported for ${who(i)}${reported(ev).length ? ` (${list(ev)})` : ''} with the furnisher and correct it if needed.`;
       case 'incorrect_dates':
-        return `The dates reported for ${who(i)} (${list(ev) || 'see enclosed'}) do not match across the credit reporting agencies. Please verify the dates, including the date of first delinquency, with the furnisher and correct them if needed.`;
+        if (differs(ev)) return `The dates reported for ${who(i)} (${list(ev)}) do not match across the credit reporting agencies. Please verify the dates, including the date of first delinquency, with the furnisher and correct them if needed.`;
+        return `Please verify the dates reported for ${who(i)}${reported(ev).length ? ` (${list(ev)})` : ''}, including the date of first delinquency, with the furnisher and correct them if needed.`;
       case 'duplicate':
-        return `${who(i)} appears to be reported more than once or by more than one company for the same debt (${list(ev) || 'see enclosed'}). Please verify whether these are separate obligations and, if they are the same one, report it once.`;
+        return `${who(i)} appears to be reported more than once or by more than one company for the same debt${reported(ev).length ? ` (${list(ev)})` : ''}. Please verify whether these are separate obligations and, if they are the same one, report it once.`;
       case 'obsolete': {
+        // The reported date is stated as it is. Whether the reporting period has ended is worked out by the letter
+        // itself from the same date (it is not drafted when it has not), and the letter makes the request, so the
+        // reason does not say either a second time.
         const d = ev.find((e) => /first delinquency|date filed/i.test(e.field) && e.source === 'reported');
-        return `${who(i)} is reported with ${d ? `${d.field.toLowerCase()} of ${d.value}` : 'a date'} that is more than seven years ago. Please verify the date and, if the item is past the permitted reporting period, update my file accordingly.`;
+        if (d) return `My ${d.bureau ? `${BUREAU_LABEL[d.bureau]} ` : ''}credit report shows a ${d.field.toLowerCase()} of ${d.value} for ${who(i)}, and the item is still in my file. Please verify that date with the furnisher.`;
+        return `Please verify the date of first delinquency reported for ${who(i)} and, if the item is past the reporting period, update my file accordingly.`;
       }
       case 'not_mine':
         return `I do not recognize ${who(i)}. Please provide verification that this account belongs to me, including the name and address of the furnisher and the account opening documents.`;

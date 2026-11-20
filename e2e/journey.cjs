@@ -29,8 +29,32 @@ async function check(name, fn) {
   try { await fn(); results.push([true, name]); console.log(`  ✓ ${String(step).padStart(2)} ${name}`); }
   catch (e) { await (global.__pages || []).reduce((p, pg, i) => p.then(() => pg.screenshot({ path: `${SHOTS}/FAIL-step${step}-${i}.png`, fullPage: true, caret: 'initial' }).catch(() => {})), Promise.resolve()); results.push([false, name, e.message]); console.log(`  ✗ ${String(step).padStart(2)} ${name}\n      ${String(e.message).split('\n')[0]}`); throw e; }
 }
+/**
+ * Lets the app's own router requests (link prefetches, a soft navigation) finish before this script leaves the page
+ * with a hard navigation. Otherwise Chromium cancels them mid-flight and Next.js logs "Failed to fetch RSC payload ...
+ * Falling back to browser navigation" on a page that is about to be discarded: a console error caused by the script's
+ * own timing, which made a run fail at random. Nothing is filtered out: every console error still fails the run.
+ */
+const inFlight = new WeakMap();
+/** Resolves once no router request has been in flight for `quiet` ms (prefetches are queued, so a single empty moment is not the end). */
+const settle = async (page, ms = 6000, quiet = 250) => {
+  const set = inFlight.get(page);
+  if (!set) return;
+  const until = Date.now() + ms;
+  let idleSince = Date.now();
+  while (Date.now() < until) {
+    if (set.size) idleSince = Date.now();
+    else if (Date.now() - idleSince >= quiet) return;
+    await new Promise((r) => setTimeout(r, 25));
+  }
+};
 const watch = (page, who) => {
-  page.on('console', (m) => { if (m.type() === 'error' && !/Failed to load resource/.test(m.text())) problems.push(`[${who} console] ${page.url()} :: ${(m.text().split('\n').filter((l) => /^\s*[+-]\s/.test(l) || /hydrat/.test(l)).join(' | ')).slice(0, 700)}`); });
+  const set = new Set();
+  inFlight.set(page, set);
+  page.on('request', (r) => { const h = r.headers(); if (h.rsc || h['next-router-prefetch']) set.add(r); });
+  for (const done of ['requestfinished', 'requestfailed']) page.on(done, (r) => set.delete(r));
+  for (const nav of ['goto', 'reload', 'goBack']) { const go = page[nav].bind(page); page[nav] = async (...a) => { await settle(page); return go(...a); }; }
+  page.on('console', (m) => { if (m.type() === 'error' && !/Failed to load resource/.test(m.text())) problems.push(`[${who} console] ${page.url()} :: ${(m.text().split('\n').filter((l) => /^\s*[+-]\s/.test(l) || /hydrat/.test(l)).join(' | ') || m.text().split('\n')[0]).slice(0, 700)}`); });
   page.on('pageerror', (e) => problems.push(`[${who} pageerror] ${page.url()} :: ${String(e).slice(0, 200)}`));
   page.on('response', (r) => { if (r.status() >= 500) problems.push(`[${who} http ${r.status()}] ${r.url()}`); });
 };
@@ -132,6 +156,8 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
       await staff.getByLabel('City').fill('Tampa');
       await staff.getByLabel('State', { exact: true }).fill('FL');
       await staff.getByLabel('ZIP').fill('33602');
+      // A letter to a credit bureau states the date of birth and the last four digits of the SSN (synthetic values).
+      await staff.getByLabel('Date of birth').fill('1985-03-03'); await staff.getByLabel('Social Security number').fill('000-00-4321');
       await staff.check('input[name=consentDisclosure]'); await staff.check('input[name=consentContract]'); await staff.check('input[name=consentAuthorization]');
       await staff.getByLabel('Name the client signed with').fill('E2E Client');
       await staff.getByRole('button', { name: 'Create client' }).click();
@@ -463,6 +489,7 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
     });
 
     await check('client signs out to their agency’s own branded sign-in page', async () => {
+      await settle(client); // signing out leaves the portal for another document
       await client.getByRole('button', { name: 'Sign out' }).click();
       await client.waitForURL(/\/portal\/login\?org=/);
       await expectText(client, `E2E Agency ${uniq}`);
@@ -535,6 +562,7 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
     await check('sign out ends the session; the old session cookie no longer works', async () => {
       const cookies = await staffCtx.cookies();
       const sess = cookies.find((c) => c.name === 'dos_session');
+      await settle(staff); // signing out leaves the app for another document: let the dashboard's link prefetches finish first
       await staff.getByRole('button', { name: 'Sign out' }).first().click();
       await staff.waitForURL('**/login');
       await staffCtx.addCookies([sess]);

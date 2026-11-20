@@ -36,7 +36,7 @@ interface D {
 
 function Transition({ id, to, label, variant = 'primary', confirm, children }: { id: string; to: DisputeStatus; label: string; variant?: 'primary' | 'secondary' | 'danger'; confirm?: string; children?: React.ReactNode }) {
   return (
-    <ActionForm action={transitionAction} className="inline-flex flex-wrap items-end gap-2">
+    <ActionForm action={transitionAction} className="mr-3 inline-flex flex-wrap items-end gap-2">
       <input type="hidden" name="id" value={id} /><input type="hidden" name="to" value={to} />
       {children}
       {confirm ? <ConfirmButton className={`btn-${variant}`} message={confirm}>{label}</ConfirmButton> : <SubmitButton variant={variant}>{label}</SubmitButton>}

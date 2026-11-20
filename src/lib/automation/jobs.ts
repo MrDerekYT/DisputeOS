@@ -1,6 +1,6 @@
 import { refundUnsettled } from '../ai/credits';
 import { withSystem, type Db } from '../db';
-import { runLeadOutreach, runLeadTexts } from '../lead-outreach';
+import { runLeadOutreach, runLeadTexts, TEXT_STEPS_SQL } from '../lead-outreach';
 import { runPartnerOutreach } from '../partner-outreach';
 import { runClientUpdateJobs, unmatchedInboundCount } from '../client-updates/service';
 import { runSweeps, type SweepSummary } from './engine';
@@ -12,7 +12,7 @@ export interface JobsResult {
   clientUpdates: number;
   /** Organizations whose reminders, lead emails and client updates were not reached before the time ran out. They come first in the next run. */
   notReached: number;
-  /** True when the outreach pass (lead texts, partner emails) stopped before every organization had its turn. The next run starts further on. */
+  /** True when the outreach pass (lead texts, partner emails) stopped before every organization had its turn. Those left out come first in the next run. */
   outreachCutShort: boolean;
   /** Inbound texts that belong to no workspace and nobody has reviewed (last 30 days). */ unmatchedInboundTexts: number;
   aiRefunds: number; cleaned: Record<string, number>; failed: { orgId: string; error: string }[];
@@ -32,9 +32,10 @@ export const JOBS_DEADLINE_MS = 40_000;
  * Two passes, in that order, so that outreach can never hold up what a client or a lead is waiting for:
  *   1. every organization's deadline sweeps, lead follow-up emails and client updates;
  *   2. then outreach: follow-up texts to leads and the email sequence to referral partners.
- * Both passes start at a different organization each run (the hour of the run picks it), so when a run does run out
- * of time it is not the same organizations that go without every time. A pass stops starting work at the deadline;
- * what was not reached is counted in the result and comes earlier in the next run.
+ * Each pass takes the organizations in the order of who has waited longest: pass 1 by when their scheduled work last
+ * ran (never, first), pass 2 by when their outreach last went out. So when a run does run out of time, it is never
+ * the same organizations that go without: whoever was left out is first in the next run. A pass stops starting work
+ * at the deadline, and what was not reached is counted in the result.
  *
  * - Each organization runs in its own transaction, so one organization's failure cannot stop or roll back another's.
  * - Safe to retry: automation runs are unique per (automation, subject, cooldown bucket), so running this twice
@@ -53,11 +54,15 @@ export async function runScheduledJobs(opts: {
   /** Tests only: how long the run may keep starting work (default JOBS_DEADLINE_MS). */ deadlineMs?: number;
 } = {}): Promise<JobsResult> {
   const sweep = opts.sweep ?? runSweeps;
-  const listed = await withSystem((db) => db.rows<{ id: string }>(
-    "select id from public.organizations where status = 'active' and ($1::uuid[] is null or id = any($1)) order by created_at", [opts.onlyOrgIds ?? null]));
-  // A different starting point each run: the hour since the epoch, so runs at 09:00 and 20:00 UTC never share one.
-  const offset = listed.length ? Math.floor(Date.now() / 3_600_000) % listed.length : 0;
-  const orgs = [...listed.slice(offset), ...listed.slice(0, offset)];
+  const listed = await withSystem((db) => db.rows<{ id: string; last_run: string | null; last_outreach: string | null }>(
+    `select o.id,
+            (select max(j.started_at) from public.job_runs j where j.org_id = o.id) as last_run,
+            greatest((select max(p.claimed_at) from public.partner_outreach p where p.org_id = o.id),
+                     (select max(l.created_at) from public.lead_outreach l where l.org_id = o.id and l.step in (${TEXT_STEPS_SQL}))) as last_outreach
+       from public.organizations o where o.status = 'active' and ($1::uuid[] is null or o.id = any($1)) order by o.created_at`, [opts.onlyOrgIds ?? null]));
+  // Longest wait first (the sort is stable, so organizations that tie stay in the order they were created).
+  const longestWaitFirst = (key: 'last_run' | 'last_outreach') => [...listed].sort((a, b) => (a[key] ? new Date(a[key]!).getTime() : 0) - (b[key] ? new Date(b[key]!).getTime() : 0));
+  const orgs = longestWaitFirst('last_run');
   const stopAt = Date.now() + (opts.deadlineMs ?? JOBS_DEADLINE_MS);
   const out: JobsResult = { orgs: orgs.length, failures: 0, executed: 0, pending: 0, skipped: 0, leadEmails: 0, leadTexts: 0, partnerEmails: 0, clientUpdates: 0, notReached: 0, outreachCutShort: false, unmatchedInboundTexts: 0, aiRefunds: 0, cleaned: {}, failed: [] };
 
@@ -99,7 +104,7 @@ export async function runScheduledJobs(opts: {
   if (out.notReached) console.warn(`[jobs] ${out.notReached} organization(s) were not reached before the time ran out; they come first in a later run`);
 
   // ---- Pass 2: outreach. Only with time left, one organization after another, each stopping at the same deadline.
-  for (const o of orgs) {
+  for (const o of longestWaitFirst('last_outreach')) {
     if (Date.now() > stopAt) { out.outreachCutShort = true; break; }
     if (failedHere.has(o.id)) continue;
     const started = new Date();

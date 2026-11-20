@@ -22,6 +22,10 @@ export function editableWording(body: string, protectedTerms: string[] = []): st
 }
 
 const SALUTATION = /^\s*(re:|to whom it may concern|dear\b)/i;
+/** A date written out ("March 3, 2026", "March 2026"): a fact of the file, like any other number. */
+const LONG_DATE = /\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+(?:\d{1,2},\s*)?\d{4}\b/g;
+/** The three bureaus by their short names: who a letter goes to is not wording. */
+const BUREAU_NAME = /\b(?:Experian|Equifax|Trans\s?Union)\b/gi;
 const SIGN_OFF = /^\s*(sincerely|respectfully|regards|kind regards|best regards|yours truly|yours sincerely|cordially|thank you),?\s*$/i;
 const LIST_LINE = /^\s*(?:[-•*]|\d+[.)])\s+/;
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -29,7 +33,8 @@ const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 /**
  * The wording a letter could share with another client's letter: its text from the "Re:" line (or the salutation) to
  * the sign-off, without `own.lines` (the reason as this letter states it), without list lines, and with `own.names`
- * (the client, the recipient, the creditor, the item) and every number blanked. Template paragraphs are kept.
+ * (the client, the recipient, the creditor, the item), the bureaus' names, written-out dates and every number blanked.
+ * Template paragraphs are kept.
  */
 export function comparableWording(body: string, own: { names?: (string | null | undefined)[]; lines?: string[] } = {}): string {
   const all = body.replace(/\r\n?/g, '\n').split('\n');
@@ -41,7 +46,7 @@ export function comparableWording(body: string, own: { names?: (string | null | 
   const blank = names.length ? new RegExp(names.map(escapeRe).join('|'), 'gi') : null;
   return all.slice(from < 0 ? 0 : from, to < 0 ? undefined : to)
     .filter((l) => l.trim() && !skip.has(l.trim()) && !LIST_LINE.test(l))
-    .map((l) => (blank ? l.replace(blank, ' ') : l).replace(/\S*\d\S*/g, ' ').replace(/\s+/g, ' ').trim())
+    .map((l) => (blank ? l.replace(blank, ' ') : l).replace(LONG_DATE, ' ').replace(BUREAU_NAME, ' ').replace(/\S*\d\S*/g, ' ').replace(/\s+/g, ' ').trim())
     .filter(Boolean).join('\n');
 }
 
@@ -68,14 +73,16 @@ export interface WordingOverlap {
 /** Below this many shingles there is too little wording for a comparison to mean anything. */
 export const OVERLAP_MIN_SHINGLES = 5;
 /**
- * Where the levels start, as a share of the letter's own wording. Measured on the built-in letters: two clients'
- * letters from the same template share 0.8 to 0.95 of it whatever their facts ("high"); two different bureau letters
- * share the frame, the request and the enclosure sentence, about 0.65 to 0.75 ("medium", or "high" for near-twins such
- * as balance and status); a letter to a creditor shares about 0.3 with a bureau letter and a goodwill request next to
- * nothing ("low"), as does a letter mostly in the client's own words.
+ * Where the levels start, as a share of the letter's own wording: "high" is more than half of it, "medium" a quarter or
+ * more. Plain fractions on purpose, so the words beside the badge are simply true ("most of this letter", "part of
+ * it"). Measured on the built-in letters, across every voice: two clients' letters from the same template share 0.57
+ * to 1.0 of it whatever their facts (the spread comes from the optional sentences: an earlier round, enclosures,
+ * identity documents), and two different letters to a bureau share 0.52 to 0.94, because the frame, the request and
+ * the enclosure sentence are the same: both read "high". A letter to a creditor shares 0.2 to 0.5 with a bureau letter
+ * ("medium" or "low"), and a goodwill request, or a letter mostly in the client's own words, next to nothing ("low").
  */
-export const OVERLAP_MEDIUM = 0.4;
-export const OVERLAP_HIGH = 0.75;
+export const OVERLAP_MEDIUM = 0.25;
+export const OVERLAP_HIGH = 0.5;
 
 /**
  * The overlap between one letter's wording and the closest of the others. Null when there is nothing to compare: no

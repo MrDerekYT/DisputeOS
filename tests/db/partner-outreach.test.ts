@@ -1,20 +1,25 @@
+import { execFileSync } from 'node:child_process';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import type { AiProvider } from '@/lib/ai/provider';
 import { getBalance } from '@/lib/ai/credits';
 import { runScheduledJobs } from '@/lib/automation/jobs';
 import { addDays, isBusinessDay } from '@/lib/business-days';
-import { grantSmsConsent, recordInboundSms } from '@/lib/client-updates/service';
+import { grantSmsConsent, queueClientUpdate, recordInboundSms, recordSmsStatus, revokeSmsConsent } from '@/lib/client-updates/service';
 import { resetEnvCache } from '@/lib/env';
-import { leadTextsOffered, runLeadOutreach, runLeadTexts } from '@/lib/lead-outreach';
-import { LEAD_SMS_NEEDS_PHONE, leadSmsConsentText, leadText } from '@/lib/lead-texts';
+import { leadTextsOffered, leadTextsOfferedBySlug, runLeadOutreach, runLeadTexts } from '@/lib/lead-outreach';
+import { LEAD_SMS_NEEDS_PHONE, LEAD_TEXT_DAILY_CAP, leadSmsConsentText, leadText } from '@/lib/lead-texts';
 import { submitLead } from '@/lib/leads';
 import { sentLog, type Email, type SendResult } from '@/lib/mailer';
 import { PARTNER_CATEGORIES, PARTNER_DAILY_CAP, PARTNER_PER_RUN_CAP, partnerEmail } from '@/lib/partner-emails';
 import { parsePartnerList, type PartnerInput } from '@/lib/partner-import';
-import { addPartners, optOutPartner, partnerFailureHold, partnerOptOutToken, runPartnerOutreach, type PartnerRunOptions } from '@/lib/partner-outreach';
+import { NEW_WORKSPACE_DAILY_EMAILS } from '@/lib/outreach-approval';
+import {
+  addPartners, optOutPartner, PARTNER_BOUNCE_MIN, partnerBounceHealth, partnerFailureHold, partnerOneClickUrl, partnerOptOutInfo, partnerOptOutToken, recordPartnerDeliveryEvent, runPartnerOutreach,
+  type PartnerRunOptions,
+} from '@/lib/partner-outreach';
 import { markPartner, partnerAskedToStop, pausePartner, removePartner, resumePartner, retryPartnerStep, setReferredBy, updatePartner } from '@/lib/partners';
-import { smsLog, type Sms, type SmsResult } from '@/lib/sms';
-import { addClient, addMember, addPortalClient, asUser, closePool, makeOrg, testIp, uniq, withSystem, type TestOrg } from './helpers';
+import { smsLog, toUsE164, type Sms, type SmsResult } from '@/lib/sms';
+import { usAreaCodeState } from '@/lib/us-phone';
+import { addClient, addMember, addPortalClient, approveOutreach, asUser, closePool, makeOrg, testIp, uniq, withSystem, type TestOrg } from './helpers';
 
 const saved = { ...process.env };
 // The development stand-in for texts: written to a log, nothing leaves the machine. Partners must never appear in it.
@@ -25,11 +30,19 @@ const ADDRESS = '12 Main St, Austin, TX 78701';
 const REPLY = 'hello@agency.example.test';
 type Agency = TestOrg & { slug: string; name: string };
 
-async function agency(label: string, settings: Record<string, unknown> | null = null): Promise<Agency> {
+/** When the workspaces below were approved for outreach: long before any date a test runs at, so the first-two-weeks rate does not apply. */
+const APPROVED = new Date('2025-06-02T15:00:00Z');
+/**
+ * A workspace, approved for outreach by the operator as `npm run outreach:approve` does it (pass `approved: false` for
+ * one that nobody has looked at yet, which is what sign-up gives).
+ */
+async function agency(label: string, settings: Record<string, unknown> | null = null, approved = true): Promise<Agency> {
   const o = await makeOrg(label);
   const r = (await withSystem((db) => db.row<{ slug: string; name: string }>('update public.organizations set settings = settings || $2::jsonb where id = $1 returning slug, name', [o.orgId, JSON.stringify(settings ?? {})])))!;
+  if (approved) await approveOutreach(o.orgId, APPROVED);
   return { ...o, ...r };
 }
+const approval = (orgId: string) => withSystem((db) => db.row<{ at: Date | null; name: string | null }>('select outreach_approved_at as at, outreach_approved_name as name from public.organizations where id = $1', [orgId]));
 /** The partner sequence switched on, with the postal and reply addresses saved. */
 const ON = { partner_outreach_enabled: true, lead_mailing_address: ADDRESS, lead_reply_email: REPLY };
 
@@ -95,7 +108,16 @@ describe('referral partners: the automatic email sequence', () => {
     await withSystem((db) => db.run("update public.organizations set name = 'Guaranteed Credit Fixers' where id = $1", [a.orgId]));
     await add(a, [P()]);
     const box = outbox();
+    // Renamed after it was approved: the approval was for the old name.
+    expect((await runPartnerOutreach(a.orgId, { ...box.opts, now: MON })).blocked).toBe('not_approved');
+    // Even approved under the new name, a name that makes a promise sends nothing.
+    await approveOutreach(a.orgId, APPROVED);
     expect((await runPartnerOutreach(a.orgId, { ...box.opts, now: MON })).blocked).toBe('name_claim');
+    // And so does a name that carries a web address, or is long enough to be a message of its own.
+    for (const name of ['URGENT - your escrow account is on hold, sign in at secure-escrow-verify.example', `${'Very Long Credit Company Name '.repeat(3)}LLC`]) {
+      await withSystem((db) => db.run('update public.organizations set name = $2, outreach_approved_name = $2 where id = $1', [a.orgId, name]));
+      expect((await runPartnerOutreach(a.orgId, { ...box.opts, now: MON })).blocked, name).toBe('name_claim');
+    }
     expect(box.mails).toEqual([]);
   });
 
@@ -119,6 +141,10 @@ describe('referral partners: the automatic email sequence', () => {
     expect(intro.subject).toBe(`Introducing ${a.name}: credit report help for your buyers`);
     expect(intro.replyTo).toBe(REPLY);
     expect(intro.fromName).toBe(a.name); // the From line names the agency, not the platform
+    // It leaves on the outreach stream, with the headers a mail program's own "unsubscribe" button acts on.
+    expect(intro.stream).toBe('outreach');
+    expect(intro.headers).toEqual({ 'List-Unsubscribe': `<http://localhost:3000/api/unsubscribe/partner/${partnerOptOutToken(en)}>`, 'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click' });
+    expect(partnerOneClickUrl(en)).toBe(`http://localhost:3000/api/unsubscribe/partner/${partnerOptOutToken(en)}`);
     expect(intro.text).toContain('Hello Dana,');
     expect(intro.text).toContain('you work as a real estate agent in Austin, TX.');
     expect(intro.text).toContain(`This is a business solicitation from ${a.name}.`);
@@ -234,8 +260,12 @@ describe('referral partners: the automatic email sequence', () => {
     // Staff cannot lift it, and neither can the system connection.
     await expect(asUser(a.ownerId, (db) => db.run("update public.partners set status = 'new', opted_out_at = null where id = $1", [id]))).rejects.toThrow(/opt-out cannot be undone/);
     await expect(withSystem((db) => db.run("update public.partners set status = 'in_sequence', opted_out_at = null where id = $1", [id]))).rejects.toThrow(/opt-out cannot be undone/);
-    await expect(asUser(a.ownerId, (db) => db.run("update public.partners set status = 'interested' where id = $1", [id]))).rejects.toThrow(/partners_opt_out_check|opt-out cannot be undone/);
-    expect(await asUser(a.ownerId, (db) => markPartner(db, actor(a), id, 'interested'))).toBe(false);
+    for (const status of ['finished', 'bounced', 'new']) {
+      await expect(asUser(a.ownerId, (db) => db.run('update public.partners set status = $2 where id = $1', [id, status])), status).rejects.toThrow(/opt-out cannot be undone/);
+    }
+    // The stamp is what stops the emails, and it cannot exist without having been set: a row cannot be "opted out" with no date.
+    await expect(withSystem((db) => db.run("insert into public.partners (org_id, business_name, category, email, attested_by, status) values ($1, 'X Co', 'other', $2, $3, 'opted_out')", [a.orgId, `x-${uniq()}@biz.example.test`, a.ownerId]))).rejects.toThrow(/partners_opt_out_check/);
+    expect(await asUser(a.ownerId, (db) => markPartner(db, actor(a), id, 'bounced'))).toBe(false);
     // The address the opt-out belongs to cannot be changed, for any partner.
     await expect(asUser(a.ownerId, (db) => db.run("update public.partners set email = 'someone-else@biz.example.test' where id = $1", [id]))).rejects.toThrow(/email address of a partner cannot be changed/);
     // It cannot be removed and added again, and adding the address again is simply skipped.
@@ -338,11 +368,11 @@ describe('referral partners: the automatic email sequence', () => {
     let seen: { step: string; status: string }[] = [];
     const send = async (): Promise<SendResult> => {
       seen = (await steps(id)).map(({ step, status }) => ({ step, status })); // a separate connection can already see the committed claim
-      // …and can change the partner: neither the row nor the per-agency lock is held while the email service is called.
+      // …and can change the partner: neither the row nor the claim lock is held while the email service is called.
       await withSystem(async (db) => {
         await db.run("set local lock_timeout = '2s'");
         await db.run('update public.partners set source_note = $2 where id = $1', [id, 'edited during the send']);
-        await db.run('select pg_advisory_xact_lock(hashtextextended($1, 28))', [`partner-outreach:${a.orgId}`]);
+        await db.run('select pg_advisory_xact_lock(hashtextextended($1, 28))', ['partner-outreach']);
       });
       return { ok: true, provider: 'resend', providerRef: 'r1' };
     };
@@ -432,9 +462,10 @@ describe('referral partners: the automatic email sequence', () => {
     expect((await runPartnerOutreach(b.orgId, { ...box.opts, now: MON })).blocked).toBe('off');
     expect(box.mails).toHaveLength(1);
     expect(await steps(pb)).toEqual([]);
-    // An opt-out from agency A's email only ever stops agency A.
+    // An opt-out is recorded on agency A's partner. Agency B's record is not touched by it...
     await optOutPartner(partnerOptOutToken(pa));
     expect(await partner(pb)).toMatchObject({ status: 'new', opted_out: false });
+    // ...but B cannot email that address either (see "one opt-out list for the whole service" below).
     // Row-level security: B's owner sees none of A's partners, log or timeline, and cannot write to them.
     expect(await asUser(b.ownerId, (db) => db.rows('select id from public.partners where id = $1', [pa]))).toEqual([]);
     expect(await asUser(b.ownerId, (db) => db.rows('select id from public.partner_outreach where partner_id = $1', [pa]))).toEqual([]);
@@ -540,76 +571,268 @@ describe('referred by', () => {
   });
 });
 
-describe('optional AI wording for partner emails', () => {
-  const grant = (orgId: string, n: number) => withSystem((db) => db.run("insert into public.ai_credit_ledger (org_id, delta, reason, note) values ($1, $2, 'grant', 'test')", [orgId, n]));
-  /** A model that edits the text it is shown and returns it. */
-  const model = (edit: (masked: string) => string): AiProvider & { calls: number } => {
-    const p = { name: 'fake', calls: 0, async complete(req: { user: string }) { p.calls++; return edit(/<source>\n([\s\S]*)\n<\/source>/.exec(req.user)![1]!); } };
-    return p;
-  };
-  const polite = model((m) => m.replace('Thank you for your time.', 'Thank you for taking a moment to read this.'));
-  const familiar = model((m) => m.replace('Thank you for your time.', 'I saw your recent listing and wanted to say hello. Thank you for your time.'));
+// ================================================================ the operator's approval, the limits and the opt-out list
+describe('nothing unattended goes out until the operator has approved the workspace', () => {
+  const approveByCommand = (...args: string[]) => execFileSync('node', ['scripts/approve-outreach.mjs', ...args], { env: { ...process.env, APP_ENV: 'test' }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  /** The next business day at 15:00 UTC, in real time: after the approval the command records, and a day partners are emailed. */
+  const nextBusinessDay = (from = new Date(), plus = 1) => { let d = addDays(from.toISOString().slice(0, 10), plus); while (!isBusinessDay(d)) d = addDays(d, 1); return new Date(`${d}T15:00:00Z`); };
 
-  it('is off unless the agency turns it on, costs a credit only when AI wording is sent, and never sends fabricated familiarity', async () => {
-    const a = await agency('PartnersAi', ON);
-    await grant(a.orgId, 3);
+  it('a workspace as sign-up leaves it sends no partner email, whatever it switched on, and cannot approve itself', async () => {
+    const a = await agency('PartnersFresh', ON, false);
+    expect(await approval(a.orgId)).toEqual({ at: null, name: null });
+    const [id] = await add(a, [P()]) as [string];
     const box = outbox();
-    const [off] = await add(a, [P()]) as [string];
-    // Not switched on: the model is never called, whatever is connected.
-    expect((await runPartnerOutreach(a.orgId, { ...box.opts, now: MON, ai: polite })).sent).toBe(1);
-    expect(polite.calls).toBe(0);
-    expect(await steps(off)).toMatchObject([{ ai_used: false }]);
-    expect(await getBalance(a.orgId)).toBe(3);
+    expect(await runPartnerOutreach(a.orgId, { ...box.opts, now: MON })).toEqual({ sent: 0, failed: 0, blocked: 'not_approved', held: null });
+    expect((await runScheduledJobs({ onlyOrgIds: [a.orgId], now: MON })).partnerEmails).toBe(0);
+    // The owner cannot write the approval: those columns are not granted to any tenant request...
+    await expect(asUser(a.ownerId, (db) => db.run('update public.organizations set outreach_approved_at = now(), outreach_approved_name = name where id = $1', [a.orgId]))).rejects.toThrow(/permission denied/);
+    // ...and nothing in the settings an owner can save stands in for it.
+    await asUser(a.ownerId, (db) => db.run(`update public.organizations set settings = settings || '{"outreach_approved_at": "2020-01-01T00:00:00Z", "outreach_approved": true, "outreach_approved_name": "x"}'::jsonb where id = $1`, [a.orgId]));
+    expect((await runPartnerOutreach(a.orgId, { ...box.opts, now: MON })).blocked).toBe('not_approved');
+    expect(box.mails).toEqual([]);
+    expect(await steps(id)).toEqual([]);
+    expect(await approval(a.orgId)).toEqual({ at: null, name: null });
+  });
 
-    await withSystem((db) => db.run("update public.organizations set settings = settings || '{\"partner_outreach_ai\": true}'::jsonb where id = $1", [a.orgId]));
-    // A plain rewording of a connecting sentence is sent, marked as AI, and costs one credit.
-    const [good] = await add(a, [P()]) as [string];
-    expect((await runPartnerOutreach(a.orgId, { ...box.opts, now: MON, ai: polite })).sent).toBe(1);
-    const sent = box.mails.at(-1)!;
-    expect(sent.text).toContain('Thank you for taking a moment to read this.');
-    expect(sent.text).toContain('we cannot promise a result, a particular credit score or a loan approval for anyone');
-    expect(sent.text).toContain(`${a.name} · ${ADDRESS}`);
-    expect(sent.text).toContain(`/unsubscribe/partner/${partnerOptOutToken(good)}`);
-    expect(await steps(good)).toMatchObject([{ status: 'sent', ai_used: true, body: sent.text }]);
-    expect((await events(good)).at(-1)!.summary).toBe('Introduction email sent automatically (connecting sentences reworded by AI)');
-    expect(await getBalance(a.orgId)).toBe(2);
+  it('the operator’s command approves a workspace under its current name, leaves an audit entry, and can withdraw the approval', async () => {
+    const a = await agency('PartnersOperator', ON, false);
+    await add(a, Array.from({ length: NEW_WORKSPACE_DAILY_EMAILS + 4 }, () => P()));
+    const box = outbox();
+    expect(approveByCommand(a.slug)).toContain(`Approved "${a.name}" (${a.slug}) for automatic outreach under that name.`);
+    const given = (await approval(a.orgId))!;
+    expect(given.name).toBe(a.name);
+    expect(Date.now() - new Date(given.at!).getTime()).toBeLessThan(60_000);
+    expect(await count("select count(*)::int as n from public.audit_logs where org_id = $1 and action = 'outreach.approved' and actor_label = 'platform operator (outreach:approve)'", [a.orgId])).toBe(1);
 
-    // "I saw your recent listing…" is discarded: the standard wording goes out and the credit is given back.
-    const [fake] = await add(a, [P()]) as [string];
-    expect((await runPartnerOutreach(a.orgId, { ...box.opts, now: MON, ai: familiar })).sent).toBe(1);
-    expect(familiar.calls).toBe(1);
-    const plain = box.mails.at(-1)!;
-    expect(plain.text).not.toMatch(/listing|I saw/);
-    expect(plain.text).toContain('Thank you for your time.');
-    expect(await steps(fake)).toMatchObject([{ status: 'sent', ai_used: false }]);
-    expect(await getBalance(a.orgId)).toBe(2);
-    expect(await count("select count(*)::int as n from public.ai_credit_ledger where org_id = $1 and feature = 'partner_email' and reason = 'refund'", [a.orgId])).toBe(1);
+    // Newly approved: for its first two weeks the workspace sends a quarter of the usual daily number, so a list that
+    // turns out to be bad shows itself in a few bounces.
+    const day1 = nextBusinessDay();
+    expect(await runPartnerOutreach(a.orgId, { ...box.opts, now: day1 })).toEqual({ sent: NEW_WORKSPACE_DAILY_EMAILS, failed: 0, blocked: null, held: null });
+    expect(await runPartnerOutreach(a.orgId, { ...box.opts, now: day1 })).toEqual({ sent: 0, failed: 0, blocked: null, held: 'daily_cap' });
+    expect(NEW_WORKSPACE_DAILY_EMAILS).toBeLessThan(PARTNER_DAILY_CAP);
+    // The rest wait for another day.
+    expect(await runPartnerOutreach(a.orgId, { ...box.opts, now: nextBusinessDay(day1) })).toEqual({ sent: 4, failed: 0, blocked: null, held: null });
 
-    // With no credits left the model is not called and the standard wording is sent.
-    await withSystem((db) => db.run("insert into public.ai_credit_ledger (org_id, delta, reason, note) values ($1, -2, 'adjust', 'test')", [a.orgId]));
-    const calls = polite.calls;
-    const [broke] = await add(a, [P()]) as [string];
-    expect((await runPartnerOutreach(a.orgId, { ...box.opts, now: MON, ai: polite })).sent).toBe(1);
-    expect(polite.calls).toBe(calls);
-    expect(await steps(broke)).toMatchObject([{ status: 'sent', ai_used: false }]);
-    expect(await getBalance(a.orgId)).toBe(0);
-    // The last note is never sent through the model.
-    await grant(a.orgId, 5);
-    const before = polite.calls;
-    expect((await runPartnerOutreach(a.orgId, { ...box.opts, now: day(4), ai: polite, partnerId: good })).sent).toBe(1);
-    expect(polite.calls).toBe(before + 1);
-    expect((await runPartnerOutreach(a.orgId, { ...box.opts, now: day(11), ai: polite, partnerId: good })).sent).toBe(1);
-    expect(polite.calls).toBe(before + 1);
+    // Renamed after the approval: the name is in every subject and From line, so nothing is sent until it is approved again.
+    const waiting = await add(a, [P()]);
+    await asUser(a.ownerId, (db) => db.run("update public.organizations set name = 'Chase Bank Account Services' where id = $1", [a.orgId]));
+    const later = nextBusinessDay(day1, 3);
+    expect((await runPartnerOutreach(a.orgId, { ...box.opts, now: later })).blocked).toBe('not_approved');
+    expect(await steps(waiting[0]!)).toEqual([]);
+    await asUser(a.ownerId, (db) => db.run('update public.organizations set name = $2 where id = $1', [a.orgId, a.name]));
+    expect((await runPartnerOutreach(a.orgId, { ...box.opts, now: later })).sent).toBe(1); // back under the approved name
+
+    // Withdrawn: nothing more is sent. An unknown workspace changes nothing and says so.
+    expect(approveByCommand(a.slug, '--revoke')).toContain(`Approval withdrawn for "${a.name}"`);
+    expect(await approval(a.orgId)).toEqual({ at: null, name: null });
+    await add(a, [P()]);
+    expect((await runPartnerOutreach(a.orgId, { ...box.opts, now: later })).blocked).toBe('not_approved');
+    expect(() => approveByCommand(`no-such-workspace-${uniq()}`)).toThrow(/Nothing was changed/);
+    expect(() => approveByCommand()).toThrow(/Usage/);
+  });
+
+  it('the whole service sends a bounded number of partner emails in any 24 hours, across every workspace', async () => {
+    const a = await agency('PartnersPlatformCapA', ON);
+    const b = await agency('PartnersPlatformCapB', ON);
+    await add(a, [P(), P(), P()]);
+    await add(b, [P(), P(), P()]);
+    const box = outbox();
+    // What every workspace in this database has already claimed in the window, plus four more.
+    const already = await count("select count(*)::int as n from public.partner_outreach where status in ('sending', 'sent') and claimed_at > $1::timestamptz - interval '24 hours'", [MON]);
+    process.env.OUTREACH_PLATFORM_DAILY_EMAILS = String(already + 4);
+    resetEnvCache();
+    try {
+      expect(await runPartnerOutreach(a.orgId, { ...box.opts, now: MON })).toEqual({ sent: 3, failed: 0, blocked: null, held: null });
+      // The second workspace gets the one that is left; its own limit is nowhere near.
+      expect(await runPartnerOutreach(b.orgId, { ...box.opts, now: MON })).toEqual({ sent: 1, failed: 0, blocked: null, held: 'platform_cap' });
+      expect(await runPartnerOutreach(b.orgId, { ...box.opts, now: MON })).toEqual({ sent: 0, failed: 0, blocked: null, held: 'platform_cap' });
+      expect(box.mails).toHaveLength(4);
+      // Set to zero, the operator has stopped partner email for the whole deployment.
+      process.env.OUTREACH_PLATFORM_DAILY_EMAILS = '0';
+      resetEnvCache();
+      expect(await runPartnerOutreach(b.orgId, { ...box.opts, now: MON })).toMatchObject({ sent: 0, held: 'platform_cap' });
+    } finally { process.env.OUTREACH_PLATFORM_DAILY_EMAILS = saved.OUTREACH_PLATFORM_DAILY_EMAILS; resetEnvCache(); }
+    expect((await runPartnerOutreach(b.orgId, { ...box.opts, now: MON })).sent).toBe(2);
+  });
+
+  it('one opt-out list for the whole service: an address that stopped these emails is not written to through another workspace, or under a +tag', async () => {
+    const a = await agency('PartnersListA', ON);
+    const b = await agency('PartnersListB', ON);
+    const u = uniq();
+    const [pa, ga] = await add(a, [P({ email: `dana@hill-${u}.example` }), P({ email: `dana.hill.${u}@gmail.com` })]) as [string, string];
+    const [same, tagged, gmail, other] = await add(b, [
+      P({ email: `dana@hill-${u}.example` }), P({ email: `dana+spring@hill-${u}.example` }), P({ email: `danahill${u}+work@googlemail.com` }), P({ email: `sam@hill-${u}.example` }),
+    ]) as [string, string, string, string];
+    const box = outbox();
+    expect((await runPartnerOutreach(a.orgId, { ...box.opts, now: MON })).sent).toBe(2);
+    await optOutPartner(partnerOptOutToken(pa));
+    await optOutPartner(partnerOptOutToken(ga));
+
+    // The second workspace has all three on its list, as new partners. Only the address that never opted out is emailed.
+    expect(await runPartnerOutreach(b.orgId, { ...box.opts, now: MON })).toEqual({ sent: 1, failed: 0, blocked: null, held: null });
+    expect(box.mails.slice(2).map((m) => m.to)).toEqual([`sam@hill-${u}.example`]);
+    for (const id of [same, tagged, gmail]) {
+      expect(await steps(id)).toEqual([]);
+      expect(await partner(id)).toMatchObject({ status: 'opted_out', opted_out: true });
+      expect((await events(id)).at(-1)).toEqual({ kind: 'opted_out', summary: 'This address has asked not to receive partner emails sent through this service. No email is sent to it.' });
+    }
+    expect(await partner(other)).toMatchObject({ status: 'in_sequence', opted_out: false });
+    // Whatever day it is, and however often the job runs, they stay off.
+    for (const n of [1, 4, 11]) await runPartnerOutreach(b.orgId, { ...box.opts, now: day(n) });
+    expect(box.mails.filter((m) => /dana|danahill/.test(m.to))).toHaveLength(2); // the two introductions the first workspace sent before the opt-out
+    // The normalisation the list is read by: case, a "+tag", and for Gmail the dots it ignores.
+    const norm = (addr: string) => withSystem((db) => db.row<{ n: string }>('select app.email_norm($1) as n', [addr])).then((r) => r!.n);
+    expect(await norm(' Dana+Spring@Hill.Example ')).toBe('dana@hill.example');
+    expect(await norm('d.a.n.a+x@googlemail.com')).toBe('dana@gmail.com');
+    expect(await norm('dana.hill@outlook.example')).toBe('dana.hill@outlook.example'); // dots matter everywhere else
+  });
+
+  it('opening the opt-out link changes nothing; the button on that page, or the mail program’s one-click request, is the opt-out', async () => {
+    const a = await agency('PartnersLink', ON);
+    const [id, viaHeader] = await add(a, [P({ language: 'es' }), P()]) as [string, string];
+    const box = outbox();
+    expect((await runPartnerOutreach(a.orgId, { ...box.opts, now: MON })).sent).toBe(2);
+    const token = partnerOptOutToken(id);
+
+    // What a mail security gateway does with every link in an incoming email: it fetches it. Three times, here.
+    for (let i = 0; i < 3; i++) expect(await partnerOptOutInfo(token)).toEqual({ orgId: a.orgId, orgName: a.name, lang: 'es', optedOut: false });
+    const { GET, POST } = await import('@/app/api/unsubscribe/partner/[token]/route');
+    const oneClick = (t: string, method: 'GET' | 'POST') => (method === 'GET' ? GET : POST)(
+      new Request(`http://localhost:3000/api/unsubscribe/partner/${t}`, { method, headers: { 'x-forwarded-for': testIp() }, ...(method === 'POST' ? { body: 'List-Unsubscribe=One-Click', headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-forwarded-for': testIp() } } : {}) }),
+      { params: Promise.resolve({ token: t }) });
+    const fetched = await oneClick(partnerOptOutToken(viaHeader), 'GET');
+    expect(fetched.status).toBe(303);
+    expect(fetched.headers.get('location')).toBe(`http://localhost:3000/unsubscribe/partner/${partnerOptOutToken(viaHeader)}`);
+    expect((await oneClick('not-a-token', 'GET')).status).toBe(404);
+    for (const p of [id, viaHeader]) expect(await partner(p)).toMatchObject({ status: 'in_sequence', opted_out: false });
+    expect(await events(id)).toHaveLength(2); // added, email sent: nothing else
+    // So the follow-up still goes out to both.
+    expect((await runPartnerOutreach(a.orgId, { ...box.opts, now: day(4) })).sent).toBe(2);
+
+    // The button on the page (a POST), and the one-click request a mail program sends for the header.
+    expect(await optOutPartner(token)).toEqual({ orgId: a.orgId, orgName: a.name, lang: 'es' });
+    expect(await partnerOptOutInfo(token)).toMatchObject({ optedOut: true });
+    const posted = await oneClick(partnerOptOutToken(viaHeader), 'POST');
+    expect(posted.status).toBe(200);
+    expect(await posted.text()).toBe('You will not receive these emails again.');
+    expect((await oneClick(`${partnerOptOutToken(viaHeader).slice(0, -2)}xx`, 'POST')).status).toBe(404);
+    for (const p of [id, viaHeader]) expect(await partner(p)).toMatchObject({ status: 'opted_out', opted_out: true });
+    expect((await events(viaHeader)).at(-1)).toEqual({ kind: 'opted_out', summary: 'Opted out from an email (the link, or the mail program’s unsubscribe button). No further email is sent to this address.' });
+    expect((await runPartnerOutreach(a.orgId, { ...box.opts, now: day(11) })).sent).toBe(0);
+    expect(box.mails).toHaveLength(4);
+  });
+
+  it('a partner who opted out can still be recorded as having replied or being interested, and is still never emailed', async () => {
+    const a = await agency('PartnersOptedOutReply', ON);
+    const [id, paused] = await add(a, [P(), P()]) as [string, string];
+    const box = outbox();
+    expect((await runPartnerOutreach(a.orgId, { ...box.opts, now: MON })).sent).toBe(2);
+    await optOutPartner(partnerOptOutToken(id));
+    // They opted out of the emails and then telephoned: that is worth recording.
+    expect(await asUser(a.ownerId, (db) => markPartner(db, actor(a), id, 'replied'))).toBe(true);
+    expect(await partner(id)).toMatchObject({ status: 'replied', opted_out: true });
+    expect((await events(id)).at(-1)).toEqual({ kind: 'replied', summary: 'Marked as replied. This address opted out of the emails and is still never emailed.' });
+    expect(await asUser(a.ownerId, (db) => markPartner(db, actor(a), id, 'interested'))).toBe(true);
+    expect(await partner(id)).toMatchObject({ status: 'interested', opted_out: true });
+    // "Bounced" is about an address that is being written to, and no status can put them back in the sequence.
+    expect(await asUser(a.ownerId, (db) => markPartner(db, actor(a), id, 'bounced'))).toBe(false);
+    await expect(asUser(a.ownerId, (db) => db.run("update public.partners set status = 'in_sequence' where id = $1", [id]))).rejects.toThrow(/opt-out cannot be undone/);
+    await expect(withSystem((db) => db.run("update public.partners set status = 'new' where id = $1", [id]))).rejects.toThrow(/opt-out cannot be undone/);
+    await expect(withSystem((db) => db.run("update public.partners set opted_out_at = null where id = $1", [id]))).rejects.toThrow(/opt-out cannot be undone/);
+    expect(await asUser(a.ownerId, (db) => retryPartnerStep(db, actor(a), id))).toBe(false);
+    // A paused partner who opts out is no longer "paused": the opt-out is what stands.
+    await asUser(a.ownerId, (db) => pausePartner(db, actor(a), paused));
+    await optOutPartner(partnerOptOutToken(paused));
+    expect(await partner(paused)).toMatchObject({ status: 'opted_out', paused: false, opted_out: true });
+    for (const n of [4, 11, 30]) expect((await runPartnerOutreach(a.orgId, { ...box.opts, now: day(n) })).sent).toBe(0);
+    expect(box.mails).toHaveLength(2);
+  });
+
+  it('a bounce or a spam complaint reported by the email service is recorded, and a list with too many bounces holds the sequence', async () => {
+    const a = await agency('PartnersBounces', ON);
+    const tag = uniq();
+    const ids = await add(a, Array.from({ length: 12 }, () => P()));
+    const mails: Email[] = [];
+    const send = async (m: Email): Promise<SendResult> => { mails.push(m); return { ok: true, provider: 'resend', providerRef: `re-${tag}-${mails.length}` }; };
+    expect((await runPartnerOutreach(a.orgId, { live: true, send, now: MON })).sent).toBe(PARTNER_PER_RUN_CAP);
+    const refOf = async (to: string) => (await withSystem((db) => db.row<{ ref: string; id: string }>('select o.provider_ref as ref, p.id from public.partner_outreach o join public.partners p on p.id = o.partner_id where p.org_id = $1 and p.email = $2', [a.orgId, to])))!;
+
+    // An id that is not one of this sequence's emails changes nothing.
+    expect(await recordPartnerDeliveryEvent(`re-${tag}-999`, 'bounced')).toBe(false);
+    expect(await recordPartnerDeliveryEvent('', 'complained')).toBe(false);
+    // A spam complaint is an opt-out, for good.
+    const complained = await refOf(mails[0]!.to);
+    expect(await recordPartnerDeliveryEvent(complained.ref, 'complained')).toBe(true);
+    expect(await partner(complained.id)).toMatchObject({ status: 'opted_out', opted_out: true });
+    expect((await events(complained.id)).at(-1)).toEqual({ kind: 'opted_out', summary: 'The recipient marked one of these emails as spam. No email is sent to this address again.' });
+    // A bounce stops that partner, as the "Bounced" button does. Reported twice, it is recorded once.
+    const first = await refOf(mails[1]!.to);
+    expect(await recordPartnerDeliveryEvent(first.ref, 'bounced')).toBe(true);
+    expect(await recordPartnerDeliveryEvent(first.ref, 'bounced')).toBe(true);
+    expect(await partner(first.id)).toMatchObject({ status: 'bounced' });
+    expect((await events(first.id)).filter((e) => e.kind === 'bounced')).toEqual([{ kind: 'bounced', summary: 'The email service reported that an email to this address came back undelivered. No further automatic email is sent.' }]);
+
+    // Two bounces is bad luck; the sequence carries on for everyone else.
+    const second = await refOf(mails[2]!.to);
+    await recordPartnerDeliveryEvent(second.ref, 'bounced');
+    expect(await asUser(a.ownerId, (db) => partnerBounceHealth(db, a.orgId, APPROVED))).toMatchObject({ bounced: 2, hold: false });
+    expect((await runPartnerOutreach(a.orgId, { live: true, send, now: MON })).sent).toBe(2);
+    // A third (one typed in by staff counts the same) is a bad list: nothing more goes out, to anyone on it.
+    const third = ids.find((id) => ![complained.id, first.id, second.id].includes(id))!;
+    await asUser(a.ownerId, (db) => markPartner(db, actor(a), third, 'bounced'));
+    expect(PARTNER_BOUNCE_MIN).toBe(3);
+    expect(await asUser(a.ownerId, (db) => partnerBounceHealth(db, a.orgId, APPROVED))).toMatchObject({ bounced: 3, hold: true });
+    const sentSoFar = mails.length;
+    for (const n of [4, 5, 11]) {
+      const r = await runPartnerOutreach(a.orgId, { live: true, send, now: day(n) });
+      expect(r.sent).toBe(0);
+      if (isBusinessDay(day(n).toISOString().slice(0, 10))) expect(r.held).toBe('bounces');
+    }
+    expect(mails).toHaveLength(sentSoFar);
+    // It stays held until the operator has looked at the list and approved the workspace again, which restarts the count.
+    await approveOutreach(a.orgId, new Date());
+    expect(await asUser(a.ownerId, (db) => partnerBounceHealth(db, a.orgId, new Date()))).toMatchObject({ bounced: 0, hold: false });
+  });
+
+  it('no model writes any of it: the old AI switch is ignored, no credit is spent and the wording is the fixed one', async () => {
+    const a = await agency('PartnersNoAi', { ...ON, partner_outreach_ai: true });
+    await withSystem((db) => db.run("insert into public.ai_credit_ledger (org_id, delta, reason, note) values ($1, 5, 'grant', 'test')", [a.orgId]));
+    // A provider is "connected": anything that still called a model would reach this.
+    const called: string[] = [];
+    vi.stubGlobal('fetch', async (url: string | URL) => { called.push(String(url)); throw new Error(`unexpected request to ${String(url)}`); });
+    Object.assign(process.env, { AI_PROVIDER: 'anthropic', ANTHROPIC_API_KEY: 'sk-ant-test-key-for-vitest' });
+    resetEnvCache();
+    try {
+      const [id] = await add(a, [P()]) as [string];
+      const box = outbox();
+      for (const n of [0, 4, 11]) expect((await runPartnerOutreach(a.orgId, { ...box.opts, now: day(n) })).sent).toBe(1);
+      expect(called).toEqual([]);
+      expect(await getBalance(a.orgId)).toBe(5);
+      expect(await count("select count(*)::int as n from public.ai_credit_ledger where org_id = $1 and reason <> 'grant'", [a.orgId])).toBe(0);
+      const vars = { contactName: 'Dana Whitfield', category: 'real_estate_agent' as const, city: 'Austin', state: 'TX', orgName: a.name, address: ADDRESS, optOutUrl: `http://localhost:3000/unsubscribe/partner/${partnerOptOutToken(id)}`, siteUrl: null };
+      expect(box.mails.map((m) => m.text)).toEqual((['intro', 'followup', 'final'] as const).map((step) => partnerEmail(step, 'en', vars).text));
+      expect(await steps(id)).toMatchObject([{ step: 'intro', ai_used: false }, { step: 'followup', ai_used: false }, { step: 'final', ai_used: false }]);
+      expect((await events(id)).filter((e) => e.kind === 'email_sent').map((e) => e.summary)).toEqual(['Introduction email sent automatically', 'Follow-up email sent automatically', 'Last note email sent automatically']);
+    } finally {
+      vi.unstubAllGlobals();
+      delete process.env.AI_PROVIDER; delete process.env.ANTHROPIC_API_KEY;
+      resetEnvCache();
+    }
   });
 });
 
 // ================================================================ people who asked to be contacted: text follow-up
 describe('lead follow-up by text: only with a text consent from the enquiry form', () => {
-  /** A US mobile number nobody else in the (never truncated) test database has. */
-  const phone = () => `+1${2 + Math.floor(Math.random() * 8)}${String(Math.floor(Math.random() * 100)).padStart(2, '0')}555${String(Math.floor(Math.random() * 10_000)).padStart(4, '0')}`;
-  // Tomorrow, so it is after every enquiry made during the test: midday and the middle of the night in New York.
+  const AREA_CODES = ['212', '216', '303', '305', '312', '314', '404', '412', '415', '503', '512', '602', '615', '617', '702', '704', '713', '801', '816', '919'];
+  /** A US number nobody else in the (never truncated) test database has: a real area code of the 48 states, any exchange, any line. */
+  const phone = (): string => {
+    const n = `+1${AREA_CODES[Math.floor(Math.random() * AREA_CODES.length)]}${2 + Math.floor(Math.random() * 8)}${String(Math.floor(Math.random() * 100)).padStart(2, '0')}${String(Math.floor(Math.random() * 10_000)).padStart(4, '0')}`;
+    return toUsE164(n) ? n : phone();
+  };
+  // Tomorrow, so it is after every enquiry made during the test. 20:00 UTC is the hour the scheduled run texts at: the
+  // afternoon coast to coast, and still morning in Hawaii. 08:00 UTC is the middle of the night everywhere in the country.
   const tomorrow = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
-  const NOON = new Date(`${tomorrow}T17:00:00Z`);
+  const NOON = new Date(`${tomorrow}T20:00:00Z`);
   const NIGHT = new Date(`${tomorrow}T08:00:00Z`);
   const LEADS_ON = () => ({ lead_followup_enabled: true, lead_followup_since: new Date(Date.now() - 60_000).toISOString(), lead_mailing_address: ADDRESS, lead_reply_email: REPLY });
   const TEXTS_ON = () => ({ ...LEADS_ON(), lead_text_followup: true });
@@ -643,11 +866,23 @@ describe('lead follow-up by text: only with a text consent from the enquiry form
     expect((await runLeadTexts(none.orgId, { now: NOON })).blocked).toBe('off');
     expect((await runLeadTexts(emailOnly.orgId, { now: NOON })).blocked).toBe('texts_off');
     expect((await runLeadTexts(on.orgId, { now: NOON })).blocked).toBeNull();
-    expect([leadTextsOffered({}), leadTextsOffered(LEADS_ON()), leadTextsOffered(TEXTS_ON())]).toEqual([false, false, true]);
+    expect(await Promise.all([none, emailOnly, on].map((x) => leadTextsOfferedBySlug(x.slug)))).toEqual([false, false, true]);
+    expect(leadTextsOffered(null)).toBe(false);
+    // A workspace the operator has not approved offers no text box and sends no text, whatever it switched on...
+    const fresh = await agency('LeadTextsFresh', TEXTS_ON(), false);
+    expect(await leadTextsOfferedBySlug(fresh.slug)).toBe(false);
+    expect((await runLeadTexts(fresh.orgId, { now: NOON })).blocked).toBe('not_approved');
+    // ...and neither does one renamed since it was approved, or one whose name would put a web address in every text.
+    const renamed = await agency('LeadTextsRenamed', TEXTS_ON());
+    await withSystem((db) => db.run("update public.organizations set name = 'Chase Fraud Team' where id = $1", [renamed.orgId]));
+    expect((await runLeadTexts(renamed.orgId, { now: NOON })).blocked).toBe('not_approved');
+    await withSystem((db) => db.run("update public.organizations set name = 'Acme chase-verify.example', outreach_approved_name = 'Acme chase-verify.example' where id = $1", [renamed.orgId]));
+    expect((await runLeadTexts(renamed.orgId, { now: NOON })).blocked).toBe('name_link');
+    expect(await leadTextsOfferedBySlug(renamed.slug)).toBe(false);
     // With no text service connected nothing is offered and nothing is sent.
     process.env.SMS_DRIVER = 'disabled'; resetEnvCache();
     try {
-      expect(leadTextsOffered(TEXTS_ON())).toBe(false);
+      expect(await leadTextsOfferedBySlug(on.slug)).toBe(false);
       expect((await runLeadTexts(on.orgId, { now: NOON })).blocked).toBe('sms_not_connected');
     } finally { process.env.SMS_DRIVER = 'log'; resetEnvCache(); }
 
@@ -711,6 +946,23 @@ describe('lead follow-up by text: only with a text consent from the enquiry form
     expect(missing.r).toEqual({ ok: false, error: LEAD_SMS_NEEDS_PHONE.en });
     expect(missing.id).toBe(''); // nothing was created
     expect((await enquire(a, { phone: '555-0134', smsConsent: true }, { shownIn: 'es' })).r).toEqual({ ok: false, error: LEAD_SMS_NEEDS_PHONE.es });
+    // A number in another country, or a "+1" number that is not a US one, is refused before anything is created: the
+    // public form cannot be used to make this service text Cameroon, the UK, Jamaica, Canada or a premium-rate line.
+    for (const abroad of ['+237 6 77 12 34 56', '+44 7911 123456', '+8801712345678', '+1 876 555 1234', '+1 416 555 0134', '(900) 555-1234', '(212) 976-1234']) {
+      const refused = await enquire(a, { phone: abroad, smsConsent: true });
+      expect(refused.r, abroad).toEqual({ ok: false, error: LEAD_SMS_NEEDS_PHONE.en });
+      expect(refused.id, abroad).toBe('');
+    }
+    // Without the text box, the same number is just the phone number on an enquiry: saved, and never texted.
+    const call = await enquire(a, { phone: '+44 7911 123456' });
+    expect(call.r).toEqual({ ok: true });
+    expect(await consent(call.id)).toBeNull();
+    // A consent that reached the ledger some other way for a number that is not a US one still produces no text.
+    const odd = await enquire(a, { phone: '+44 7911 123456' });
+    await withSystem((db) => db.run("insert into public.sms_consents (org_id, client_id, phone, consent_text, source) values ($1, $2, '+447911123456', repeat('y', 30), 'enquiry_form')", [a.orgId, odd.id]));
+    expect(await runLeadTexts(a.orgId, { now: NOON })).toEqual({ sent: 0, failed: 0, waiting: 0, blocked: null });
+    expect(textsTo('+447911123456')).toEqual([]);
+    expect(await log(odd.id)).toEqual([]);
     const number = phone();
     const es = await enquire(a, { phone: `(${number.slice(2, 5)}) ${number.slice(5, 8)}-${number.slice(8)}`, smsConsent: true, language: 'es' }, { shownIn: 'es' });
     expect(es.r).toEqual({ ok: true });
@@ -729,6 +981,22 @@ describe('lead follow-up by text: only with a text consent from the enquiry form
     expect(await runLeadTexts(a.orgId, { now: NIGHT })).toEqual({ sent: 0, failed: 0, waiting: 1, blocked: null });
     expect(textsTo(number)).toEqual([]);
     expect(await log(l.id)).toEqual([]);
+    // Marketing texts keep to 9:00-20:00 where the person may be. 13:30 UTC is 8:30 in New York (too early for a
+    // marketing text, though not for a file update); 17:00 UTC is noon in New York and 9:00 on the Pacific coast.
+    expect((await runLeadTexts(a.orgId, { now: new Date(`${tomorrow}T13:30:00Z`) })).waiting).toBe(1);
+    expect((await runLeadTexts(a.orgId, { now: new Date(`${tomorrow}T12:30:00Z`) })).waiting).toBe(1);
+    // A Hawaii or Alaska number is judged in its own zone as well: at 17:00 UTC it is 7 a.m. in Honolulu and 8 a.m. in
+    // Anchorage, so those two wait, while a number from the 48 states could be texted.
+    const b = await agency('LeadTextsZones', TEXTS_ON());
+    const line = () => String(Math.floor(Math.random() * 10_000)).padStart(4, '0');
+    const [hawaii, alaska, mainland] = [`+1808${2 + Math.floor(Math.random() * 7)}${line().slice(0, 2)}${line()}`, `+1907${2 + Math.floor(Math.random() * 7)}${line().slice(0, 2)}${line()}`, phone()];
+    expect([usAreaCodeState(hawaii), usAreaCodeState(alaska)]).toEqual(['HI', 'AK']);
+    for (const n of [hawaii, alaska, mainland]) expect((await enquire(b, { phone: n, smsConsent: true })).r).toEqual({ ok: true });
+    expect(await runLeadTexts(b.orgId, { now: new Date(`${tomorrow}T17:00:00Z`) })).toEqual({ sent: 1, failed: 0, waiting: 2, blocked: null });
+    expect([textsTo(hawaii), textsTo(alaska), textsTo(mainland).length]).toEqual([[], [], 1]);
+    // At the hour the scheduled run texts (20:00 UTC) it is 10 a.m. in Honolulu and 11 a.m. in Anchorage.
+    expect(await runLeadTexts(b.orgId, { now: NOON })).toEqual({ sent: 2, failed: 0, waiting: 0, blocked: null });
+    expect([textsTo(hawaii).length, textsTo(alaska).length, textsTo(mainland).length]).toEqual([1, 1, 1]);
     const refuse = async (_: Sms): Promise<SmsResult> => ({ ok: false, provider: 'twilio', error: 'Attempt to send to unsubscribed recipient (Twilio error 21610)' });
     expect(await runLeadTexts(a.orgId, { now: NOON, send: refuse })).toEqual({ sent: 0, failed: 1, waiting: 0, blocked: null });
     expect(await log(l.id)).toEqual([{ step: 'text_welcome', status: 'failed' }]);
@@ -807,6 +1075,140 @@ describe('lead follow-up by text: only with a text consent from the enquiry form
     expect(await consent(lb.id)).toBeNull();
     expect(await log(lb.id)).toEqual([]);
   });
+
+  it(`one workspace sends at most ${LEAD_TEXT_DAILY_CAP} lead texts in any 24 hours, however many enquiries arrive and however many runs overlap`, async () => {
+    const a = await agency('LeadTextsCap', TEXTS_ON());
+    const numbers = Array.from({ length: LEAD_TEXT_DAILY_CAP + 3 }, () => phone());
+    for (const n of numbers) expect((await enquire(a, { phone: n, smsConsent: true })).r).toEqual({ ok: true });
+    const burst = await Promise.all([runLeadTexts(a.orgId, { now: NOON }), runLeadTexts(a.orgId, { now: NOON }), runLeadTexts(a.orgId, { now: NOON })]);
+    expect(sum(burst)).toBe(LEAD_TEXT_DAILY_CAP);
+    expect(burst.some((r) => r.held === 'daily_cap')).toBe(true);
+    expect(await runLeadTexts(a.orgId, { now: NOON })).toMatchObject({ sent: 0, failed: 0, held: 'daily_cap' });
+    expect(numbers.filter((n) => textsTo(n).length === 1)).toHaveLength(LEAD_TEXT_DAILY_CAP);
+    expect(numbers.some((n) => textsTo(n).length > 1)).toBe(false); // nobody was texted twice
+    // The three that were left out go out once the earlier ones are more than a day old.
+    await withSystem((db) => db.run("update public.lead_outreach set created_at = created_at - interval '25 hours' where org_id = $1", [a.orgId]));
+    expect(await runLeadTexts(a.orgId, { now: NOON })).toEqual({ sent: 3, failed: 0, waiting: 0, blocked: null });
+    expect(numbers.every((n) => textsTo(n).length === 1)).toBe(true);
+  });
+
+  it('the whole service sends a bounded number of lead texts in any 24 hours, across every workspace', async () => {
+    const a = await agency('LeadTextsPlatformA', TEXTS_ON());
+    const b = await agency('LeadTextsPlatformB', TEXTS_ON());
+    const [a1, a2, b1, b2] = [phone(), phone(), phone(), phone()];
+    for (const [who, n] of [[a, a1], [a, a2], [b, b1], [b, b2]] as const) await enquire(who, { phone: n, smsConsent: true });
+    const already = await count("select count(*)::int as n from public.lead_outreach where step in ('text_welcome', 'text_followup') and status in ('sending', 'sent') and created_at > now() - interval '24 hours'", []);
+    process.env.OUTREACH_PLATFORM_DAILY_TEXTS = String(already + 3);
+    resetEnvCache();
+    try {
+      expect(await runLeadTexts(a.orgId, { now: NOON })).toEqual({ sent: 2, failed: 0, waiting: 0, blocked: null });
+      expect(await runLeadTexts(b.orgId, { now: NOON })).toMatchObject({ sent: 1, failed: 0, held: 'platform_cap' });
+      expect(await runLeadTexts(b.orgId, { now: NOON })).toMatchObject({ sent: 0, held: 'platform_cap' });
+      expect([a1, a2, b1, b2].map((n) => textsTo(n).length).reduce((x, y) => x + y, 0)).toBe(3);
+    } finally { process.env.OUTREACH_PLATFORM_DAILY_TEXTS = saved.OUTREACH_PLATFORM_DAILY_TEXTS; resetEnvCache(); }
+    expect((await runLeadTexts(b.orgId, { now: NOON })).sent).toBe(1);
+  });
+
+  it('a reply to a lead text reaches the workspace that texted last and stops its follow-up; a carrier failure stops the texts to that number', async () => {
+    // The same person sent the enquiry form of two agencies, with the same mobile number, and agreed to texts on both.
+    const a = await agency('LeadTextsReplyA', TEXTS_ON());
+    const b = await agency('LeadTextsReplyB', TEXTS_ON());
+    const number = phone();
+    const la = await enquire(a, { phone: number, smsConsent: true });
+    const lb = await enquire(b, { phone: number, smsConsent: true });
+    const inbound = (clientId: string) => withSystem((db) => db.rows<{ body: string }>("select body from public.communications where client_id = $1 and direction = 'inbound' order by created_at", [clientId])).then((r) => r.map((x) => x.body));
+    expect((await runLeadTexts(b.orgId, { now: NOON })).sent).toBe(1);
+    expect((await runLeadTexts(a.orgId, { now: NOON })).sent).toBe(1);
+    // "You can reply to this text": they do. Agency A texted them last, so the reply is A's.
+    expect(await recordInboundSms({ sid: `SM${uniq()}${uniq()}`, from: number, body: 'After 5pm works for me' })).toEqual({ kind: 'message', matched: 1 });
+    expect(await inbound(la.id)).toEqual(['After 5pm works for me']);
+    expect(await inbound(lb.id)).toEqual([]);
+    for (const l of [la, lb]) await age(a, l.id, 3);
+    await withSystem((db) => db.run("update public.organizations set settings = settings || jsonb_build_object('lead_followup_since', (now() - interval '30 days')::text) where id = $1", [b.orgId]));
+    // A reply is on A's lead: A's automatic text and emails stop, and staff answer. B heard nothing, so its follow-up goes out.
+    expect(await runLeadTexts(a.orgId, { now: NOON })).toEqual({ sent: 0, failed: 0, waiting: 0, blocked: null });
+    const box = emails();
+    expect((await runLeadOutreach(a.orgId, { ...box.opts, clientId: la.id })).sent).toBe(0);
+    expect((await runLeadTexts(b.orgId, { now: NOON })).sent).toBe(1);
+    expect(textsTo(number)).toHaveLength(3);
+
+    // The carrier reports that a welcome text was not delivered: the step is marked failed on the lead's follow-up log,
+    // so no second text is sent to a number that does not take them.
+    const c = await agency('LeadTextsCarrier', TEXTS_ON());
+    const dead = phone();
+    const lc = await enquire(c, { phone: dead, smsConsent: true });
+    const sid = `SM${uniq()}${uniq()}`;
+    const accepted = async (_: Sms): Promise<SmsResult> => ({ ok: true, provider: 'twilio', providerRef: sid });
+    expect(await runLeadTexts(c.orgId, { now: NOON, send: accepted })).toEqual({ sent: 1, failed: 0, waiting: 0, blocked: null });
+    expect(await log(lc.id)).toEqual([{ step: 'text_welcome', status: 'sent' }]);
+    expect(await recordSmsStatus(sid, 'undelivered', '30005')).toEqual({ kind: 'status', matched: 1 });
+    expect(await log(lc.id)).toEqual([{ step: 'text_welcome', status: 'failed' }]);
+    expect(await withSystem((db) => db.row('select error from public.lead_outreach where client_id = $1', [lc.id]))).toEqual({ error: 'The carrier did not deliver it (Twilio error 30005)' });
+    expect(await withSystem((db) => db.rows('select status from public.communications where client_id = $1', [lc.id]))).toEqual([{ status: 'failed' }]);
+    await age(c, lc.id, 3);
+    expect(await runLeadTexts(c.orgId, { now: NOON, send: accepted })).toEqual({ sent: 0, failed: 0, waiting: 0, blocked: null });
+    // A "delivered" report changes nothing on the log.
+    const lc2 = await enquire(c, { phone: phone(), smsConsent: true });
+    const sid2 = `SM${uniq()}${uniq()}`;
+    expect((await runLeadTexts(c.orgId, { now: NOON, send: async () => ({ ok: true, provider: 'twilio', providerRef: sid2 }) })).sent).toBe(1);
+    expect(await recordSmsStatus(sid2, 'delivered')).toEqual({ kind: 'status', matched: 1 });
+    expect(await log(lc2.id)).toEqual([{ step: 'text_welcome', status: 'sent' }]);
+  });
+
+  it('a consent that was withdrawn is not brought back by the public form, and one switched off for a lead stays off when they become a client', async () => {
+    // The workspace also texts its clients when a dispute is sent (Settings, Client updates).
+    const a = await agency('LeadTextsWithdrawn', { ...TEXTS_ON(), client_updates: { switches: { dispute_sent: { sms: true, email: false } }, window_since: null } });
+    const [number, other] = [phone(), phone()];
+    const l = await enquire(a, { phone: number, smsConsent: true });
+    const control = await enquire(a, { phone: other, smsConsent: true, fullName: 'Did Not Ask To Stop' });
+    expect((await runLeadTexts(a.orgId, { now: NOON })).sent).toBe(2);
+    // One of them telephones and asks the team to stop. Staff record it ("Asked to stop" on the lead): no automatic
+    // message follows, and the agreement to texts they gave on the form is withdrawn with it.
+    await asUser(a.ownerId, async (db) => {
+      await db.run('update public.clients set outreach_opt_out_at = now() where id = $1', [l.id]);
+      expect(await revokeSmsConsent(db, { orgId: a.orgId, clientId: l.id, userId: a.ownerId, via: 'asked_to_stop' })).toBe(true);
+    });
+    expect(await consent(l.id)).toMatchObject({ revoked_via: 'asked_to_stop' });
+    await age(a, l.id, 3);
+    await age(a, control.id, 3);
+    expect((await runLeadTexts(a.orgId, { now: NOON })).sent).toBe(1); // the follow-up for the other one only
+    expect([textsTo(number).length, textsTo(other).length]).toEqual([1, 2]);
+
+    // Later both become clients with a portal sign-in, and a dispute is sent for each. The one who never asked to stop
+    // is texted about it under the consent they gave. The one who asked to stop is not: the old form consent does not
+    // come back to life because the record changed from lead to client.
+    const queued = async (clientId: string) => {
+      const user = await addMember(a.orgId, 'client', 'portal');
+      await withSystem((db) => db.run("update public.clients set status = 'active', portal_user_id = $2 where id = $1", [clientId, user.id]));
+      const dispute = (await withSystem((db) => db.row<{ id: string }>("insert into public.disputes (org_id, client_id, item_label, bureau, recipient_name, category, reason, status) values ($1, $2, 'Acme ••1234 (Experian)', 'experian', 'Experian', 'incorrect_balance', 'Balance differs from my statement', 'submitted') returning id", [a.orgId, clientId])))!.id;
+      await asUser(a.ownerId, (db) => queueClientUpdate(db, { orgId: a.orgId, clientId, event: 'dispute_sent', subjectId: dispute, defer: false }));
+      return count("select count(*)::int as n from public.client_updates where client_id = $1 and channel = 'sms'", [clientId]);
+    };
+    expect(await queued(control.id)).toBe(1);
+    expect(await queued(l.id)).toBe(0);
+    expect(await withSystem((db) => db.row<{ stopped: boolean }>('select app.sms_stopped($1, $2) as stopped', [l.id, number]))).toEqual({ stopped: true });
+    // Staff cannot simply switch texts back on for them, and neither can the form, sent again with the same number.
+    await expect(asUser(a.ownerId, (db) => grantSmsConsent(db, { orgId: a.orgId, clientId: l.id, userId: a.ownerId, source: 'staff', note: 'They said yes on the phone this morning.' }))).resolves.toMatchObject({ ok: false, reason: 'stopped' });
+    const again = await enquire(a, { phone: number, smsConsent: true, fullName: 'Same Number Again' });
+    expect(again.r).toEqual({ ok: true });
+    expect(await consent(again.id)).toBeNull();
+    expect((await withSystem((db) => db.rows<{ summary: string }>("select summary from public.client_events where client_id = $1 and kind = 'sms_consent'", [again.id]))).map((e) => e.summary))
+      .toEqual(['Ticked the text message box on the enquiry form, but texts to this number were switched off before. No consent was recorded and no text is sent: only the person, in the portal, or a staff member who records how they agreed can switch them back on.']);
+    expect((await runLeadTexts(a.orgId, { now: NOON })).sent).toBe(0);
+    expect(textsTo(number)).toHaveLength(1);
+    // A consent staff switched off for a client (not a STOP) is not brought back by the form either.
+    const b = await agency('LeadTextsStaffOff', TEXTS_ON());
+    const num2 = phone();
+    const typed = await addClient(b.orgId, 'Typed In', { status: 'active' });
+    await withSystem((db) => db.run('update public.clients set phone = $2 where id = $1', [typed, num2]));
+    await asUser(b.ownerId, (db) => grantSmsConsent(db, { orgId: b.orgId, clientId: typed, userId: b.ownerId, source: 'staff', note: 'Agreed on a call with me on Monday morning.' }));
+    await asUser(b.ownerId, (db) => revokeSmsConsent(db, { orgId: b.orgId, clientId: typed, userId: b.ownerId, via: 'staff' }));
+    const viaForm = await enquire(b, { phone: num2, smsConsent: true });
+    expect(viaForm.r).toEqual({ ok: true });
+    expect(await consent(viaForm.id)).toBeNull();
+    expect((await runLeadTexts(b.orgId, { now: NOON })).sent).toBe(0);
+    expect(textsTo(num2)).toEqual([]);
+  });
 });
 
 // ================================================================ end to end through the scheduled job
@@ -824,10 +1226,10 @@ describe('the scheduled job sends everything with no approval step', () => {
       if (String(url).startsWith('https://api.twilio.com/')) return new Response(JSON.stringify({ sid: `SM${uniq()}${calls.length}` }), { status: 201 });
       throw new Error(`unexpected request to ${String(url)}`);
     });
-    // The next business day at midday in New York: after the enquiry below, inside texting hours, and a day partners are emailed.
+    // The next business day: after the enquiry below, and a day partners are emailed.
     let next = addDays(new Date().toISOString().slice(0, 10), 1);
     while (!isBusinessDay(next)) next = addDays(next, 1);
-    const when = new Date(`${next}T17:00:00Z`);
+    const when = new Date(`${next}T20:00:00Z`); // the hour of the second daily run: inside texting hours in every US time zone
 
     const a = await agency('JobsAllOn', { ...ON, lead_followup_enabled: true, lead_followup_since: new Date(Date.now() - 60_000).toISOString(), lead_text_followup: true });
     const [pid] = await add(a, [P({ phone: '(512) 555-0199' })]) as [string];
@@ -837,10 +1239,14 @@ describe('the scheduled job sends everything with no approval step', () => {
 
     const first = await runScheduledJobs({ onlyOrgIds: [a.orgId], now: when });
     expect(first).toMatchObject({ failures: 0, leadEmails: 1, leadTexts: 1, partnerEmails: 1 });
-    const mails = calls.filter((c) => c.url.includes('resend')).map((c) => JSON.parse(c.body) as { to: string[]; subject: string; from: string; reply_to: string; text: string });
+    const mails = calls.filter((c) => c.url.includes('resend')).map((c) => JSON.parse(c.body) as { to: string[]; subject: string; from: string; reply_to: string; text: string; headers?: Record<string, string> });
     const texts = calls.filter((c) => c.url.includes('twilio')).map((c) => new URLSearchParams(c.body));
-    expect(mails.map((m) => m.to[0]).sort()).toEqual([email, (await partner(pid))!.email].sort());
+    const partnerEmailAddress = (await partner(pid))!.email;
+    expect(mails.map((m) => m.to[0]).sort()).toEqual([email, partnerEmailAddress].sort());
     for (const m of mails) { expect(m.reply_to).toBe(REPLY); expect(m.from).toContain(`"${a.name}"`); expect(m.text).toContain(`${a.name} · ${ADDRESS}`); expect(m.text).toMatch(/\/unsubscribe\//); }
+    // The partner email is handed to the email service with the one-click unsubscribe headers; the lead email has its own link.
+    const toPartner = mails.find((m) => m.to[0] === (partnerEmailAddress))!;
+    expect(toPartner.headers).toEqual({ 'List-Unsubscribe': `<http://localhost:3000/api/unsubscribe/partner/${partnerOptOutToken(pid)}>`, 'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click' });
     expect(texts).toHaveLength(1);
     expect(texts[0]!.get('To')).toBe(number);
     expect(texts[0]!.get('Body')).toBe(leadText('text_welcome', 'en', { orgName: a.name }));
@@ -852,5 +1258,14 @@ describe('the scheduled job sends everything with no approval step', () => {
     const second = await runScheduledJobs({ onlyOrgIds: [a.orgId], now: when });
     expect(second).toMatchObject({ failures: 0, leadEmails: 0, leadTexts: 0, partnerEmails: 0 });
     expect(calls).toHaveLength(3);
+    // The same switches in a workspace the operator has not approved: the lead still gets the email they asked for
+    // (a reply to their own enquiry), and no text and no partner email leaves.
+    const b = await agency('JobsNotApproved', { ...ON, lead_followup_enabled: true, lead_followup_since: new Date(Date.now() - 60_000).toISOString(), lead_text_followup: true }, false);
+    await add(b, [P()]);
+    const email2 = `lead-${uniq()}@example.test`;
+    expect(await submitLead(b.slug, { fullName: 'Pat Lead', email: email2, phone: `+1512${2 + Math.floor(Math.random() * 7)}55${String(Math.floor(Math.random() * 10_000)).padStart(4, '0')}`, language: 'en', consent: true, smsConsent: true }, { ip: testIp(), defer: () => undefined })).toEqual({ ok: true });
+    expect(await runScheduledJobs({ onlyOrgIds: [b.orgId], now: when })).toMatchObject({ failures: 0, leadEmails: 1, leadTexts: 0, partnerEmails: 0 });
+    expect(calls).toHaveLength(4);
+    expect(await count('select count(*)::int as n from public.sms_consents where org_id = $1', [b.orgId])).toBe(0); // the box was never offered, so no consent was recorded
   });
 });

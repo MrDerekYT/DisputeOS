@@ -2,10 +2,10 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AI_COSTS, getBalance } from '@/lib/ai/credits';
 import type { AiProvider } from '@/lib/ai/provider';
 import { addEvidence, createDispute, recordResponse, startNextRound, transitionDispute, type DActor } from '@/lib/disputes/service';
-import { recommendLetter, VOICE_LINES, voiceFor } from '@/lib/letters/brief';
+import { recommendLetter, styleSeed, VOICE_LINES, voiceFor } from '@/lib/letters/brief';
 import { loadBrief } from '@/lib/letters/brief-load';
-import { editableWording, wordingOverlap } from '@/lib/letters/overlap';
-import { createLetter, currentBody, setLetterStatus } from '@/lib/letters/service';
+import { editableWording, OVERLAP_HIGH, OVERLAP_MEDIUM, wordingOverlap } from '@/lib/letters/overlap';
+import { createLetter, currentBody, saveVersion, setLetterStatus } from '@/lib/letters/service';
 import { storedSuggestion, suggestForLetter } from '@/lib/letters/suggest';
 import { tailorGoal } from '@/lib/letters/tailor';
 import { autoTailorDraft, autoTailorOn, letterOverlap, loadTailorSubject, recentOtherWording, setAutoTailor } from '@/lib/letters/tailor-load';
@@ -55,8 +55,14 @@ const fake = (fn: (masked: string) => string | Error = (m) => m) => {
   return { provider, calls };
 };
 const LEAD_INS = VOICE_LINES.filter((l) => /details|specifics/.test(l));
-const reword = (m: string) => LEAD_INS.reduce((t, l) => t.replace(l, 'I will keep this short.'), m).replace('To whom it may concern:', 'Dear Sir or Madam:').replace('Sincerely,', 'Respectfully,')
-  .split('\n').map((l) => (/^(Thank you|I appreciate|If you need|Please write|You can reach)/.test(l) ? 'Many thanks for reading this. I can be reached by mail at the address above.' : l)).join('\n');
+const CONTACTS = VOICE_LINES.filter((l) => /address above/.test(l));
+const THANKS = VOICE_LINES.filter((l) => /^(Thank you|I appreciate)/.test(l));
+const [NEW_LEAD_IN, NEW_CONTACT, NEW_THANKS] = ['I set out the particulars here.', 'I can be reached by mail at the address above.', 'Many thanks for reading this.'];
+/** Like for like, as the checks require: each sentence it is shown becomes one other sentence of plain courtesy, on the same line. */
+const reword = (m: string) => [...LEAD_INS.map((l) => [l, NEW_LEAD_IN] as const), ...CONTACTS.map((l) => [l, NEW_CONTACT] as const), ...THANKS.map((l) => [l, NEW_THANKS] as const)]
+  .reduce((t, [from, to]) => t.replace(from, to), m).replace('To whom it may concern:', 'Dear Sir or Madam:').replace('Sincerely,', 'Respectfully,');
+/** The closing line the stand-in leaves for one client: their voice decides whether there is a contact sentence before the thanks. */
+const rewordedCourtesy = (clientId: string) => [voiceFor(styleSeed(clientId)).contact && NEW_CONTACT, NEW_THANKS].filter(Boolean).join(' ');
 
 beforeAll(async () => {
   A = await makeOrg('Tailor');
@@ -91,7 +97,9 @@ describe('the letter brief, from real rows', () => {
 
     jordanLetter = await asUser(owner.userId, (db) => createLetter(db, owner, { clientId: jordan, disputeId: jordanDispute }));
     const text = await body(jordanLetter);
-    expect(text).toContain('Item: ACME BANK ••1234 (Experian)\nAs it appears on my Experian credit report dated October 30, 2026: date opened March 3, 2019; balance $1,200.00.\nSpecific information I am asking you to review: Balance.');
+    expect(text).toContain('Re: Dispute of a reported balance — ACME BANK, account ending 1234\n');
+    expect(text).toContain('Item: ACME BANK, account ending 1234\nAs it appears on my Experian credit report dated October 30, 2026: date opened March 3, 2019; balance $1,200.00.\nSpecific information I am asking you to review: Balance.');
+    expect(text).not.toMatch(/••|\(Experian\)/); // the on-screen label is not what a letter prints
     expect(text).toContain('I have enclosed the following document: January 2026 statement. To confirm my identity, I have also enclosed a copy of my government-issued photo ID and proof of my current address.');
     expect(text).toContain('Enclosures:\n  - January 2026 statement\n  - Copy: Government-issued photo ID\n  - Copy: Proof of current address\n');
     expect(text).not.toMatch(/disputed this item on/); // no earlier round, so no paragraph about one
@@ -184,9 +192,10 @@ describe('AI tailoring is paid for once when it is accepted by the checks, and n
     const r = await ask(ai.provider);
     expect(r).toMatchObject({ ok: true, cost: AI_COSTS.letter_suggestion, provider: 'fake' });
     const text = r.ok ? r.text : '';
-    for (const fact of ['Jordan Rivera', '123 Main St', 'Tampa, FL 33602', 'ACME BANK ••1234 (Experian)', 'date opened March 3, 2019; balance $1,200.00', 'I closed this card when I moved.', 'January 2026 statement', '  - Copy: Proof of current address', '15 U.S.C. § 1681i']) expect(text, fact).toContain(fact);
+    for (const fact of ['Jordan Rivera', '123 Main St', 'Tampa, FL 33602', 'Item: ACME BANK, account ending 1234', 'date opened March 3, 2019; balance $1,200.00', 'I closed this card when I moved.', 'January 2026 statement', '  - Copy: Proof of current address', '15 U.S.C. § 1681i']) expect(text, fact).toContain(fact);
     expect(text).toContain('Dear Sir or Madam:');
-    expect(text).toContain('Many thanks for reading this. I can be reached by mail at the address above.');
+    expect(text).toContain(rewordedCourtesy(jordan));
+    expect(VOICE_LINES.filter((l) => text.includes(l))).toEqual([]); // every sentence it was shown was reworded
     expect(await getBalance(A.orgId)).toBe(20 - AI_COSTS.letter_suggestion);
     expect(await ask(ai.provider)).toEqual({ ok: true, text, provider: 'fake', cost: 0 });
     expect(ai.calls).toHaveLength(1);
@@ -316,16 +325,25 @@ describe('“Tailor wording automatically when a letter is drafted”', () => {
 describe('wording overlap with other recent letters', () => {
   it('compares with other clients’ letters in the same organization only, worked out from stored text', async () => {
     const s = (await asUser(owner.userId, (db) => loadTailorSubject(db, jordanLetter)))!;
-    const mine = editableWording(s.body, s.protectedTerms);
     const others = await asUser(owner.userId, (db) => recentOtherWording(db, jordan));
-    // Maria's letters only: none of Jordan's own, no void letter, and nothing that names a person or an account.
+    // Maria's letters only: none of Jordan's own, no void letter, and nothing that names a person, an account, a bureau, a date or an amount.
     const mariaLetters = await withSystem((db) => db.row<{ n: number }>("select count(*)::int as n from public.letters where client_id = $1 and status <> 'void'", [maria]));
     expect(others).toHaveLength(mariaLetters!.n);
     expect(others.length).toBeGreaterThanOrEqual(2);
-    for (const o of others) expect(o).not.toMatch(/Maria|Chen|Seattle|Pine|HARBOR|7788|Equifax|\d|\$/);
+    for (const o of others) expect(o).not.toMatch(/Maria|Chen|Seattle|Pine|HARBOR|7788|Equifax|August|September|\d|\$/);
+    // The same is taken out of this letter before it is compared: what is left is wording.
+    expect(s.comparable).not.toMatch(/Jordan|Rivera|Main St|Tampa|ACME|1234|Experian|\d|\$/);
+    // The whole letter is measured, not only the few connecting sentences an AI may reword: the statutory opening and
+    // the request, which every letter from this template shares, are in it. The reason and the enclosure list are not.
+    expect(s.comparable).toContain('I am writing under Section of the Fair Credit Reporting Act');
+    expect(s.comparable).toContain('Please conduct a reasonable reinvestigation of the balance reported for this account');
+    expect(s.comparable).not.toContain('My statement shows');
+    expect(s.comparable).not.toMatch(/^\s*-/m);
+    expect(s.comparable.split(/\s+/).length).toBeGreaterThan(4 * editableWording(s.body, s.protectedTerms).split(/\s+/).length);
     const overlap = (await asUser(owner.userId, (db) => letterOverlap(db, s)))!;
-    expect(overlap).toEqual(wordingOverlap(mine, others));
-    expect(['low', 'medium', 'high']).toContain(overlap.level);
+    expect(overlap).toEqual(wordingOverlap(s.comparable, others));
+    // Jordan's and Maria's letters come from the same template: most of their wording is the same, whatever their facts.
+    expect(overlap.level).toBe('high');
     expect(overlap.compared).toBe(others.length);
     // Seen from Maria's side, Jordan's letters are the others.
     expect((await asUser(owner.userId, (db) => recentOtherWording(db, maria))).length).toBeGreaterThanOrEqual(1);
@@ -334,24 +352,41 @@ describe('wording overlap with other recent letters', () => {
     expect(await asUser(B.ownerId, (db) => loadTailorSubject(db, jordanLetter))).toBeNull();
   });
 
-  it('a letter worded exactly like another client’s reads “high”; after tailoring it no longer does', async () => {
-    // A third client whose letter is given Jordan's connective wording word for word (as a shared template would).
+  it('rewording the courtesy lines does not make a template letter read as the client’s own; a letter in other words does', async () => {
+    // A third client with the same kind of dispute as Jordan, drafted from the same template.
     const pat = await addClient(A.orgId, 'Pat Lee');
-    const d = await asUser(owner.userId, (db) => createDispute(db, owner, { clientId: pat, category: 'not_mine', bureau: 'experian', reason: 'I have never had an account with Lakeside Finance. I do not owe $85.00.' }));
+    await withSystem((db) => db.run(`update public.clients set address = '{"line1":"77 Lake Rd","city":"Orlando","state":"FL","zip":"32801"}' where id = $1`, [pat]));
+    const d = await asUser(owner.userId, (db) => createDispute(db, owner, { clientId: pat, category: 'incorrect_balance', bureau: 'experian', itemLabel: 'Lakeside Finance ••5521',
+      reason: 'Experian reports a balance of $85.00 for Lakeside Finance. My receipt dated May 4, 2026 shows I paid it in full.', fields: ['Balance'] }));
     const l = await asUser(owner.userId, (db) => createLetter(db, owner, { clientId: pat, disputeId: d }));
-    const j = (await asUser(owner.userId, (db) => loadTailorSubject(db, jordanLetter)))!;
-    const p = (await asUser(owner.userId, (db) => loadTailorSubject(db, l)))!;
-    expect(p.clientId).toBe(pat);
-    await withSystem((db) => db.run('update public.letter_versions set body = $2 where letter_id = $1 and version = 1', [l, j.body.replaceAll('Jordan Rivera', 'Pat Lee')]));
-    const same = (await asUser(owner.userId, (db) => loadTailorSubject(db, l)))!;
-    // Nothing of the other client's file counts as wording, even in a copied letter: the reason under its heading is locked too.
-    expect(editableWording(same.body, same.protectedTerms)).toBe(editableWording(j.body, j.protectedTerms));
-    expect(await asUser(owner.userId, (db) => letterOverlap(db, same))).toMatchObject({ level: 'high', score: 1 });
-    // Reworded in its own words it no longer reads like any other client's letter...
-    const own = LEAD_INS.reduce((t, x) => t.replace(x, 'A short note follows.'), same.body).replace('To whom it may concern:', 'Good day,').replace('Sincerely,', 'Yours faithfully,')
-      .split('\n').map((x) => (/^(Thank you|I appreciate|If you need|Please write|You can reach)/.test(x) ? 'With my thanks for the time you give this.' : x)).join('\n');
-    expect((await asUser(owner.userId, (db) => letterOverlap(db, { ...same, body: own })))!.level).toBe('low');
-    // ...whereas the stand-in model's one rewording, already used on another client's letter above, is itself a template.
-    expect((await asUser(owner.userId, (db) => letterOverlap(db, { ...same, body: reword(same.body) })))!.level).toBe('high');
+    const overlapOf = async () => (await asUser(owner.userId, async (db) => letterOverlap(db, (await loadTailorSubject(db, l))!)))!;
+    const standard = await overlapOf();
+    expect(standard.level).toBe('high');
+    expect(standard.score).toBeGreaterThanOrEqual(OVERLAP_HIGH);
+
+    // The stand-in model rewords every line an AI may touch: the lead-in, the salutation, the thanks and the sign-off.
+    const draft = await body(l);
+    const tailored = reword(draft);
+    expect(tailored).not.toBe(draft);
+    await asUser(owner.userId, (db) => saveVersion(db, owner, l, tailored, 'ai_draft', 'reworded'));
+    // The letter still reads as the template it is: the opening that cites the right and the request, which are most of
+    // it, are word for word in the other clients' letters. That is what a bureau would see too.
+    const afterTailoring = await overlapOf();
+    expect(afterTailoring.level).toBe('high');
+    expect(afterTailoring.score).toBeGreaterThan(OVERLAP_HIGH);
+
+    // A letter in the client's own words, with the same facts, is what reads differently.
+    const own = draft.split('\n');
+    const re = own.findIndex((x) => x.startsWith('Re:'));
+    const to = own.findIndex((x) => x.startsWith('Sincerely'));
+    const rewritten = [...own.slice(0, re), 'Re: The balance you show for Lakeside Finance ••5521', '', 'To whom it may concern:', '',
+      'I looked at my credit file last week and one account on it is not right, so I am asking you to look into it again.', '',
+      'Experian reports a balance of $85.00 for Lakeside Finance. My receipt dated May 4, 2026 shows I paid it in full.', '',
+      'Would you check what Lakeside Finance told you against the receipt, and write back to me with what you find? If my file changes I would like to see the new version of it.', '',
+      ...own.slice(to)].join('\n');
+    await asUser(owner.userId, (db) => saveVersion(db, owner, l, rewritten, 'manual_edit', 'own words'));
+    const ownWords = await overlapOf();
+    expect(ownWords.level).toBe('low');
+    expect(ownWords.score).toBeLessThan(OVERLAP_MEDIUM);
   });
 });

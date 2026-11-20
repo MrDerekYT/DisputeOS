@@ -312,7 +312,8 @@ describe('method-of-verification template (English only)', () => {
       expect(findBlockedClaims(body), tpl.key).toEqual([]);
       expect(findGuideClaims(body), tpl.key).toEqual([]);
       expect(body, tpl.key).toContain('15 U.S.C. § 1681i(a)(7)');
-      expect(body, tpl.key).toContain('Acme Bank ••1234 (Experian)');
+      expect(body, tpl.key).toContain('Acme Bank, account ending 1234'); // the item as a letter names it, not as a list on screen labels it
+      expect(body, tpl.key).not.toMatch(/••|\(Experian\)/);
       expect(body, tpl.key).toContain('P.O. Box 4500, Allen, TX 75013');
       expect(body, tpl.key).toContain('Tampa, FL 33602\nDate of birth: March 3, 1985\nSSN (last 4): 4321\n\nExperian'); // identified the way the bureau asks
       // No demand, no threat, no deadline stated to the agency, no request to change the file, and the dispute reason is not repeated.
@@ -356,8 +357,8 @@ describe('specificity check', () => {
     expect(noRef.map((i) => i.key)).toEqual(['account']);
     expect(noRef[0]!.message).toMatch(/last digits of the account number, or a reference number/);
     // Staff fix it in the letter and retry.
-    expect(found({ body: letter('en', { label: 'Item (Experian)' }).replace('Item: Item (Experian)', 'Item: Acme Bank, account ending 1234'), account: null })).toEqual([]);
-    expect(found({ body: letter('en', { label: 'Item (Experian)' }).replace('Item: Item (Experian)', 'Cuenta: Acme Bank, cuenta terminada en 1234'), account: null })).toEqual([]);
+    expect(found({ body: letter('en', { label: 'Item (Experian)' }).replace('Item: Item\n', 'Item: Acme Bank, account ending 1234\n'), account: null })).toEqual([]);
+    expect(found({ body: letter('en', { label: 'Item (Experian)' }).replace('Item: Item\n', 'Cuenta: Acme Bank, cuenta terminada en 1234\n'), account: null })).toEqual([]);
     // An amount in the reason is not an account reference.
     expect(found({ body: letter('en', { label: 'Item (Experian)', reason: 'The account balance is $1,200.00 but my statement shows $900.00.' }), account: null })).toEqual(['account']);
     // A specialty item is identified by its name and reference as typed from the disclosure.

@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { POST as twilioWebhook } from '@/app/api/webhooks/twilio/route';
 import { runScheduledJobs } from '@/lib/automation/jobs';
 import {
-  deliverClientUpdates, grantSmsConsent, pendingSmsReplies, queueClientUpdate, recordInboundSms, recordSmsStatus, reviewSmsReplies, revokeSmsConsent, runClientUpdateJobs, unmatchedInboundCount,
+  deliverClientUpdates, grantSmsConsent, pendingSmsReplies, queueClientUpdate, recordInboundSms, recordSmsStatus, reviewSmsReplies, revokeSmsConsent, runClientUpdateJobs, SHARED_REPLY_NOTE, unmatchedInboundCount,
 } from '@/lib/client-updates/service';
 import { DAILY_CAP, UPDATE_EVENTS, type UpdateEvent } from '@/lib/client-updates/templates';
 import { addDays, noResponseAfter } from '@/lib/disputes/clock';
@@ -311,18 +311,26 @@ describe('inbound texts (the Twilio webhook)', () => {
     expect(await comms(c.clientId)).toEqual([{ direction: 'inbound', channel: 'sms', status: 'received', body: 'I uploaded my ID, thanks', provider_ref: sid }]);
   });
 
-  it('a number on two client records is never guessed: the text is kept unmatched for staff, and STOP still stops both', async () => {
+  it('a number on two client records of one workspace, both with consent: the reply is filed on both, for the same staff; a number nobody has belongs to no one', async () => {
     const o = await agency('Ambiguous', ALL_SMS);
     const shared = phone();
     const a = await portalClient(o, { number: shared, consent: true });
     const b = await portalClient(o, { number: shared, consent: true });
+    // A third record carries the number with no consent: it is not told anything.
+    const c = await portalClient(o, { number: shared });
     const sid = `SM${uniq()}${uniq()}`;
-    expect(await recordInboundSms({ sid, from: shared, to: '+14155550100', body: 'Which letter was this about?' })).toEqual({ kind: 'message', matched: 0 });
-    expect(await comms(a.clientId)).toEqual([]);
-    expect(await comms(b.clientId)).toEqual([]);
-    const seen = await asUser(o.ownerId, (db) => db.rows<{ client_id: string | null; body: string }>('select client_id, body from public.sms_inbound where provider_ref = $1', [sid]));
-    expect(seen).toEqual([{ client_id: null, body: 'Which letter was this about?' }]);
-    // A number nobody has is unmatched too, and belongs to no organization: no tenant can read it.
+    // Neither has been texted, so nothing says which record the reply is for. A reply nobody can see would leave texts
+    // going out, so both records get it; texts to both pause until someone has read it.
+    expect(await recordInboundSms({ sid, from: shared, to: '+14155550100', body: 'Which letter was this about?' })).toEqual({ kind: 'message', matched: 2 });
+    for (const x of [a, b]) expect(await comms(x.clientId)).toEqual([{ direction: 'inbound', channel: 'sms', status: 'received', body: 'Which letter was this about?', provider_ref: sid }]);
+    expect(await comms(c.clientId)).toEqual([]);
+    const seen = await asUser(o.ownerId, (db) => db.rows<{ client_id: string | null; body: string; reviewed: boolean }>('select client_id, body, (reviewed_at is not null) as reviewed from public.sms_inbound where provider_ref like $1 order by provider_ref', [`${sid}%`]));
+    expect(seen.map((r) => r.client_id).sort()).toEqual([a.clientId, b.clientId].sort());
+    expect(seen.every((r) => r.body === 'Which letter was this about?' && !r.reviewed)).toBe(true);
+    // The webhook retried: nothing is filed twice.
+    expect(await recordInboundSms({ sid, from: shared, to: '+14155550100', body: 'Which letter was this about?' })).toEqual({ kind: 'duplicate', matched: 0 });
+    expect(await comms(a.clientId)).toHaveLength(1);
+    // A number nobody has is unmatched, and belongs to no organization: no tenant can read it.
     const orphan = `SM${uniq()}${uniq()}`;
     expect(await recordInboundSms({ sid: orphan, from: phone(), body: 'hello?' })).toEqual({ kind: 'message', matched: 0 });
     expect(await asUser(o.ownerId, (db) => db.rows('select 1 from public.sms_inbound where provider_ref = $1', [orphan]))).toEqual([]);
@@ -450,23 +458,36 @@ describe('another workspace cannot pull a client’s replies away', () => {
     expect(await asUser(b.ownerId, (db) => db.rows('select 1 from public.sms_inbound where provider_ref = $1', [sid]))).toEqual([]);
   });
 
-  it('with consent in force in two workspaces, it goes to the one texted most recently; with no way to tell, it is kept and counted, not lost', async () => {
+  it('with consent in force in two workspaces, it goes to the one texted most recently; with no way to tell, each is told a reply arrived and neither is shown its wording', async () => {
     const a = await agency('RecentA', ALL_SMS);
     const b = await agency('RecentB', ALL_SMS);
     const ca = await portalClient(a, { consent: true });
     const cb = await portalClient(b, { number: ca.number });
     await asUser(b.ownerId, (db) => grantSmsConsent(db, { orgId: b.orgId, clientId: cb.clientId, userId: b.ownerId, source: 'staff', note: 'Agreed in the office on Monday morning.' }));
-    // Nobody has been texted yet: ambiguous. Kept with no workspace, and the count the scheduled job reports goes up.
+    // Nobody has been texted yet: it cannot be told which business the reply was for. Each record is told that a reply
+    // arrived, so texts to the number pause in both workspaces, and neither is shown what the person wrote to the other.
     const before = await unmatchedInboundCount();
-    expect(await recordInboundSms({ sid: `SM${uniq()}${uniq()}`, from: ca.number, body: 'Hello, who is this?' })).toEqual({ kind: 'message', matched: 0 });
+    const first = `SM${uniq()}${uniq()}`;
+    expect(await recordInboundSms({ sid: first, from: ca.number, body: 'Hello, who is this? My card ends 4421.' })).toEqual({ kind: 'message', matched: 2 });
+    for (const x of [ca, cb]) {
+      expect(await comms(x.clientId)).toEqual([{ direction: 'inbound', channel: 'sms', status: 'received', body: SHARED_REPLY_NOTE, provider_ref: first }]);
+      expect((await asUser(x === ca ? a.ownerId : b.ownerId, (db) => pendingSmsReplies(db, x.clientId))).map((r) => r.body)).toEqual([SHARED_REPLY_NOTE]);
+    }
+    expect(SHARED_REPLY_NOTE).toMatch(/its wording is not shown here\. Texts to this number are paused\./);
+    // No tenant can read the message itself: it is kept with no workspace, and the count the scheduled job reports goes up.
+    for (const owner of [a.ownerId, b.ownerId]) expect(await asUser(owner, (db) => db.rows<{ body: string }>('select body from public.sms_inbound where provider_ref like $1', [`${first}%`]))).toEqual([{ body: SHARED_REPLY_NOTE }]);
+    expect(await withSystem((db) => db.row('select org_id, client_id, body from public.sms_inbound where provider_ref = $1', [first]))).toEqual({ org_id: null, client_id: null, body: 'Hello, who is this? My card ends 4421.' });
     expect(await unmatchedInboundCount()).toBe(before + 1);
     expect((await runScheduledJobs({ onlyOrgIds: [a.orgId] })).unmatchedInboundTexts).toBeGreaterThanOrEqual(1);
-    // A texted its client; the reply that follows is A's.
+    // Staff of each workspace read the note, and texts resume.
+    await asUser(a.ownerId, (db) => reviewSmsReplies(db, { orgId: a.orgId, clientId: ca.clientId, userId: a.ownerId, asksToStop: false }));
+    await asUser(b.ownerId, (db) => reviewSmsReplies(db, { orgId: b.orgId, clientId: cb.clientId, userId: b.ownerId, asksToStop: false }));
+    // A texted its client; the reply that follows is A's, wording and all.
     await queue(a, ca.clientId, 'dispute_sent');
     expect(await deliverClientUpdates(a.orgId, { now: NOON })).toMatchObject({ sent: 1 });
     expect(await recordInboundSms({ sid: `SM${uniq()}${uniq()}`, from: ca.number, body: 'Thanks, I will look tonight' })).toEqual({ kind: 'message', matched: 1 });
-    expect(await comms(cb.clientId)).toEqual([]);
-    expect((await comms(ca.clientId)).filter((m) => m.direction === 'inbound')).toMatchObject([{ body: 'Thanks, I will look tonight' }]);
+    expect((await comms(cb.clientId)).map((m) => m.body)).toEqual([SHARED_REPLY_NOTE]);
+    expect((await comms(ca.clientId)).filter((m) => m.direction === 'inbound').map((m) => m.body)).toEqual([SHARED_REPLY_NOTE, 'Thanks, I will look tonight']);
     // STOP still ends consent for the number in both workspaces.
     await recordInboundSms({ sid: `SM${uniq()}${uniq()}`, from: ca.number, body: 'STOP' });
     expect((await consent(ca.clientId))!.revoked_via).toBe('sms_stop');

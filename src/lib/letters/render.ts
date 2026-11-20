@@ -115,6 +115,15 @@ function historyOrDates(d: NonNullable<LetterContext['dispute']> | null | undefi
   return history && dates ? 'the payment history and dates' : history ? 'the payment history' : dates ? 'the dates' : 'the payment history or dates';
 }
 
+/**
+ * The item as a letter names it. A dispute's label is written for a list on screen ("ACME BANK ••1234 (Experian)"); a
+ * letter says "ACME BANK, account ending 1234": the masked digits are spelled out, and the bureau in brackets is left
+ * off, because the letter is addressed to that bureau. A label with neither is used as it is.
+ */
+export function letterItem(label: string): string {
+  return label.replace(/\s*\((?:Experian|Equifax|TransUnion)\)\s*$/i, '').replace(/\s*•{2,}\s*([0-9A-Za-z]{2,})(?![0-9A-Za-z])/, ', account ending $1');
+}
+
 export function buildValues(c: LetterContext): Record<string, string> {
   const d = c.dispute;
   const f = c.facts ?? {};
@@ -147,7 +156,7 @@ export function buildValues(c: LetterContext): Record<string, string> {
     ssn_last4_text: identification,
     recipient_name: bureau?.name ?? d?.recipient_name ?? '[RECIPIENT NAME NEEDED]',
     recipient_address: bureau?.address ?? agencyAddress ?? c.recipientAddress ?? '[RECIPIENT ADDRESS NEEDED]',
-    item_label: d?.item_label ?? '[ITEM NEEDED]',
+    item_label: d?.item_label ? letterItem(d.item_label) : '[ITEM NEEDED]',
     creditor: d?.tradeline?.creditor_name ?? d?.recipient_name ?? '',
     account_text: d?.tradeline?.account_last4 ? `account ending ${d.tradeline.account_last4}` : '',
     bureau: d?.bureau ?? '',

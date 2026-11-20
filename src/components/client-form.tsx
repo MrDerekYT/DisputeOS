@@ -6,6 +6,8 @@ export interface ClientDefaults {
   source?: string | null; goals?: string | null; assigned_to?: string | null; tags?: string[];
   address?: { line1?: string; line2?: string; city?: string; state?: string; zip?: string };
   ssn_last4?: string | null;
+  /** Whether a date of birth is stored. The date itself is never sent back to the form. */
+  has_dob?: boolean;
 }
 
 /** Shared by "New client" and "Edit client". Sensitive identifiers are write-only: never pre-filled. */
@@ -34,8 +36,10 @@ export function ClientFields({ d = {}, team, canAssign, mode }: { d?: ClientDefa
 
       <fieldset className="grid gap-4 sm:grid-cols-2">
         <legend className="mb-1 text-base font-semibold">Identity <span className="text-[0.8125rem] font-normal text-muted">· encrypted at rest; the full number is never shown again</span></legend>
-        <Field label="Date of birth" name="dob" type="date" autoComplete="off" hint={mode === 'edit' ? 'Leave blank to keep the stored value.' : undefined} />
-        <Field label="Social Security number" name="ssn" inputMode="numeric" autoComplete="off" placeholder={d.ssn_last4 ? `••• •• ${d.ssn_last4}` : '000-00-0000'} hint={mode === 'edit' ? 'Leave blank to keep the stored value.' : 'Optional now; only needed if you will submit it with disputes.'} />
+        <Field label="Date of birth" name="dob" type="date" autoComplete="off"
+          hint={mode === 'edit' && d.has_dob ? 'On file. Leave blank to keep it.' : `${mode === 'edit' ? 'Not on file. ' : ''}A letter to a credit bureau states it, so the bureau can find the file.`} />
+        <Field label="Social Security number" name="ssn" inputMode="numeric" autoComplete="off" placeholder={d.ssn_last4 ? `••• •• ${d.ssn_last4}` : '000-00-0000'}
+          hint={mode === 'edit' && d.ssn_last4 ? 'On file. Leave blank to keep it.' : `${mode === 'edit' ? 'Not on file. ' : 'Optional now. '}A letter to a credit bureau states the last four digits.`} />
       </fieldset>
 
       <fieldset className="grid gap-4 sm:grid-cols-2">

@@ -4,7 +4,8 @@ import { decideReport, storeParsedReport } from '@/lib/reports/service';
 import { addEvidence, createDispute, recordResponse, startNextRound, transitionDispute, type DActor } from '@/lib/disputes/service';
 import { createLetter, currentBody, markSent, saveVersion, setLetterStatus, type LActor } from '@/lib/letters/service';
 import { draftReason } from '@/lib/disputes/reasons';
-import { addClient, addMember, asUser, closePool, makeOrg, withSystem, type TestOrg } from './helpers';
+import { recordCollectorNotice, removeCollectorNotice } from '@/lib/credit/case-tools';
+import { addClient, addMember, asUser, closePool, giveIdentity, makeOrg, withSystem, type TestOrg } from './helpers';
 import { recordConsentRows } from './consents';
 
 const EXPERIAN = `Experian Credit Report
@@ -123,6 +124,23 @@ describe('dispute → letter → approval → submission → response → next r
     expect(b.body).toContain('Section 611');
     expect(b.body).not.toMatch(/\{\{|NEEDED/);
     expect(b.body).not.toMatch(/guarantee/i);
+    // A bureau finds the file by the date of birth and the Social Security number: both are on the client's record and are stated.
+    expect(b.body).toContain('Tampa, FL 33602\nDate of birth: March 3, 1985\nSSN (last 4): 4321\n');
+  });
+  it('a bureau letter for a client with no date of birth or SSN on file carries marked lines, and cannot be sent for approval until a person resolves them', async () => {
+    const bare = await addClient(org.orgId, 'Casey Doe', { identity: false });
+    await withSystem((db) => db.run(`update public.clients set address = '{"line1":"9 Elm St","city":"Tampa","state":"FL","zip":"33602"}' where id = $1`, [bare]));
+    const d = await asUser(specialist.userId, (db) => createDispute(db, specialist, { clientId: bare, bureau: 'equifax', itemLabel: 'Acme Bank ••4321', category: 'incorrect_balance',
+      reason: 'The balance reported for this account is $500.00, and my statement dated March 1, 2026 shows $0.00.' }));
+    const l = await asUser(specialist.userId, (db) => createLetter(db, specialist, { clientId: bare, disputeId: d }));
+    const body = (await withSystem((db) => currentBody(db, l)))!.body;
+    expect(body).toContain('Date of birth: [DATE OF BIRTH NEEDED]\nSSN (last 4): [SOCIAL SECURITY NUMBER NEEDED]\n');
+    await expect(asUser(specialist.userId, (db) => setLetterStatus(db, specL, l, 'pending_approval'))).rejects.toThrow(/Fill in or remove: \[DATE OF BIRTH NEEDED\], \[SOCIAL SECURITY NUMBER NEEDED\]/);
+    // Once the record has them, a new draft states them and the same check passes.
+    await giveIdentity(bare);
+    const l2 = await asUser(specialist.userId, (db) => createLetter(db, specialist, { clientId: bare, disputeId: d }));
+    expect((await withSystem((db) => currentBody(db, l2)))!.body).toContain('Date of birth: March 3, 1985\nSSN (last 4): 4321\n');
+    await asUser(specialist.userId, (db) => setLetterStatus(db, specL, l2, 'pending_approval'));
   });
   it('lets a specialist send for review but not approve', async () => {
     await asUser(specialist.userId, (db) => transitionDispute(db, specialist, disputeId, 'ready_for_review'));
@@ -189,14 +207,36 @@ describe('dispute → letter → approval → submission → response → next r
     expect(n).toMatchObject({ round: 2, parent_dispute_id: disputeId, status: 'draft' });
     expect(n!.reason).toContain('New information since my previous request');
   });
-  it('validation requests are restricted to collection accounts', async () => {
-    await expect(asUser(specialist.userId, (db) => createLetter(db, specialist, { clientId, disputeId, templateKey: 'validation_request_en' }))).rejects.toThrow(/collection accounts only/);
+  it('a validation request is drafted only for a collector, and cites the 30-day right only while a recorded notice is open', async () => {
+    // The dispute above goes to a credit bureau: a letter written for a collector is not drafted for it.
+    await expect(asUser(specialist.userId, (db) => createLetter(db, specialist, { clientId, disputeId, templateKey: 'validation_request_en' }))).rejects.toThrow(/goes to a credit bureau, and this letter is written for a debt collector/);
     const col = (await withSystem((db) => db.row<{ id: string }>("select id from public.tradelines where client_id = $1 and item_type = 'collection' limit 1", [clientId])))!.id;
     const d = await asUser(specialist.userId, (db) => createDispute(db, specialist, { clientId, tradelineId: col, category: 'unverifiable_collection', reason: 'Requesting validation of this collection debt.' }));
+    // No notice from the collector is on file: the letter disputes the debt and asks, without claiming the statutory right.
     const l = await asUser(specialist.userId, (db) => createLetter(db, specialist, { clientId, disputeId: d }));
     const body = (await withSystem((db) => currentBody(db, l)))!.body;
-    expect(body).toContain('Section 809(b)');
     expect(body).toContain('MIDLAND CREDIT');
+    expect(body).toContain('I am writing about the debt referenced above. I dispute this debt and ask that you provide validation of it, including:');
+    expect(body).toContain('I ask that you pause collection of this debt.');
+    expect(body).not.toMatch(/809\(b\)|1692g|in response to your written notice|cease collection|as the statute provides/);
+    // It goes to the collector, so it carries no date of birth or Social Security digits.
+    expect(body).not.toMatch(/Date of birth|SSN/);
+
+    // A notice received a week ago is recorded: the period is open, so the letter answers the notice and cites the statute.
+    const day = (ago: number) => new Date(Date.now() - ago * 86_400_000).toISOString().slice(0, 10);
+    const notice = await asUser(specialist.userId, (db) => recordCollectorNotice(db, { ...specialist, meta: {} }, { clientId, tradelineId: col, kind: 'received', date: day(7) }));
+    const l2 = await asUser(specialist.userId, (db) => createLetter(db, specialist, { clientId, disputeId: d }));
+    const open = (await withSystem((db) => currentBody(db, l2)))!.body;
+    expect(open).toMatch(/I am writing in response to your written notice about the debt referenced above, which I received on [A-Z][a-z]+ \d{1,2}, \d{4}\. Under Section 809\(b\) of the Fair Debt Collection Practices Act \(15 U\.S\.C\. § 1692g\(b\)\), I dispute this debt and request that you provide validation of it, including:/);
+    expect(open).toContain('Until you mail me verification of the debt, I ask that you cease collection of it, as the statute provides.');
+
+    // The same notice, received four months ago: the 30 days are over, so the right is not claimed.
+    await asUser(specialist.userId, (db) => removeCollectorNotice(db, { ...specialist, meta: {} }, clientId, notice));
+    await asUser(specialist.userId, (db) => recordCollectorNotice(db, { ...specialist, meta: {} }, { clientId, tradelineId: col, kind: 'received', date: day(120) }));
+    const l3 = await asUser(specialist.userId, (db) => createLetter(db, specialist, { clientId, disputeId: d }));
+    const late = (await withSystem((db) => currentBody(db, l3)))!.body;
+    expect(late).toContain('I am writing in response to your written notice about the debt referenced above. I dispute this debt and ask that you provide validation of it, including:');
+    expect(late).not.toMatch(/809\(b\)|1692g|which I received on|cease collection|as the statute provides/);
   });
   it('attaches evidence only from the same client', async () => {
     const mine = await withSystem((db) => db.row<{ id: string }>("insert into public.documents (org_id, client_id, kind, file_name, mime_type, size_bytes, sha256, storage_key) values ($1,$2,'evidence','s.pdf','application/pdf',1,'x','k') returning id", [org.orgId, clientId]));

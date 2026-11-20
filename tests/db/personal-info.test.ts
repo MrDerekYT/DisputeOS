@@ -2,7 +2,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { loadBankCases, removeBankCase, saveBankCase } from '@/lib/credit/bank-collections';
 import { addMark, draftPersonalInfoLetter, loadMarks, loadReportedEntries, removeMark } from '@/lib/credit/personal-info';
 import { createDispute, type DActor } from '@/lib/disputes/service';
-import { createLetter, currentBody, letterBlockers, setLetterStatus } from '@/lib/letters/service';
+import { createLetter, currentBody, letterBlockers, setLetterStatus, SPANISH_TEMPLATE } from '@/lib/letters/service';
+import { templateByKey } from '@/lib/letters/templates';
 import { decideReport, storeParsedReport } from '@/lib/reports/service';
 import type { ParsedReport } from '@/lib/reports/types';
 import { addClient, addPortalClient, asUser, closePool, makeOrg, withSystem, type TestOrg } from './helpers';
@@ -147,21 +148,100 @@ describe('situation letters through the pipeline', () => {
     await expect(asUser(owner.userId, (db) => createLetter(db, owner, { clientId: client, disputeId: old, templateKey: 'outdated_item_en' }))).rejects.toThrow(/no reporting period to state/);
   });
 
-  it('refuses an identity theft block until an identity theft report is on file, then encloses it', async () => {
-    const id = await asUser(owner.userId, (db) => createDispute(db, owner, { clientId: client, category: 'identity_theft', bureau: 'transunion', reason }));
-    await expect(asUser(owner.userId, (db) => createLetter(db, owner, { clientId: client, disputeId: id }))).rejects.toThrow(/needs an identity theft report/);
-    await expect(asUser(owner.userId, (db) => createLetter(db, owner, { clientId: client, disputeId: id, templateKey: 'identity_theft_block_en' }))).rejects.toThrow(/needs an identity theft report/);
+  it('refuses an identity theft block until an accepted identity theft report and an accepted photo ID are on file, then encloses the report', async () => {
+    // A client with nothing in their documents yet (the client above already has an accepted photo ID).
+    const victim = await addClient(A.orgId, 'Robin Vale');
+    await withSystem((db) => db.run(`update public.clients set address = '{"line1":"5 Bay Rd","city":"Tampa","state":"FL","zip":"33602"}' where id = $1`, [victim]));
+    const id = await asUser(owner.userId, (db) => createDispute(db, owner, { clientId: victim, category: 'identity_theft', bureau: 'transunion', reason }));
+    await expect(asUser(owner.userId, (db) => createLetter(db, owner, { clientId: victim, disputeId: id }))).rejects.toThrow(/needs an identity theft report/);
+    await expect(asUser(owner.userId, (db) => createLetter(db, owner, { clientId: victim, disputeId: id, templateKey: 'identity_theft_block_en' }))).rejects.toThrow(/needs an identity theft report[\s\S]*also needs proof of the client’s identity/);
+    const doc = (clientId: string, kind: string, status: string) => withSystem((db) => db.row<{ id: string }>(
+      "insert into public.documents (org_id, client_id, kind, file_name, storage_key, mime_type, size_bytes, sha256, review_status) values ($1, $2, $3, $4, $5, 'application/pdf', 10, 'x', $6) returning id",
+      [A.orgId, clientId, kind, `${kind}.pdf`, `k-${clientId}-${kind}-${status}-${Math.random()}`, status])).then((r) => r!.id);
+    const blocked = () => asUser(owner.userId, (db) => createLetter(db, owner, { clientId: victim, disputeId: id }));
     // A report in another client's vault does not count.
-    const doc = (clientId: string, orgId: string) => withSystem((db) => db.run(
-      "insert into public.documents (org_id, client_id, kind, file_name, storage_key, mime_type, size_bytes, sha256) values ($1, $2, 'ftc_report', 'ftc.pdf', $3, 'application/pdf', 10, 'x')", [orgId, clientId, `k-${clientId}`]));
-    await doc(otherPortal.clientId, A.orgId);
-    await expect(asUser(owner.userId, (db) => createLetter(db, owner, { clientId: client, disputeId: id }))).rejects.toThrow(/needs an identity theft report/);
-    await doc(client, A.orgId);
-    const l = await asUser(owner.userId, (db) => createLetter(db, owner, { clientId: client, disputeId: id }));
+    await doc(otherPortal.clientId, 'ftc_report', 'accepted');
+    await doc(otherPortal.clientId, 'id', 'accepted');
+    await expect(blocked()).rejects.toThrow(/needs an identity theft report/);
+    // The client's own upload that nobody has looked at is not a report on file: the letter would otherwise say
+    // "a copy of my identity theft report is enclosed" about a file no person has opened.
+    const pending = await doc(victim, 'ftc_report', 'pending_review');
+    await expect(blocked()).rejects.toThrow(/needs an identity theft report/);
+    // Nor is one a reviewer rejected.
+    await withSystem((db) => db.run("update public.documents set review_status = 'rejected', review_note = 'This is a bank statement' where id = $1", [pending]));
+    await expect(blocked()).rejects.toThrow(/needs an identity theft report/);
+    // Accepted: the report counts, and the statute's other requirement, proof of identity, is still missing.
+    await doc(victim, 'ftc_report', 'accepted');
+    const stillMissing = await blocked().then(() => '', (e: Error) => e.message);
+    expect(stillMissing).toMatch(/also needs proof of the client’s identity/);
+    expect(stillMissing).not.toMatch(/needs an identity theft report\./);
+    // A photo ID awaiting review does not count either; an accepted one does.
+    const idDoc = await doc(victim, 'id', 'pending_review');
+    await expect(blocked()).rejects.toThrow(/also needs proof of the client’s identity/);
+    await withSystem((db) => db.run("update public.documents set review_status = 'accepted' where id = $1", [idDoc]));
+    const l = await blocked();
     expect((await letterRow(l))!.template_key).toBe('identity_theft_block_en');
     const text = await body(l);
     expect(text).toContain('15 U.S.C. § 1681c-2');
     expect(text).toContain('  - Copy: FTC identity theft report');
+    expect(text).toContain('Government-issued photo ID');
+    // The block request says the account comes from no transaction of the client's, so it is drafted only for a dispute
+    // entered as identity theft: never by picking it for an ordinary dispute of the same client.
+    const balance = await asUser(owner.userId, (db) => createDispute(db, owner, { clientId: victim, category: 'incorrect_balance', bureau: 'transunion', reason: 'TransUnion reports $1,200.00. My statement dated March 1, 2026 shows $900.00.' }));
+    await expect(asUser(owner.userId, (db) => createLetter(db, owner, { clientId: victim, disputeId: balance, templateKey: 'identity_theft_block_en' }))).rejects.toThrow(/not entered as identity theft/);
+  });
+
+  it('an agency’s own copy of a situation letter is held to the facts of the letter it was copied from, whatever was edited out of it', async () => {
+    const copy = (baseKey: string | null, name: string, text: string, kind = 'bureau_dispute', language = 'en') => withSystem((db) => db.row<{ id: string }>(
+      'insert into public.letter_templates (org_id, base_key, name, kind, language, body) values ($1, $2, $3, $4, $5, $6) returning id', [A.orgId, baseKey, name, kind, language, text])).then((r) => `org:${r!.id}`);
+    const builtIn = (key: string) => templateByKey(key)!.body;
+    const draft = (clientId: string, disputeId: string, templateKey: string) => asUser(owner.userId, (db) => createLetter(db, owner, { clientId, disputeId, templateKey }));
+    // A client with nothing on file: no identity theft report, no photo ID, no bankruptcy, no report account.
+    const bare = await addClient(A.orgId, 'Quinn Park');
+    await withSystem((db) => db.run(`update public.clients set address = '{"line1":"8 Dock St","city":"Tampa","state":"FL","zip":"33602"}' where id = $1`, [bare]));
+    const dispute = (category: string, text: string) => asUser(owner.userId, (db) => createDispute(db, owner, { clientId: bare, category, bureau: 'experian', itemLabel: 'Acme Bank ••1234', reason: text }));
+
+    // The identity theft block, copied, with the marked field typed over: without the gate it would draft "a copy of
+    // my identity theft report is enclosed" for a client who has none.
+    const theft = await dispute('identity_theft', reason);
+    const theftCopy = await copy('identity_theft_block_en', 'Our identity theft letter', builtIn('identity_theft_block_en').replace('{{identity_theft_text}}', 'A copy of my identity theft report is enclosed.'));
+    expect(builtIn('identity_theft_block_en')).toContain('{{identity_theft_text}}');
+    await expect(draft(bare, theft, theftCopy)).rejects.toThrow(/needs an identity theft report[\s\S]*also needs proof of the client’s identity/);
+    // A template written from scratch that prints the field is held to the same facts.
+    const scratch = await copy(null, 'From scratch', 'To whom it may concern:\n\n{{identity_theft_text}}\n\n{{reason}}\n\nSincerely,\n{{client_name}}');
+    await expect(draft(bare, theft, scratch)).rejects.toThrow(/needs an identity theft report/);
+    // And a copy of the block is still not drafted for a dispute that is not entered as identity theft.
+    const balance = await dispute('incorrect_balance', 'Experian reports $1,200.00. My statement dated March 1, 2026 shows $900.00.');
+    await expect(draft(bare, balance, theftCopy)).rejects.toThrow(/not entered as identity theft/);
+
+    // The re-dispute, copied: a first-round dispute with nothing new cannot say "your results state it was verified".
+    const redispute = await copy('redispute_new_information_en', 'Our re-dispute', builtIn('redispute_new_information_en'));
+    await expect(draft(bare, balance, redispute)).rejects.toThrow(/follows an earlier dispute[\s\S]*Nothing new is on file/);
+    // The outdated-item letter, copied, and a scratch template that prints its date: no reported date, no letter.
+    const obsolete = await dispute('obsolete', 'The collection is shown with a first delinquency date in 2015.');
+    await expect(draft(bare, obsolete, await copy('outdated_item_en', 'Our outdated letter', builtIn('outdated_item_en')))).rejects.toThrow(/no reporting period to state/);
+    await expect(draft(bare, obsolete, await copy(null, 'Dates from scratch', 'To whom it may concern:\n\n{{obsolete_text}}\n\n{{reason}}\n\nSincerely,\n{{client_name}}'))).rejects.toThrow(/no reporting period to state/);
+    // The bankruptcy letter, copied: no bankruptcy is recorded for this client.
+    const bk = await dispute('bankruptcy_included', 'This account was included in my bankruptcy and still shows a balance of $2,500.00.');
+    await expect(draft(bare, bk, await copy('bankruptcy_included_en', 'Our bankruptcy letter', builtIn('bankruptcy_included_en')))).rejects.toThrow(/No bankruptcy is recorded/);
+    // A copy of a letter for a collector is not drafted for a dispute that goes to a bureau.
+    await expect(draft(bare, balance, await copy('validation_request_en', 'Our validation letter', builtIn('validation_request_en'), 'validation_request'))).rejects.toThrow(/goes to a credit bureau, and this letter is written for a debt collector/);
+    // A copy of the follow-up on a dispute that was never sent.
+    await expect(draft(bare, balance, await copy('follow_up_en', 'Our follow-up', builtIn('follow_up_en'), 'follow_up'))).rejects.toThrow(/not been recorded as sent/);
+
+    // A copy with nothing to gate drafts as usual, with the identification a bureau asks for.
+    const general = await copy('bureau_dispute_en', 'House general letter', builtIn('bureau_dispute_en'));
+    const l = await draft(bare, balance, general);
+    expect((await letterRow(l))!.template_key).toBe(general);
+    expect(await body(l)).toContain('Date of birth: March 3, 1985\nSSN (last 4): 4321\n');
+
+    // Letters are English only. A template saved in Spanish earlier is not drafted from, and the message says what to do.
+    const es = await copy('bureau_dispute_en', 'Carta general', 'A quien corresponda:\n\n{{reason}}\n\nAtentamente,\n{{client_name}}', 'bureau_dispute', 'es');
+    await expect(draft(bare, balance, es)).rejects.toThrow(SPANISH_TEMPLATE);
+    expect(SPANISH_TEMPLATE).toMatch(/put it into English and mark it as English/);
+    // Once the agency has put it into English and marked it so, it is an ordinary template of theirs.
+    await withSystem((db) => db.run("update public.letter_templates set language = 'en', body = $2 where id = $1", [es.slice(4), 'To whom it may concern:\n\n{{reason}}\n\nSincerely,\n{{client_name}}']));
+    expect((await letterRow(await draft(bare, balance, es)))!.language).toBe('en');
   });
 
   it('refuses a re-dispute with nothing new and a bankruptcy letter with no bankruptcy recorded', async () => {

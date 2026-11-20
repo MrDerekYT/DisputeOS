@@ -138,6 +138,10 @@ const TONE: [RegExp, string][] = [
   [/\b(?:will|is going to|are going to)\s+(?:be\s+)?(?:corrected|updated|blocked|approved|fixed|changed|resolved|improve\w*|increase\w*|raise\w*)\b|\b(?:guarant\w*|promis\w*|scores?|sure to|certain to)\b/i, 'it promises or predicts a result'],
   [/\b(eras\w*|expung\w*|wip(?:e|ed|ing)|purg\w*|eliminat\w*|taken? off)\b/i, 'it asks for information to be taken off the report'],
   [/\b(illegal\w*|unlawful\w*|negligen\w*|willful\w*|false|lie[sd]?|lying)\b/i, 'it makes an accusation'],
+  // "Thank you for writing to me", "It is good to hear from you", "Thanks for getting in touch": each says the reader
+  // contacted the writer first. Nothing on file says so, and it is made of courtesy words only, so the word list below
+  // cannot catch it. (It also discards "I would appreciate hearing from you"; that costs a suggestion, nothing else.)
+  [/\b(?:thank(?:s|ing|ful)?|grateful|gratitude|appreciat\w*|glad|pleased|happy|good|nice|kind)\b[^.!?;:]*\b(?:writing|contacting|reaching|hear(?:ing)?\s+from|getting\s+in\s+touch|letting\s+me\s+know|your\s+(?:contact|mail|note|message|letter|reply|response|call))\b/i, 'it refers to earlier contact that is not on file'],
 ];
 const ASKS = /\b(please|kindly|i ask|i would like you to|i want you to|i need you to|i expect)\b/gi;
 /** An invitation to write back is courtesy, not a request about the file: "please write to me", "kindly contact me", "please feel free to reach me". */
@@ -163,27 +167,31 @@ export function toneIssue(sourceWording: string, proposedWording: string): strin
 
 /**
  * Every word a reworded line may be made of. Greetings, thanks, an invitation to write back, and the plain words that
- * join them: nothing else. There is no word here for a person's circumstances, an account, money, time that has passed,
- * an earlier letter or call, a reply, or a result, and no "have" or "has" to say that something already happened, so a
- * sentence built from this list cannot state one. That is the point: a denylist of bad phrases can always be worded
- * around, a short list of allowed words cannot. A suggestion that uses any other word is discarded (and not charged),
- * which only ever costs a suggestion, never a fact in a letter.
+ * join them: nothing else. There is no word here for a person's circumstances, an account, money, work, health, time
+ * that has passed, an earlier letter or call, a reply, or a result; no "have" or "has" to say that something already
+ * happened; no "will", "should" or "must" to say what happens next; and no "not" or "no" to turn a courtesy into a
+ * complaint (the one use a courtesy line has for it, "do not hesitate", is allowed by name). So a sentence built from
+ * this list cannot state one. That is the point: a denylist of
+ * bad phrases can always be worded around, a short list of allowed words is much harder to. A suggestion that uses any
+ * other word is discarded (and not charged), which only ever costs a suggestion, never a fact in a letter.
  */
 export const COURTESY_WORDS: ReadonlySet<string> = new Set(`
   a an the and or but so if as at by for from in into of on to with about above below here there this that these those it is are am be
-  i me my mine myself you your yours yourself can may might could would do does not no none nothing
-  please thank thanks thanking thankful grateful gratitude appreciate appreciated appreciation appreciative obliged welcome glad pleased happy
+  i me my mine myself you your yours yourself can may might could would do does what which when
+  please thank thanks thanking thankful grateful gratitude appreciate appreciated appreciation appreciative obliged welcome glad gladly pleased happy
   kind kindly courtesy courteous consideration considerate considering consider care careful carefully attention attentive time help helping
-  helpful assistance assist assisting understanding cooperation effort efforts work advance
-  reading look looking review reviewing taking
+  helpful assistance assist assisting understanding cooperation effort efforts advance
+  reading read look looking review reviewing taking see keep keeping brief briefly
   details detail specifics particulars points information facts summary outline following follows follow set out laid listed
-  described explained included shown stated provided put find finds well hope wish like want need
-  write writing contact contacting reach reached reaching mail address hear hearing forward convenience get touch let know feel free hesitate
+  described explained included shown stated provided put find finds hope wish like want need
+  write writing contact contacting reach reached reaching mail post postal via available address hear hearing forward convenience get touch let know feel free hesitate
   questions question anything something further more most much many very also too just only all each every any other else additional
   dear sir madam hello greetings good day regards regard best warm warmly sincerely respectfully cordially truly faithfully
   whom concern matter regarding concerning
   i'm i'd you'd it's here's that's
 `.split(/\s+/).filter(Boolean));
+/** The one negative a courtesy line uses: "please do not hesitate to write". */
+const NOT_HESITATE = /\b(?:do\s+not|don['’]t)\s+hesitate\b/gi;
 
 const wordsOf = (text: string) => text.toLowerCase().replace(/[’‘]/g, "'").split(/[^a-z']+/).map((w) => w.replace(/^'+|'+$/g, '')).filter(Boolean);
 const sentenceCount = (line: string) => line.split(/(?<=[.!?:;])\s+/).filter((x) => x.trim()).length;
@@ -219,7 +227,7 @@ export function rewordingIssue(source: string, proposed: string, terms: string[]
     // A rewording may reuse the words of the line it replaces ("this letter", "if you have any questions") and
     // otherwise only words of plain courtesy.
     const own = new Set(wordsOf(was));
-    const stray = wordsOf(text).find((w) => !COURTESY_WORDS.has(w) && !own.has(w));
+    const stray = wordsOf(text.replace(NOT_HESITATE, 'hesitate')).find((w) => !COURTESY_WORDS.has(w) && !own.has(w));
     if (stray) return `it uses wording that is not plain courtesy (“${stray}”)`;
   }
   return null;
