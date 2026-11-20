@@ -182,7 +182,9 @@ ${CLOSE}`,
   bureauTemplate({
     key: 'duplicate_account_en', name: 'Duplicate account', description: 'The same debt appears to be listed twice, or by two companies.',
     subject: 'Dispute of a duplicate entry', about: 'an account that appears to be reported more than once in my credit file.',
-    request: `of whether these entries are the same obligation and, if they are, update my file so that it is reported once. Please ${RESULTS}.`,
+    // "Not reported as owed twice", not "reported once": a collector and the original creditor may both report the same
+    // debt correctly, the original creditor with a zero balance.
+    request: `of whether these entries are the same obligation and, if they are, update my file so that the debt is not reported as owed twice. Please ${RESULTS}.`,
   }),
   bureauTemplate({
     key: 'outdated_item_en', name: 'Outdated item', description: 'By the reported date of first delinquency, the item appears to be past its reporting period. For an account that is only late, the letter is about that late payment information: the account itself stays reportable.',
@@ -238,7 +240,7 @@ ${CLOSE}`,
     key: 'follow_up_en', kind: 'follow_up', language: 'en', recipient: 'bureau', name: 'Follow-up — no response recorded',
     description: 'The reinvestigation period has ended and no response has been recorded.',
     body: `${SPECIALTY_HEAD}
-Re: Status of my dispute dated {{dispute_date}} — {{item_label}}
+Re: Status of the dispute I sent on {{dispute_date}} — {{item_label}}
 
 To whom it may concern:
 
@@ -252,7 +254,8 @@ ${CLOSE}`,
 
   // ------------------------------------------------------------------ to a debt collector
   {
-    key: 'validation_request_en', kind: 'validation_request', language: 'en', recipient: 'collector', name: 'Debt validation request (FDCPA § 809(b))',
+    // The name carries no citation: it is also the letter's title, and the letter cites the statute only within the 30 days.
+    key: 'validation_request_en', kind: 'validation_request', language: 'en', recipient: 'collector', name: 'Debt validation request',
     description: 'A collection account, within 30 days of the collector’s first written notice. Later, or with no notice on file, it asks without citing the statute.',
     // {{validation_intro}} and {{validation_cease}} (./render.ts) cite Section 809(b) and state the notice date only when a
     // collector's notice is on file and its 30-day period is open; otherwise they dispute the debt and ask, nothing more.
@@ -320,7 +323,7 @@ ${CLOSE}`,
     body: `${HEAD}
 Re: Goodwill request — {{item_label}}
 
-Dear {{recipient_name}}:
+To whom it may concern:
 
 I am writing about the account above. I am not disputing what I describe below; I am asking for your consideration.
 

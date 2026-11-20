@@ -14,6 +14,12 @@ export interface JobsResult {
   notReached: number;
   /** Organizations that still had lead emails or client updates to send when the time ran out. What is left stays queued for a later run. */
   unfinished: number;
+  /**
+   * Lead email runs and partner email runs (one organization each) that stopped because the email service did not
+   * answer: the email it was given may or may not have arrived and is never sent again, and the rest waits for a later
+   * run. Above zero means the email service needs looking at.
+   */
+  unanswered: number;
   /** True when the outreach pass (lead texts, partner emails) stopped before every organization had its turn. Those left out come first in the next run. */
   outreachCutShort: boolean;
   /** Inbound texts that belong to no workspace and nobody has reviewed (last 30 days). */ unmatchedInboundTexts: number;
@@ -68,7 +74,7 @@ export async function runScheduledJobs(opts: {
   const longestWaitFirst = (key: 'last_run' | 'last_outreach') => [...listed].sort((a, b) => (a[key] ? new Date(a[key]!).getTime() : 0) - (b[key] ? new Date(b[key]!).getTime() : 0));
   const orgs = longestWaitFirst('last_run');
   const stopAt = Date.now() + (opts.deadlineMs ?? JOBS_DEADLINE_MS);
-  const out: JobsResult = { orgs: orgs.length, failures: 0, executed: 0, pending: 0, skipped: 0, leadEmails: 0, leadTexts: 0, partnerEmails: 0, clientUpdates: 0, notReached: 0, unfinished: 0, outreachCutShort: false, unmatchedInboundTexts: 0, aiRefunds: 0, cleaned: {}, failed: [] };
+  const out: JobsResult = { orgs: orgs.length, failures: 0, executed: 0, pending: 0, skipped: 0, leadEmails: 0, leadTexts: 0, partnerEmails: 0, clientUpdates: 0, notReached: 0, unfinished: 0, unanswered: 0, outreachCutShort: false, unmatchedInboundTexts: 0, aiRefunds: 0, cleaned: {}, failed: [] };
 
   const fail = async (orgId: string, started: Date, e: unknown) => {
     const error = String((e as Error).message ?? e).slice(0, 1000);
@@ -99,6 +105,7 @@ export async function runScheduledJobs(opts: {
       // Both stop claiming at the run's deadline, like the outreach below: a send in flight finishes, the rest waits.
       const leads = await runLeadOutreach(o.id, { stopAt });
       out.leadEmails += leads.sent;
+      if (leads.held === 'no_answer') out.unanswered++;
       // Client updates by text and email: queue investigation windows that ended, send what is due (src/lib/client-updates/service.ts).
       const updates = await runClientUpdateJobs(o.id, { stopAt });
       out.clientUpdates += updates.sent;
@@ -121,11 +128,14 @@ export async function runScheduledJobs(opts: {
       // Text follow-up for leads with a text consent from the enquiry form; nobody else is texted (src/lib/lead-outreach.ts).
       out.leadTexts += (await runLeadTexts(o.id, { now: opts.now, stopAt })).sent;
       // The email sequence to referral partners, when the agency switched it on (src/lib/partner-outreach.ts).
-      out.partnerEmails += (await runPartnerOutreach(o.id, { now: opts.now, stopAt })).sent;
+      const partners = await runPartnerOutreach(o.id, { now: opts.now, stopAt });
+      out.partnerEmails += partners.sent;
+      if (partners.held === 'no_answer') out.unanswered++;
     } catch (e) {
       await fail(o.id, started, e);
     }
   }
+  if (out.unanswered) console.warn(`[jobs] ${out.unanswered} lead or partner email run(s) stopped because the email service did not answer; the email being sent may or may not have arrived and is not sent again. Check the email service.`);
 
   // AI charges whose request died before an outcome was recorded are given back (src/lib/ai/credits.ts).
   out.aiRefunds = await refundUnsettled().catch((e) => { console.error('[jobs] AI credit sweep failed', (e as Error).message); return 0; });

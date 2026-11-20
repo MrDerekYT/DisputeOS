@@ -248,7 +248,7 @@ export async function deliverClientUpdates(orgId: string, opts: DeliveryOptions 
     const lang: UpdateLang = claim.client.preferred_language === 'es' ? 'es' : 'en';
     let subject: string | null = null;
     let body = '';
-    let res: { ok: boolean; provider: string; providerRef?: string; error?: string };
+    let res: { ok: boolean; provider: string; providerRef?: string; error?: string; unconfirmed?: boolean };
     try {
       if (q.channel === 'sms') {
         // The name read with the approval, in the claim: the text carries the name that was approved.
@@ -268,15 +268,17 @@ export async function deliverClientUpdates(orgId: string, opts: DeliveryOptions 
     }
 
     // 3. Record. The development `log` driver delivers nothing, so its communication is saved as 'queued', which the
-    //    Messages tab shows as "Not delivered" (the same convention as an email written to the log).
+    //    Messages tab shows as "Not delivered" (the same convention as an email written to the log). An email the
+    //    service never answered for stays 'failed' (it is not sent again either way), with the reason saying what is known.
     const status = res.ok ? 'sent' : 'failed';
     const commStatus = !res.ok ? 'failed' : res.provider === 'log' ? 'queued' : 'sent';
+    const error = res.ok ? null : res.unconfirmed ? 'The email service did not answer; it may or may not have arrived.' : (res.error ?? 'The provider refused the message').slice(0, 500);
     await withSystem(async (db) => {
       const comm = await db.row<{ id: string }>(
         `insert into public.communications (org_id, client_id, direction, channel, subject, body, status, provider_ref)
          values ($1, $2, 'outbound', $3, $4, $5, $6, $7) returning id`, [orgId, q.client_id, q.channel, subject, body || '(not built)', commStatus, res.providerRef ?? null]);
       await db.run('update public.client_updates set status = $2, provider = $3, provider_ref = $4, error = $5, communication_id = $6 where id = $1',
-        [q.id, status, res.provider, res.providerRef ?? null, res.ok ? null : (res.error ?? 'The provider refused the message').slice(0, 500), comm!.id]);
+        [q.id, status, res.provider, res.providerRef ?? null, error, comm!.id]);
     });
     if (res.ok) out.sent++; else out.failed++;
   }

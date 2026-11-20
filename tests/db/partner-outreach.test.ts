@@ -1,4 +1,6 @@
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { getBalance } from '@/lib/ai/credits';
 import { runScheduledJobs } from '@/lib/automation/jobs';
@@ -891,6 +893,119 @@ describe('nothing unattended goes out until the operator has approved the worksp
     for (const id of theirs) expect(await partner(id)).toMatchObject({ status: 'opted_out', opted_out: true });
   });
 
+  it('the recipient’s own opt-out stops every workspace, also when the team had already recorded “Asked to stop”', async () => {
+    const a = await agency('PartnersAskedFirstA', ON);
+    const b = await agency('PartnersAskedFirstB', ON);
+    const u = uniq();
+    const [byLink, bySpam] = await add(a, [P({ email: `dana@first-${u}.example` }), P({ email: `lee.first.${u}@gmail.com` })]) as [string, string];
+    // The other workspace has the same two mailboxes on its list, in other spellings.
+    const theirs = await add(b, [P({ email: `dana+b@first-${u}.example` }), P({ email: `leefirst${u}@googlemail.com` })]);
+    // The email service's ids are unique, so the complaint below is matched to this email and no other.
+    const mails: Email[] = [];
+    const box = { mails, opts: { live: true, send: async (m: Email): Promise<SendResult> => { mails.push(m); return { ok: true, provider: 'resend', providerRef: `re_${uniq()}${uniq()}` }; } } };
+    expect((await runPartnerOutreach(a.orgId, { ...box.opts, now: MON })).sent).toBe(2);
+    // Both answer the introduction by phone, and the team records it: that stops the first workspace's emails only.
+    for (const id of [byLink, bySpam]) expect(await asUser(a.ownerId, (db) => partnerAskedToStop(db, actor(a), id))).toBe(true);
+    // Then one presses the button behind the link, and the other marks the email as spam.
+    expect(await optOutPartner(partnerOptOutToken(byLink))).toEqual({ orgId: a.orgId, orgName: a.name, lang: 'en' });
+    const ref = (await withSystem((db) => db.row<{ ref: string }>('select provider_ref as ref from public.partner_outreach where partner_id = $1', [bySpam])))!.ref;
+    expect(await recordPartnerDeliveryEvent(ref, 'complained')).toBe(true);
+    // The other workspace emails neither mailbox: each is paused with the reason.
+    expect(await runPartnerOutreach(b.orgId, { ...box.opts, now: MON })).toEqual({ sent: 0, failed: 0, blocked: null, held: null });
+    expect(box.mails).toHaveLength(2);
+    for (const id of theirs) expect(await partner(id)).toMatchObject({ status: 'new', paused: true, opted_out: false });
+    // The list holds the mailbox as the opt-out list reads it, and how the recipient stopped the emails.
+    const listed = await withSystem((db) => db.rows<{ email_norm: string; source: string }>(
+      'select email_norm, source from public.partner_opt_outs where email_norm = any($1::text[]) order by source', [[`dana@first-${u}.example`, `leefirst${u}@gmail.com`]]));
+    expect(listed).toEqual([{ email_norm: `leefirst${u}@gmail.com`, source: 'complaint' }, { email_norm: `dana@first-${u}.example`, source: 'link' }]);
+    // The first workspace's timeline shows what the recipient did after the team's entry; doing it again adds nothing.
+    expect((await events(byLink)).map((e) => e.kind)).toEqual(['added', 'email_sent', 'opted_out', 'opted_out']);
+    expect((await events(byLink)).at(-1)!.summary).toBe('Opted out from an email (the link, or the mail program’s unsubscribe button). No further email is sent to this address.');
+    expect((await events(bySpam)).at(-1)!.summary).toBe('The recipient marked one of these emails as spam. No email is sent to this address again.');
+    await optOutPartner(partnerOptOutToken(byLink));
+    await recordPartnerDeliveryEvent(ref, 'complained');
+    for (const id of [byLink, bySpam]) expect((await events(id)).filter((e) => e.kind === 'opted_out')).toHaveLength(2);
+  });
+
+  it('the opt-out page still offers its button after the team recorded “Asked to stop”, and a mail program’s one-click request is recorded as such', async () => {
+    const a = await agency('PartnersPageAfterAsked', ON);
+    const u = uniq();
+    const [asked, oneClick] = await add(a, [P({ email: `kim@page-${u}.example` }), P({ email: `ray@page-${u}.example` })]) as [string, string];
+    const box = outbox();
+    expect((await runPartnerOutreach(a.orgId, { ...box.opts, now: MON })).sent).toBe(2);
+    await asUser(a.ownerId, (db) => partnerAskedToStop(db, actor(a), asked));
+    // What the team recorded is not the recipient's own opt-out: the page asks, so that they can make it.
+    expect(await partnerOptOutInfo(partnerOptOutToken(asked))).toMatchObject({ optedOut: false });
+    await optOutPartner(partnerOptOutToken(asked));
+    expect(await partnerOptOutInfo(partnerOptOutToken(asked))).toMatchObject({ optedOut: true });
+    await optOutPartner(partnerOptOutToken(oneClick), 'one_click');
+    expect(await partnerOptOutInfo(partnerOptOutToken(oneClick))).toMatchObject({ optedOut: true });
+    expect(await withSystem((db) => db.rows<{ email_norm: string; source: string }>('select email_norm, source from public.partner_opt_outs where email_norm = any($1::text[]) order by email_norm', [[`kim@page-${u}.example`, `ray@page-${u}.example`]])))
+      .toEqual([{ email_norm: `kim@page-${u}.example`, source: 'link' }, { email_norm: `ray@page-${u}.example`, source: 'one_click' }]);
+  });
+
+  it('“Asked to stop” recorded by a staff member who is later deleted still stops only that workspace’s emails', async () => {
+    const victim = await agency('PartnersVictimDeleted', ON);
+    const rival = await agency('PartnersRivalDeleted', null, false);
+    const specialist = await addMember(rival.orgId, 'specialist');
+    const u = uniq();
+    await add(victim, [P({ email: `sam@deleted-${u}.example` })]);
+    const theirs = (await asUser(specialist.id, (db) => addPartners(db, { orgId: rival.orgId, userId: specialist.id }, [P({ email: `sam@deleted-${u}.example` })], 'Added by hand.'))).ids;
+    expect(await asUser(specialist.id, (db) => partnerAskedToStop(db, { orgId: rival.orgId, userId: specialist.id }, theirs[0]!))).toBe(true);
+    // The operator removes that person's account (no screen does; SQL does). Their timeline entries lose their author.
+    expect(await withSystem((db) => db.run('delete from public.users where id = $1', [specialist.id]))).toBe(1);
+    expect(await count("select count(*)::int as n from public.partner_events where partner_id = $1 and kind = 'opted_out' and actor_id is null", [theirs[0]])).toBe(1);
+    const box = outbox();
+    expect(await runPartnerOutreach(victim.orgId, { ...box.opts, now: MON })).toEqual({ sent: 1, failed: 0, blocked: null, held: null });
+    expect(box.mails.map((m) => m.to)).toEqual([`sam@deleted-${u}.example`]);
+  });
+
+  it('an opt-out the recipient made outlives the workspace it was made through, and no tenant can read or change the list', async () => {
+    const a = await agency('PartnersGoneA', ON);
+    const b = await agency('PartnersGoneB', ON);
+    const u = uniq();
+    const [pa] = await add(a, [P({ email: `kim@gone-${u}.example` })]) as [string];
+    const [pb] = await add(b, [P({ email: `kim@gone-${u}.example` })]) as [string];
+    const box = outbox();
+    expect((await runPartnerOutreach(a.orgId, { ...box.opts, now: MON })).sent).toBe(1);
+    await optOutPartner(partnerOptOutToken(pa));
+    expect(await runPartnerOutreach(b.orgId, { ...box.opts, now: MON })).toEqual({ sent: 0, failed: 0, blocked: null, held: null });
+    // The operator deletes the first workspace, and with it the partner record the opt-out was made on.
+    expect(await withSystem((db) => db.run('delete from public.organizations where id = $1', [a.orgId]))).toBe(1);
+    // The second workspace's staff resume their partner; the next run pauses it again and emails nobody.
+    expect(await asUser(b.ownerId, (db) => resumePartner(db, actor(b), pb))).toBe(true);
+    expect(await runPartnerOutreach(b.orgId, { ...box.opts, now: day(1) })).toEqual({ sent: 0, failed: 0, blocked: null, held: null });
+    expect(await partner(pb)).toMatchObject({ status: 'new', paused: true, opted_out: false });
+    expect(box.mails.map((m) => m.to)).toEqual([`kim@gone-${u}.example`]); // the one introduction sent before the opt-out
+    // The list belongs to no workspace: a signed-in person can neither read it nor write to it.
+    for (const sql of ['select email_norm from public.partner_opt_outs limit 1', "insert into public.partner_opt_outs (email_norm, source) values ('x@y.example', 'link')", `delete from public.partner_opt_outs where email_norm = 'kim@gone-${u}.example'`]) {
+      await expect(asUser(b.ownerId, (db) => db.run(sql)), sql).rejects.toThrow(/permission denied/);
+    }
+  });
+
+  it('migration 0030 fills the list from the opt-outs already on record, the recipient’s own only, and can run again', async () => {
+    const a = await agency('PartnersBackfill', ON);
+    const sp = await addMember(a.orgId, 'specialist');
+    const u = uniq();
+    const [link, spam, staff, gone, copied] = await add(a, ['link', 'spam', 'staff', 'gone', 'copied'].map((w) => P({ email: `${w}@backfill-${u}.example` }))) as [string, string, string, string, string];
+    // What the code before the list wrote for an opt-out: the stamp, and a timeline entry (with no actor when the recipient made it).
+    const legacy = (id: string, actorId: string | null, summary: string) => withSystem(async (db) => {
+      await db.run("update public.partners set status = 'opted_out', opted_out_at = now() where id = $1", [id]);
+      await db.run("insert into public.partner_events (org_id, partner_id, actor_id, kind, summary) values ($1, $2, $3, 'opted_out', $4)", [a.orgId, id, actorId, summary]);
+    });
+    await legacy(link, null, 'Opted out from an email (the link, or the mail program’s unsubscribe button). No further email is sent to this address.');
+    await legacy(spam, null, 'The recipient marked one of these emails as spam. No email is sent to this address again.');
+    await legacy(staff, a.ownerId, 'Asked not to be emailed (recorded by the team). No further email is sent to this address.');
+    await legacy(gone, sp.id, 'Asked not to be emailed (recorded by the team). No further email is sent to this address.');
+    await withSystem((db) => db.run('delete from public.users where id = $1', [sp.id])); // that entry now has no actor either
+    // What an earlier version of the scheduled job stamped on a record because of another workspace's opt-out.
+    await legacy(copied, null, 'This address has asked not to receive partner emails sent through this service. No email is sent to it.');
+    const migration = readFileSync(path.join(process.cwd(), 'db/migrations/0030_partner_opt_outs.sql'), 'utf8');
+    for (let i = 0; i < 2; i++) await withSystem((db) => db.run(migration));
+    expect(await withSystem((db) => db.rows<{ email_norm: string; source: string }>('select email_norm, source from public.partner_opt_outs where email_norm like $1 order by email_norm', [`%@backfill-${u}.example`])))
+      .toEqual([{ email_norm: `link@backfill-${u}.example`, source: 'link' }, { email_norm: `spam@backfill-${u}.example`, source: 'complaint' }]);
+  });
+
   it('where a partner stands in the sequence is written by the scheduled job: a signed-in person cannot put a bounced or finished address back in line', async () => {
     const a = await agency('PartnersLine', ON);
     const [bounced, finished, fresh] = await add(a, [P(), P(), P()]) as [string, string, string];
@@ -1245,6 +1360,38 @@ describe('lead follow-up by text: only with a text consent from the enquiry form
     // A failed text is not "the team being in touch": the automatic email still goes out.
     const box = emails();
     expect((await runLeadOutreach(a.orgId, { ...box.opts, clientId: l.id })).sent).toBe(1);
+  });
+
+  it('the approval, the name and the switches are read again with every text claim: a change while a run is under way ends the run', async () => {
+    const a = await agency('LeadTextsMidRun', TEXTS_ON());
+    const numbers = [phone(), phone(), phone(), phone()];
+    for (const n of numbers.slice(0, 2)) expect((await enquire(a, { phone: n, smsConsent: true })).r).toEqual({ ok: true });
+    const handed: Sms[] = [];
+    /** A text service that accepts the text, while `meanwhile` happens. */
+    const sendWhile = (meanwhile: string) => async (m: Sms): Promise<SmsResult> => {
+      handed.push(m);
+      await withSystem((db) => db.run(meanwhile, [a.orgId]));
+      return { ok: true, provider: 'twilio', providerRef: `SM${uniq()}${uniq()}` };
+    };
+    // While the first text is with the text service, the operator withdraws the approval: nothing more is texted.
+    expect(await runLeadTexts(a.orgId, { now: NOON, send: sendWhile('update public.organizations set outreach_approved_at = null, outreach_approved_name = null where id = $1') }))
+      .toEqual({ sent: 1, failed: 0, waiting: 0, blocked: null, held: 'switched_off' });
+    expect(handed).toHaveLength(1);
+    // Approved again, with three leads due. This time the workspace is renamed (and approved under the new name) while
+    // the text is on its way: the texts of this run carry the name it started with, so it ends.
+    await approveOutreach(a.orgId, APPROVED);
+    for (const n of numbers.slice(2)) expect((await enquire(a, { phone: n, smsConsent: true })).r).toEqual({ ok: true });
+    expect(await runLeadTexts(a.orgId, { now: NOON, send: sendWhile("update public.organizations set name = name || ' Renamed', outreach_approved_name = name || ' Renamed' where id = $1") }))
+      .toEqual({ sent: 1, failed: 0, waiting: 0, blocked: null, held: 'switched_off' });
+    expect(handed).toHaveLength(2);
+    // Then the text follow-up is switched off while the next text is on its way: the run ends there too.
+    const renamed = (await withSystem((db) => db.row<{ name: string }>('select name from public.organizations where id = $1', [a.orgId])))!.name;
+    expect(await runLeadTexts(a.orgId, { now: NOON, send: sendWhile(`update public.organizations set settings = settings || '{"lead_text_followup": false}'::jsonb where id = $1`) }))
+      .toEqual({ sent: 1, failed: 0, waiting: 0, blocked: null, held: 'switched_off' });
+    expect(handed.map((m) => m.body.split(':')[0])).toEqual([a.name, a.name, renamed]);
+    expect(new Set(handed.map((m) => m.to)).size).toBe(3); // nobody was texted twice, and the fourth lead not at all
+    expect(handed.some((m) => m.to === numbers[3])).toBe(false);
+    expect(await runLeadTexts(a.orgId, { now: NOON })).toEqual({ sent: 0, failed: 0, waiting: 0, blocked: 'texts_off' });
   });
 
   it('STOP ends the texts for good; a changed number, a reply, an opt-out or becoming a client stop them too', async () => {

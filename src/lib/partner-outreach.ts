@@ -83,7 +83,8 @@ export function verifyPartnerOptOutToken(token: string): string | null {
  * to lift the stamp, to put the partner back in the sequence or to change the address (trigger partners_guard,
  * migration 0028), and the address cannot be added again as a new row (unique per agency). The stop is the stamp
  * (`opted_out_at`), not the status: staff may later record that the partner replied or is interested, and still no
- * email is ever sent to the address.
+ * email is ever sent to the address. On its own this stops this workspace's emails only; what the recipient did
+ * themselves also goes on the deployment-wide list (recipientOptOut below).
  */
 export async function markPartnerOptedOut(db: Db, a: { orgId: string; partnerId: string; actorId: string | null; summary: string }): Promise<boolean> {
   const changed = await db.run("update public.partners set status = 'opted_out', opted_out_at = now(), paused_at = null where id = $1 and org_id = $2 and opted_out_at is null", [a.partnerId, a.orgId]);
@@ -91,34 +92,57 @@ export async function markPartnerOptedOut(db: Db, a: { orgId: string; partnerId:
   return changed > 0;
 }
 
+/** How a recipient stopped the partner emails: the button behind the link, the mail program's one-click request, or a spam complaint. */
+export type PartnerOptOutSource = 'link' | 'one_click' | 'complaint';
+const LINK_OPT_OUT_SUMMARY = 'Opted out from an email (the link, or the mail program’s unsubscribe button). No further email is sent to this address.';
+
 /**
- * Who an opt-out link belongs to, and whether the stop is already on record. Reading it changes nothing: this is what
- * the page behind the link shows before the reader presses the button. Mail security gateways open the links in
- * incoming mail; if opening were the opt-out, the first email would opt out every partner behind such a gateway.
+ * An opt-out the recipient made themselves. The mailbox goes on the deployment-wide list (public.partner_opt_outs,
+ * migration 0030) that every workspace's sequence reads, and this partner is stopped as markPartnerOptedOut does. The
+ * list is written every time, also when staff had already recorded "Asked to stop" on the partner: that stopped this
+ * workspace's emails only. The list belongs to no workspace, so deleting a user or a workspace removes nothing from it.
+ * Call under the system connection, with the partner row locked. True when anything new was recorded.
+ */
+async function recipientOptOut(db: Db, a: { orgId: string; partnerId: string; email: string; source: PartnerOptOutSource; summary: string }): Promise<boolean> {
+  const listed = (await db.run('insert into public.partner_opt_outs (email_norm, source) values (app.email_norm($1), $2) on conflict (email_norm) do nothing', [a.email, a.source])) > 0;
+  const stamped = await markPartnerOptedOut(db, { orgId: a.orgId, partnerId: a.partnerId, actorId: null, summary: a.summary });
+  // Already stopped by the team: the timeline still says that the recipient opted out as well.
+  if (listed && !stamped) await db.run("insert into public.partner_events (org_id, partner_id, kind, summary) values ($1, $2, 'opted_out', $3)", [a.orgId, a.partnerId, a.summary.slice(0, 300)]);
+  return listed || stamped;
+}
+
+/**
+ * Who an opt-out link belongs to, and whether the recipient's own stop is already on record. Reading it changes
+ * nothing: this is what the page behind the link shows before the reader presses the button. Mail security gateways
+ * open the links in incoming mail; if opening were the opt-out, the first email would opt out every partner behind such
+ * a gateway. A partner the team marked "Asked to stop" is not done yet: the page still offers the button, because only
+ * the recipient's own opt-out stops the emails of every workspace.
  */
 export async function partnerOptOutInfo(token: string): Promise<{ orgId: string; orgName: string; lang: PartnerLang; optedOut: boolean } | null> {
   const id = verifyPartnerOptOutToken(token);
   if (!id) return null;
   return withSystem(async (db) => {
     const p = await db.row<{ org_id: string; name: string; language: string; opted_out: boolean }>(
-      'select p.org_id, o.name, p.language, (p.opted_out_at is not null) as opted_out from public.partners p join public.organizations o on o.id = p.org_id where p.id = $1', [id]);
+      `select p.org_id, o.name, p.language,
+              (p.opted_out_at is not null and exists (select 1 from public.partner_opt_outs x where x.email_norm = app.email_norm(p.email))) as opted_out
+         from public.partners p join public.organizations o on o.id = p.org_id where p.id = $1`, [id]);
     return p ? { orgId: p.org_id, orgName: p.name, lang: p.language === 'es' ? 'es' : 'en', optedOut: p.opted_out } : null;
   });
 }
 
 /**
- * The opt-out itself: the button on the page behind the link, or a mail program's one-click unsubscribe (a POST to
- * partnerOneClickUrl). No sign-in. Doing it again changes nothing.
+ * The opt-out itself: the button on the page behind the link (`via` 'link'), or a mail program's one-click unsubscribe
+ * (a POST to partnerOneClickUrl, `via` 'one_click'). No sign-in. Doing it again changes nothing.
  */
-export async function optOutPartner(token: string): Promise<{ orgId: string; orgName: string; lang: PartnerLang } | null> {
+export async function optOutPartner(token: string, via: 'link' | 'one_click' = 'link'): Promise<{ orgId: string; orgName: string; lang: PartnerLang } | null> {
   const id = verifyPartnerOptOutToken(token);
   if (!id) return null;
   return withSystem(async (db) => {
-    const p = await db.row<{ org_id: string; name: string; language: string }>(
-      'select p.org_id, o.name, p.language from public.partners p join public.organizations o on o.id = p.org_id where p.id = $1 for update of p', [id]);
+    const p = await db.row<{ org_id: string; name: string; language: string; email: string }>(
+      'select p.org_id, o.name, p.language, p.email from public.partners p join public.organizations o on o.id = p.org_id where p.id = $1 for update of p', [id]);
     if (!p) return null;
-    if (await markPartnerOptedOut(db, { orgId: p.org_id, partnerId: id, actorId: null, summary: 'Opted out from an email (the link, or the mail program’s unsubscribe button). No further email is sent to this address.' })) {
-      await audit(db, { orgId: p.org_id, actorLabel: 'Email opt-out link', action: 'partner.opted_out', entityType: 'partner', entityId: id });
+    if (await recipientOptOut(db, { orgId: p.org_id, partnerId: id, email: p.email, source: via, summary: LINK_OPT_OUT_SUMMARY })) {
+      await audit(db, { orgId: p.org_id, actorLabel: 'Email opt-out link', action: 'partner.opted_out', entityType: 'partner', entityId: id, meta: { via } });
     }
     return { orgId: p.org_id, orgName: p.name, lang: p.language === 'es' ? 'es' : 'en' };
   });
@@ -208,17 +232,19 @@ export async function partnerBounceHealth(db: Db, orgId: string, approvedAt: str
 /**
  * A bounce or a spam complaint the email service reported for an email this sequence sent (matched by the id the
  * service gave when it accepted the email). A bounce stops the sequence for that partner, exactly as the "Bounced"
- * button does. A complaint is an opt-out: that address is never emailed again. Returns false when the id is not one of
- * ours. Reached through POST /api/webhooks/resend; written to Resend's documented webhook, not exercised against it.
+ * button does. A complaint is the recipient's own opt-out: that mailbox is never emailed again, by any workspace.
+ * Returns false when the id is not one of ours. Reached through POST /api/webhooks/resend; written to Resend's
+ * documented webhook, not exercised against it.
  */
 export async function recordPartnerDeliveryEvent(providerRef: string, kind: 'bounced' | 'complained'): Promise<boolean> {
   if (!providerRef) return false;
   return withSystem(async (db) => {
     const o = await db.row<{ org_id: string; partner_id: string }>('select org_id, partner_id from public.partner_outreach where provider_ref = $1 limit 1', [providerRef.slice(0, 200)]);
     if (!o) return false;
-    if (!(await db.row('select 1 from public.partners where id = $1 for update', [o.partner_id]))) return false;
+    const p = await db.row<{ email: string }>('select email from public.partners where id = $1 for update', [o.partner_id]);
+    if (!p) return false;
     if (kind === 'complained') {
-      if (await markPartnerOptedOut(db, { orgId: o.org_id, partnerId: o.partner_id, actorId: null, summary: 'The recipient marked one of these emails as spam. No email is sent to this address again.' })) {
+      if (await recipientOptOut(db, { orgId: o.org_id, partnerId: o.partner_id, email: p.email, source: 'complaint', summary: 'The recipient marked one of these emails as spam. No email is sent to this address again.' })) {
         await audit(db, { orgId: o.org_id, actorLabel: 'Email service report', action: 'partner.opted_out', entityType: 'partner', entityId: o.partner_id, meta: { reason: 'complaint' } });
       }
       return true;
@@ -268,7 +294,7 @@ const CANDIDATE_COLS = 'p.id, p.contact_name, p.category, p.email, p.city, p.sta
  * whole deployment (which also makes both daily limits exact), and the claim is committed before the email is handed
  * to the email service. Every stop condition (opt-out, a recorded reply, "interested", "not interested", bounced,
  * paused, the switch and the approval themselves) is read again under a row lock at that moment, and so is the
- * deployment-wide opt-out list: an address that opted out of any workspace's partner emails, in any spelling the
+ * deployment-wide opt-out list: a mailbox whose owner opted out of any workspace's partner emails, in any spelling the
  * email service treats as the same mailbox, is not emailed.
  *
  * What happens to a step that does not go through:
@@ -341,16 +367,17 @@ export async function runPartnerOutreach(orgId: string, opts: PartnerRunOptions 
       if (!fresh) return null;
       const again = decidePartnerStep(partnerState(fresh, tz), today);
       if (again.kind !== 'send' || again.step !== step) return null;
-      // The opt-out list is one list for the deployment, read by normalised address: someone who stopped these emails
-      // once is not written to again through another workspace, or as dana+1@ after dana@ opted out. A record of
-      // another workspace counts only when the recipient made the opt-out (the link, the mail program's unsubscribe
-      // button, a spam complaint): those entries have no actor, and a signed-in person cannot write one. What staff of
-      // another workspace recorded by hand ("Asked to stop") stops that workspace's own emails and nobody else's.
+      // The opt-out list is one list for the deployment (public.partner_opt_outs), read by normalised address: someone
+      // who stopped these emails themselves (the link, the mail program's unsubscribe button, a spam complaint) is not
+      // written to again through any workspace, or as dana+1@ after dana@ opted out. Only the system connection writes
+      // that list. What staff recorded by hand ("Asked to stop") stops their own workspace's emails, in any spelling
+      // of the address, and nobody else's.
       if (await db.row(
-        `select 1 from public.partners x
-          where x.opted_out_at is not null and x.id <> $3 and app.email_norm(x.email) = app.email_norm($1)
-            and (x.org_id = $2 or exists (select 1 from public.partner_events e where e.partner_id = x.id and e.kind = 'opted_out' and e.actor_id is null))
-          limit 1`, [fresh.email, orgId, p.id])) {
+        `select 1 from public.partner_opt_outs where email_norm = app.email_norm($1)
+         union all
+         select 1 from public.partners x
+          where x.org_id = $2 and x.id <> $3 and x.opted_out_at is not null and app.email_norm(x.email) = app.email_norm($1)
+         limit 1`, [fresh.email, orgId, p.id])) {
         // Paused, not stamped as opted out: that stamp can never be lifted, and this stop is on another record.
         await db.run('update public.partners set paused_at = now() where id = $1 and org_id = $2 and paused_at is null', [p.id, orgId]);
         await db.run("insert into public.partner_events (org_id, partner_id, kind, summary) values ($1, $2, 'paused', $3)",

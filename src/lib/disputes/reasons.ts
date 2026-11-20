@@ -9,16 +9,17 @@ import type { Evidence } from '../reports/analysis';
  *
  * A reason is drafted only where a report gives it something to say. Where the reason can only be the client's own
  * account (identity theft, a bankruptcy, a payment, a goodwill request, personal information, a debt a collector is
- * asking about, a late payment the client says was on time, an inquiry the client does not recognize) nothing is
- * drafted: the field starts empty with a prompt, and a person writes what the client told them. A stock sentence in
- * those letters would state a position nobody recorded: a finding that an inquiry is more than two years old, for
- * one, says nothing about whether the client authorized it.
+ * asking about, a late payment the client says was on time, an inquiry the client does not recognize, what a creditor
+ * is asked to check in its own records) nothing is drafted: the field starts empty with a prompt, and a person writes
+ * what the client told them. A stock sentence in those letters would state a position nobody recorded: a finding that
+ * an inquiry is more than two years old, for one, says nothing about whether the client authorized it.
  *
  * A drafted reason states report values only where the reports show something to point at: two bureaus that differ,
  * entries that look like one debt, the reported date an outdated-item letter rests on. One reported value with nothing
  * to compare it with is not restated (the letter itself prints the account as the report shows it). What is drafted
  * then is a bare request to verify, worded so that the specificity check (src/lib/letters/specificity.ts) holds the
- * letter until a person adds what the client's own records show.
+ * letter until a person adds what the client's own records show. A date is written out as a letter writes it
+ * ("March 5, 2018"), and the reason names the information the evidence is about ("the date opened"), nothing more.
  */
 export interface ReasonInput {
   category: string;
@@ -43,6 +44,8 @@ export const REASON_PROMPT: Record<string, string> = {
   unverifiable_collection: 'What the client says about this debt: for example, the amount or the creditor they do not recognize. The letter itself asks for validation.',
   incorrect_payment_history: 'Which late payment the client disputes (the month and year the report shows it), and what the client’s own records show for that month: for example, the date the payment cleared.',
   unauthorized_inquiry: 'What the client says about this inquiry: for example, that they did not apply for credit with this company. Give the inquiry’s date as the report shows it; the letter needs it to say which inquiry is meant.',
+  // The letter goes to the creditor itself, so the bureau wording ("verify it with the furnisher") would ask it to check with itself.
+  furnisher_direct: 'What the creditor reports for this account, and what the client’s own records show instead: for example, the balance on their latest statement, or the date a payment cleared.',
 };
 /** True when a person has to write the reason for this category: nothing on a report can stand in for it. */
 export const reasonIsClientsOwn = (category: string) => category in REASON_PROMPT;
@@ -54,6 +57,16 @@ const who = (i: ReasonInput) => (named(i) ? `${i.creditor.trim()}${i.last4 ? ` (
 const reported = (ev: Evidence[] = []) => ev.filter((e, n) => e.source === 'reported' && e.bureau
   && ev.findIndex((o) => o.source === 'reported' && o.bureau === e.bureau && o.field === e.field && o.value === e.value) === n);
 const lowerFirst = (s: string) => `${s.charAt(0).toLowerCase()}${s.slice(1)}`;
+const sayDay = (day: string) => longDate(new Date(`${day}T00:00:00Z`));
+/**
+ * A reported value as a sentence states it: a date that a report or a finding holds as 2018-03-05 is "March 5, 2018".
+ * The new dispute form uses it too, to tell whether a drafted reason states a value from the report.
+ */
+export const asWritten = (v: string) => {
+  const day = v.trim();
+  const d = /^\d{4}-\d{2}-\d{2}$/.test(day) ? new Date(`${day}T00:00:00Z`) : null;
+  return d && !Number.isNaN(d.getTime()) && d.toISOString().startsWith(day) ? longDate(d) : v;
+};
 /**
  * "Experian reports $640.00; Equifax reports $600.00". When the values are of more than one kind (or `withField` is
  * set) each one is named, so a list never reads as if a creditor's name were a date or a balance:
@@ -62,7 +75,12 @@ const lowerFirst = (s: string) => `${s.charAt(0).toLowerCase()}${s.slice(1)}`;
 const list = (ev: Evidence[] = [], withField = false) => {
   const r = reported(ev);
   const name = withField || new Set(r.map((e) => e.field)).size > 1;
-  return r.map((e) => `${BUREAU_LABEL[e.bureau!]} reports ${name ? `${lowerFirst(e.field)} ` : ''}${e.value}`).join('; ');
+  return r.map((e) => `${BUREAU_LABEL[e.bureau!]} reports ${name ? `${lowerFirst(e.field)} ` : ''}${asWritten(e.value)}`).join('; ');
+};
+/** "Date of first delinquency (collection)": the date of first delinquency, and whose it is ("collection"). */
+const kindOf = (field: string) => {
+  const m = /^(.*\S)\s*\(([^()]+)\)\s*$/.exec(field);
+  return { kind: lowerFirst(m ? m[1]! : field.trim()), whose: m ? m[2]!.trim() : null };
 };
 /**
  * True when two DIFFERENT bureaus in the evidence report different values of the same thing: only then does a reason
@@ -92,26 +110,47 @@ export function draftReason(i: ReasonInput): string {
       case 'incorrect_status':
         if (differs(ev)) return `The account or payment status reported for ${who(i)} is not consistent across the credit reporting agencies (${list(ev)}). Please verify the status with the furnisher and correct it if needed.`;
         return `Please verify the account and payment status reported for ${who(i)}${several(ev) ? ` (${list(ev)})` : ''} with the furnisher and correct it if needed.`;
-      case 'incorrect_dates':
+      case 'incorrect_dates': {
+        // Only dates are set side by side: another entry of the finding (the original creditor's name, beside a
+        // collection that shows a later date of first delinquency than the original account) is not one of "the dates".
+        const dates = reported(ev).filter((e) => /\bdate\b/i.test(e.field));
+        // The date in question is named when the evidence is about one kind of date ("the date opened"), and the date
+        // of first delinquency is asked about only when the evidence is about it: an open, current account has none.
+        const kinds = [...new Set(dates.map((e) => kindOf(e.field).kind))];
+        const kind = kinds.length === 1 ? kinds[0]! : null;
+        const what = kind ? `the ${kind}` : 'the dates';
+        const dofd = !kind && dates.some((e) => /first delinquency/i.test(e.field)) ? ', including the date of first delinquency,' : '';
+        const values = dates.map((e) => {
+          const k = kindOf(e.field);
+          return `${BUREAU_LABEL[e.bureau!]} reports ${kind ? '' : `${k.kind} `}${asWritten(e.value)}${k.whose ? ` for the ${k.whose}` : ''}`;
+        }).join('; ');
+        if (differs(dates)) return `${kind ? `The ${kind}` : 'The dates'} reported for ${who(i)} ${kind ? 'differs' : 'differ'} between the credit reporting agencies (${values}). Please verify ${what}${dofd} with the furnisher and correct ${kind ? 'it' : 'them'} if needed.`;
         // Values are listed when there are several to set side by side (for example a collection's date of first
         // delinquency and the original creditor's, on one bureau's report); a single reported date is not restated.
-        if (differs(ev)) return `The dates reported for ${who(i)} (${list(ev)}) do not match across the credit reporting agencies. Please verify the dates, including the date of first delinquency, with the furnisher and correct them if needed.`;
-        return `Please verify the dates reported for ${who(i)}${several(ev) ? ` (${list(ev)})` : ''}, including the date of first delinquency, with the furnisher and correct them if needed.`;
+        return `Please verify ${what} reported for ${who(i)}${several(dates) ? ` (${values})` : ''}${dofd} with the furnisher and correct ${kind ? 'it' : 'them'} if needed.`;
+      }
       case 'duplicate':
         // With the entries a report shows, they are listed. Without them it is a bare request to verify: which entries
-        // look like the same debt, and why, is for a person to add.
-        if (reported(ev).length) return `${named(i) ? who(i) : 'This account'} appears to be reported more than once or by more than one company for the same debt (${list(ev, true)}). Please verify whether these are separate obligations and, if they are the same one, report it once.`;
-        return `Please verify whether ${who(i)} is reported more than once, or by more than one company for the same debt, and if it is, report it once.`;
+        // look like the same debt, and why, is for a person to add. What is asked is that the debt not be counted twice:
+        // a collector and the original creditor may both report it, the original creditor then with no balance owed.
+        if (reported(ev).length) return `${named(i) ? who(i) : 'This account'} appears to be reported more than once or by more than one company for the same debt (${list(ev, true)}). Please verify whether these are separate obligations and, if they are the same one, make sure the debt is not reported as owed twice.`;
+        return `Please verify whether ${who(i)} is reported more than once, or by more than one company for the same debt, and if it is, make sure the debt is not reported as owed twice.`;
       case 'obsolete': {
         // The reported date is stated as it is. Whether a reporting period has ended, and for what (the whole item, or
         // only the late payment information of an account that is only late), is worked out by the letter itself from
         // the same date, and the letter makes the request, so the reason says neither.
         const d = ev.find((e) => /first delinquency|date filed/i.test(e.field) && e.source === 'reported');
-        if (d) return `My ${d.bureau ? `${BUREAU_LABEL[d.bureau]} ` : ''}credit report shows a ${d.field.toLowerCase()} of ${d.value} for ${who(i)}. Please verify that date with the furnisher.`;
+        if (d) {
+          // A public record (a bankruptcy, a judgment) is not an account, and no furnisher reports it.
+          const record = /date filed/i.test(d.field);
+          return `My ${d.bureau ? `${BUREAU_LABEL[d.bureau]} ` : ''}credit report shows a ${record ? 'filing date' : d.field.toLowerCase()} of ${asWritten(d.value)} for ${record && !named(i) ? 'this record' : who(i)}. Please verify that date${record ? '' : ' with the furnisher'}.`;
+        }
         return `Please verify the date of first delinquency reported for ${who(i)} and, if the item is past the reporting period, update my file accordingly.`;
       }
       case 'not_mine':
-        return `I do not recognize ${who(i)}. Please provide verification that ${named(i) ? 'this account' : 'it'} belongs to me, including the name and address of the furnisher and the account opening documents.`;
+        // The client's statement, as the dispute type records it. The letter itself asks whether the account belongs to
+        // the client and for the furnisher's name and address; a bureau holds no account opening documents to send.
+        return named(i) ? `I do not recognize ${who(i)} as my account.` : 'I do not recognize this account as mine.';
       default:
         return `Please verify the information reported for ${who(i)} with the furnisher and correct it if it cannot be verified.`;
     }
@@ -127,8 +166,6 @@ export interface ReportedRow {
   /** True when the row is on the newest approved report of its bureau (the rule the comparison uses: reports/service.ts loadAnalysisInput). */
   newest: boolean;
 }
-
-const sayDay = (day: string) => longDate(new Date(`${day}T00:00:00Z`));
 
 /**
  * The values the approved reports show for one account, for the reason of a dispute started from the account itself

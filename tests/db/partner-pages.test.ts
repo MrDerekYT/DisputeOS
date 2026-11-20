@@ -444,6 +444,44 @@ describe('Leads page with text follow-up', () => {
 });
 
 // ================================================================ the buttons and forms behind those pages
+describe('Leads page: why automatic follow-up stopped for a lead', () => {
+  it('says when an email bounced or was marked as spam, and shows a saved address that cannot be used with the reason', async () => {
+    const a = await agency('PagesLeadsStops', { lead_followup_enabled: true, lead_followup_since: new Date(Date.now() - 60_000).toISOString(), lead_mailing_address: '4010 W Dr Martin Luther King Jr Blvd Suite 4 Tampa FL 33614', lead_reply_email: REPLY });
+    const enquire = (name: string) => submitLead(a.slug, { fullName: name, email: `lead-${uniq()}@example.test`, language: 'en', consent: true }, { ip: testIp(), defer: () => undefined });
+    for (const name of ['Bounced Lead', 'Spam Lead', 'Stopped Lead']) expect(await enquire(name)).toEqual({ ok: true });
+    // What the email service reports (bounce, complaint) and what staff record ("Asked to stop") all end the follow-up.
+    await withSystem(async (db) => {
+      for (const [name, reason] of [['Bounced Lead', 'bounce'], ['Spam Lead', 'complaint'], ['Stopped Lead', null]] as const) {
+        const c = (await db.row<{ id: string }>('select id from public.clients where org_id = $1 and full_name = $2', [a.orgId, name]))!;
+        await db.run('update public.clients set outreach_opt_out_at = now() where id = $1', [c.id]);
+        await db.run("insert into public.client_events (org_id, client_id, kind, summary, meta) values ($1, $2, 'lead_opt_out', 'Stopped', $3)", [a.orgId, c.id, JSON.stringify(reason ? { reason } : {})]);
+      }
+    });
+    signIn(a);
+    const page = read(await LeadsPage({ searchParams: Promise.resolve({}) }));
+    expect(page).toContain('An email bounced: no more automatic email');
+    expect(page).toContain('Marked an email as spam: no more automatic email');
+    expect(page).toContain('Opted out of automatic email');
+    // The saved address is a real one written without commas: the rule takes it, so nothing is in the way.
+    expect(page).not.toContain('cannot be used');
+    // One the rule refuses is shown in the field, with what is wrong (email reads as connected here, so the address is
+    // what is in the way; rendering a page sends nothing).
+    await withSystem((db) => db.run("update public.organizations set settings = settings || '{\"lead_mailing_address\": \"Call 800 555 0100 today, Tampa, FL 33606\"}'::jsonb where id = $1", [a.orgId]));
+    Object.assign(process.env, { EMAIL_DRIVER: 'resend', RESEND_API_KEY: 're_test_key_for_vitest' });
+    resetEnvCache();
+    try {
+      signIn(a);
+      const held = read(await LeadsPage({ searchParams: Promise.resolve({}) }));
+      expect(held).toContain('The saved mailing address cannot be used, so no email is sent. A mailing address cannot contain a phone number.');
+      expect(markup(await LeadsPage({ searchParams: Promise.resolve({}) }))).toMatch(/name="address" value="Call 800 555 0100 today, Tampa, FL 33606"/);
+    } finally {
+      process.env.EMAIL_DRIVER = saved.EMAIL_DRIVER;
+      delete process.env.RESEND_API_KEY;
+      resetEnvCache();
+    }
+  });
+});
+
 describe('partner actions, as the forms call them', () => {
   const form = (o: Record<string, string | File>) => { const fd = new FormData(); for (const [k, v] of Object.entries(o)) fd.set(k, v); return fd; };
   const row = (id: string) => withSystem((db) => db.row<{ business_name: string; status: string; paused: boolean; email: string; city: string | null; attested_by: string | null }>(

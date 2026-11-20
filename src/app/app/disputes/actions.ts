@@ -132,6 +132,8 @@ export async function recordResponseAction(_: ActionState, fd: FormData): Promis
   return run(async () => {
     // A "frivolous or irrelevant" notice has its own form (frivolousNoticeAction): it must say what the agency asked for.
     const d = parseForm(z.object({ id: zUuid, outcome: z.enum(OUTCOMES).exclude(['frivolous']), notes: zOpt(4000), receivedOn: zDate.optional().or(z.literal('')), completedOn: zDate.optional().or(z.literal('')) }), fd);
+    // Later letters state this day as the day the client received the results; "no response" has none to give.
+    if (d.outcome !== 'no_response' && !d.receivedOn) throw new UserError('Enter the date the response was received.');
     await ctx.tx((db) => recordResponse(db, actorOf(ctx), d.id, { outcome: d.outcome, notes: d.notes, receivedOn: d.receivedOn || undefined, completedOn: d.completedOn || undefined }));
     revalidatePath(`/app/disputes/${d.id}`);
     return { ok: 'Response recorded.' };

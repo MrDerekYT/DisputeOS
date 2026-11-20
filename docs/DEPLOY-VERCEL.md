@@ -277,7 +277,10 @@ honest choices:
 
 - `EMAIL_DRIVER=resend` with `RESEND_API_KEY` and `EMAIL_FROM` on a domain verified in Resend. Note: the Resend
   integration is written to Resend's documented API but has **not** been exercised against the live service from this
-  codebase. Send yourself an invitation and a password reset before you rely on it.
+  codebase. Send yourself an invitation and a password reset before you rely on it. When Resend gives no answer (a
+  timeout, a dropped connection, or an HTTP 5xx from a gateway in front of it) the app does not know whether the email
+  went out: an automatic email to a lead or a partner is then never sent again, and the screens say "may or may not
+  have arrived" rather than "failed".
 - `EMAIL_DRIVER=disabled` to launch without an email provider. Nothing is ever sent and the app says so:
   invitations (team and client) show a one-time link for you to pass on; an email to a client is recorded as not
   delivered; automatic lead follow-up stays off; Settings → Integrations shows email as not connected.
@@ -316,7 +319,10 @@ always finishes inside the route's 60; organizations it did not reach come first
 accepts cron jobs that run once a day, and may run them at any point within the hour. Consequences: automations that
 react to deadlines, reminders and lead follow-ups act up to a day later than on a host that runs the jobs every 15
 minutes. On a paid plan, replace both entries in `vercel.json` with one on `*/15 * * * *` and redeploy. Running the jobs more
-than once is safe. Cron jobs only run for the production deployment.
+than once is safe. Cron jobs only run for the production deployment. The run's result counts what it could not
+finish: `notReached` (organizations it did not get to), `unfinished` (lead emails or client updates left for the next
+run) and `unanswered` (lead or partner email runs that stopped because the email service did not answer). A run that
+keeps reporting `unanswered` points at the email service, not at the app.
 
 To run the jobs by hand: `curl -H "Authorization: Bearer $CRON_SECRET" https://<your-app>/api/jobs/run`.
 

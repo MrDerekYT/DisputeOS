@@ -141,14 +141,17 @@ export function specificityIssues(i: SpecificityInput): SpecificityIssue[] {
     }
   }
 
-  // 2. The specific information disputed: a ticked field, a category that names it, or the letter naming it.
+  // 2. The specific information disputed: a ticked field, a category that names it, or the letter naming it. A concrete
+  // reason names it in its own words ("the judgment was vacated on May 12, 2021"), so it is not asked for again.
   const reason = reasonInLetter(i.body, i.reason);
   const ticked = i.fields.filter((f) => f.toLowerCase() !== 'other');
-  const named = ticked.length > 0 || !VAGUE_CATEGORY.has(i.category) || INFORMATION_WORD.test(reason);
+  const named = ticked.length > 0 || !VAGUE_CATEGORY.has(i.category) || INFORMATION_WORD.test(reason) || isConcreteReason(reason, i.account);
   if (!named) out.push({ key: 'information', message: 'State the specific information disputed (for example the balance, the status, a date or the payment history).' });
 
-  // 3. A concrete reason, as the letter states it. Naming the account again is not one.
-  if (!isConcreteReason(reason, i.account)) {
+  // 3. A concrete reason, as the letter states it. Naming the account again is not one. For an account the client does
+  // not recognize, the client's statement that they do not recognize it is the reason: it is what the dispute type records.
+  const disowned = i.category === 'not_mine' && /\b(?:do|did) not recogni[sz]e\b/i.test(reason);
+  if (!disowned && !isConcreteReason(reason, i.account)) {
     out.push({ key: 'reason', message: 'Give a concrete reason in the letter: what is reported, and what the client’s own records or recollection show instead. Use only what the client has told you.' });
   }
 

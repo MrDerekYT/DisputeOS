@@ -217,11 +217,17 @@ export default async function DisputePage({ params }: { params: Promise<{ id: st
                     <h3 className="mb-2 text-sm font-semibold">2 · Record the outcome</h3>
                     <ActionForm action={recordResponseAction} className="space-y-3">
                       <input type="hidden" name="id" value={d.id} />
-                      <Select label="Outcome" name="outcome" required defaultValue={d.outcome ?? ''} placeholder="Choose…" options={OUTCOMES.filter((o) => o !== 'frivolous').map((o) => ({ value: o, label: OUTCOME_LABEL[o] }))} />
-                      <Field label="Date response received" name="receivedOn" type="date" />
+                      <Select label="Outcome" name="outcome" required defaultValue={d.outcome ?? ''} placeholder="Choose…" options={OUTCOMES.filter((o) => o !== 'frivolous' && o !== 'no_response').map((o) => ({ value: o, label: OUTCOME_LABEL[o] }))} />
+                      <Field label="Date response received" name="receivedOn" type="date" max={today} required hint="The day the results arrived. Letters that follow state this date." />
                       <Field label="Date the agency completed its reinvestigation" name="completedOn" type="date" defaultValue={d.investigation_completed_on ?? ''} hint="Optional. Only if the response states it." />
                       <TextArea label="Notes" name="notes" rows={2} defaultValue={d.outcome_notes} />
                       <SubmitButton>Record response</SubmitButton>
+                    </ActionForm>
+                    {/* "No response" has no day of arrival to give, so it is recorded on its own, without the date the form above requires. */}
+                    <ActionForm action={recordResponseAction} className="mt-4 flex flex-wrap items-center gap-3 border-t border-line pt-4">
+                      <input type="hidden" name="id" value={d.id} /><input type="hidden" name="outcome" value="no_response" /><input type="hidden" name="notes" value={d.outcome_notes ?? ''} />
+                      <span className="text-[0.8125rem] text-muted">Nothing came back?</span>
+                      <SubmitButton variant="secondary">Record no response</SubmitButton>
                     </ActionForm>
                   </div>
                 </div>

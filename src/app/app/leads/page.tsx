@@ -32,11 +32,12 @@ const PERSONAL_CONTACT = `exists (select 1 from public.communications m where m.
 const FROM_FORM = "exists (select 1 from public.client_events e where e.client_id = c.id and e.kind = 'lead_created')";
 
 /** What the "Follow-up" column says for one lead: always derived from the same rule the scheduled job uses. */
-function followUp(d: LeadDecision, sending: boolean, sent: number): { text: string; tone: Tone } {
+function followUp(d: LeadDecision, sending: boolean, sent: number, optOutReason: string | null = null): { text: string; tone: Tone } {
   const label = (k: string) => LEAD_STEPS.find((s) => s.key === k)?.label.toLowerCase() ?? k;
   if (d.kind === 'stop') {
     switch (d.reason) {
-      case 'opted_out': return { text: 'Opted out of automatic email', tone: 'warn' };
+      // The email service reports a bounce or a spam complaint about a follow-up email; both end the follow-up.
+      case 'opted_out': return { text: optOutReason === 'bounce' ? 'An email bounced: no more automatic email' : optOutReason === 'complaint' ? 'Marked an email as spam: no more automatic email' : 'Opted out of automatic email', tone: 'warn' };
       case 'no_consent': return { text: 'No automatic email — added by your team', tone: 'neutral' };
       case 'no_email': return { text: 'No email address', tone: 'neutral' };
       case 'replied': return { text: 'Stopped — a reply is on file', tone: 'ok' };
@@ -60,7 +61,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
   const env = getEnv();
   const page = pageParam(sp.page);
   const q = sp.q?.trim().slice(0, 80) ?? '';
-  type Row = LeadTextStateRow & { id: string; full_name: string; email: string | null; goals: string | null; source: string | null; last_contact: string | null; last_contact_auto: boolean; last_contact_channel: string | null };
+  type Row = LeadTextStateRow & { id: string; full_name: string; email: string | null; goals: string | null; source: string | null; last_contact: string | null; last_contact_auto: boolean; last_contact_channel: string | null; opt_out_reason: string | null };
   const { org, counts, sources, rows, total, emails, lastRun } = await ctx.tx(async (db) => {
     const org = (await db.row<ApprovalRow & { slug: string; mode: string; settings: Record<string, unknown> }>(`select ${APPROVAL_COLS}, slug, mode, settings from public.organizations where id = $1`, [ctx.orgId]))!;
     const counts = (await db.row<{ new_week: number; waiting: number; contacted: number; converted: number }>(
@@ -75,6 +76,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
     const rows = await db.rows<Row>(
       `select c.id, c.full_name, c.email, c.goals, c.source, lc.created_at as last_contact, lc.channel as last_contact_channel,
               exists (select 1 from public.lead_outreach o where o.communication_id = lc.id) as last_contact_auto,
+              (select e.meta->>'reason' from public.client_events e where e.client_id = c.id and e.kind = 'lead_opt_out' order by e.created_at desc limit 1) as opt_out_reason,
               ${LEAD_TEXT_STATE_SQL}
          from public.clients c
          left join lateral (select m.id, m.created_at, m.channel from public.communications m where m.client_id = c.id and ${DELIVERED_BY_TEAM_SQL} order by m.created_at desc limit 1) lc on true
@@ -236,7 +238,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
               <thead><tr><th>Name</th><th>Goal</th><th>Source</th><th>Received</th><th>Last contact</th><th>Follow-up</th><th><span className="sr-only">Actions</span></th></tr></thead>
               <tbody>
                 {rows.map((l) => {
-                  const f = followUp(decideLeadStep(leadState(l, settings.since), now), !blocker, l.outreach.filter((o) => o.status === 'sent').length);
+                  const f = followUp(decideLeadStep(leadState(l, settings.since), now), !blocker, l.outreach.filter((o) => o.status === 'sent').length, l.opt_out_reason);
                   // A line about texts only for a lead who agreed to them on the form, from the same rule the job uses.
                   const textsSent = l.texts.filter((t) => t.status === 'sent').length;
                   const td = l.text_consent_phone || l.texts.length ? decideLeadText(leadTextState(l, settings.since), now) : null;

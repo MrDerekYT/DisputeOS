@@ -3,7 +3,7 @@ import { agencyByKey } from '@/lib/credit/agencies';
 import { loadSpecialty, setBankingConcern, setSpecialtyReport } from '@/lib/credit/specialty-reports';
 import { addEvidence, createDispute, createSpecialtyDispute, recordResponse, startNextRound, transitionDispute, type DActor } from '@/lib/disputes/service';
 import { confirmIdentityDocs } from '@/lib/intake-load';
-import { createLetter, currentBody, saveVersion, setLetterStatus } from '@/lib/letters/service';
+import { businessToday, createLetter, currentBody, saveVersion, setLetterStatus } from '@/lib/letters/service';
 import { buildPlan, loadPlanInput } from '@/lib/plan';
 import { addClient, addMember, addPortalClient, asUser, closePool, makeOrg, withSystem, type TestOrg } from './helpers';
 import { recordConsentRows } from './consents';
@@ -142,7 +142,8 @@ describe('specialty dispute lifecycle (ChexSystems)', () => {
   });
 
   it('records the response and outcome, and a next round stays a specialty dispute', async () => {
-    await asUser(specialist.userId, (db) => recordResponse(db, specialist, disputeId, { outcome: 'verified', notes: 'Reply says the bank confirmed the record.' }));
+    // The dispute was recorded as sent today, so the reply can only have arrived today. The day is required.
+    await asUser(specialist.userId, (db) => recordResponse(db, specialist, disputeId, { outcome: 'verified', notes: 'Reply says the bank confirmed the record.', receivedOn: businessToday() }));
     await asUser(specialist.userId, (db) => transitionDispute(db, specialist, disputeId, 'resolved'));
     expect(await withSystem((db) => db.row('select status, outcome from public.disputes where id = $1', [disputeId]))).toEqual({ status: 'resolved', outcome: 'verified' });
     const events = await withSystem((db) => db.rows<{ to_status: string | null }>("select to_status from public.dispute_events where dispute_id = $1 and kind = 'status_changed' order by created_at", [disputeId]));

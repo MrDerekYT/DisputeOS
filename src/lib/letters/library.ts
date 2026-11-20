@@ -12,9 +12,10 @@
  * an accepted identity theft report and proof of identity, a re-dispute with nothing new, an "outdated" letter for an
  * item whose reported date does not put it past the reporting period. The app never supplies such a fact itself.
  * A letter is also refused for a dispute it was not written for: a bureau letter for a creditor, a goodwill request on
- * an item the client disputes, and a letter that states the client's position (identity theft, not my account, paid,
- * included in bankruptcy, listed twice) on a dispute that was not entered with that position. The same rules hold for
- * an agency's own copy of a letter (createLetter runs them against the letter it was copied from).
+ * an item the client disputes, a letter that states the client's position (identity theft, not my account, paid,
+ * included in bankruptcy, listed twice) on a dispute that was not entered with that position, and a letter about one
+ * reported value (the balance, the status, the payment history or dates) on a dispute about another. The same rules
+ * hold for an agency's own copy of a letter (createLetter runs them against the letter it was copied from).
  */
 import { specialtyAgency } from '../credit/agencies';
 import { CATEGORIES } from '../disputes/workflow';
@@ -111,6 +112,16 @@ const POSITION_LETTERS: Record<string, { category: string; says: string }> = {
   bankruptcy_included_en: { category: 'bankruptcy_included', says: 'the account was part of the client’s bankruptcy' },
   payment_update_en: { category: 'payment_update', says: 'the client has paid the account' },
 };
+/**
+ * Letters about one reported value: their subject, opening and request name it. Each is drafted for a dispute about
+ * that value (its categories), or for an "Other" dispute with the matching field ticked. On any other dispute the
+ * letter would contradict itself: a subject about the balance over a listed field and a reason about the status.
+ */
+const SUBJECT_LETTERS: Record<string, { categories: string[]; fields: string[]; about: string }> = {
+  inaccurate_balance_en: { categories: ['incorrect_balance'], fields: ['Balance'], about: 'the balance' },
+  inaccurate_status_en: { categories: ['incorrect_status'], fields: ['Account status'], about: 'the status' },
+  inaccurate_history_dates_en: { categories: ['incorrect_payment_history', 'incorrect_dates'], fields: ['Payment history', 'Dates'], about: 'the payment history or dates' },
+};
 
 /** Why this letter is not written for whoever the dispute goes to, or null. A hand-built context without a target is not judged. */
 function wrongRecipient(templateKey: string, group: LibraryGroup | undefined, d: NonNullable<LetterContext['dispute']>): string | null {
@@ -154,6 +165,10 @@ function wrongKindOfItem(templateKey: string, d: NonNullable<LetterContext['disp
   if (position && category !== position.category) {
     return `This letter says ${position.says}. This ${NOT_A_DISPUTE.has(category) ? 'item' : 'dispute'} is not entered that way, so the letter is not drafted for it. If that is what the client says, start a new dispute for the account and choose the type “${CATEGORIES[position.category]!.label}”.`;
   }
+  const subject = forField ? undefined : SUBJECT_LETTERS[templateKey];
+  if (subject && !subject.categories.includes(category) && !(category === 'other' && d.fields.some((f) => subject.fields.includes(f)))) {
+    return `This letter is about ${subject.about} reported for the account. This dispute is not entered that way, so the letter is not drafted for it. If that is what the client disputes, start a new dispute for the account and choose the type ${subject.categories.map((c) => `“${CATEGORIES[c]!.label}”`).join(' or ')}.`;
+  }
   return null;
 }
 
@@ -177,7 +192,11 @@ export function missingFacts(templateKey: string, c: LetterContext, kind?: Lette
   }
   switch (templateKey) {
     case 'outdated_item_en':
-      if (!f.fallOff) out.push('This account is not reported with negative information, so there is no reporting period to state.');
+      if (!f.fallOff) {
+        out.push(d && !d.tradeline
+          ? 'This dispute names no account on a report, so there is no reported date of first delinquency and no reporting period to state. Use the general dispute, and give in the reason the date the client’s report shows.'
+          : 'This account is not reported with negative information, so there is no reporting period to state.');
+      }
       else if (f.fallOff.kind !== 'date') out.push('The report shows no date of first delinquency for this account, so the end of its reporting period cannot be worked out. Use the general dispute and ask for the date to be verified.');
       else if (!f.today || f.fallOff.date >= f.today) out.push(`By the reported date of first delinquency, ${f.fallOff.rule === 'seven_years' ? 'the reporting period for this account’s late payment information' : 'this item’s reporting period'} runs until ${longDate(new Date(`${f.fallOff.date}T00:00:00Z`))}. It is not past the reporting period.`);
       break;
@@ -234,7 +253,8 @@ export const OLD_VALIDATION_WORDING = 'This template says the request is made un
  */
 export const OLD_OUTDATED_WORDING = 'This template calls the account an item that is past its reporting period. This account is only late: what ages off is the late payment information from the reported date, and the account itself stays reportable. Use the built-in outdated item letter, or customize it again under Letters, Templates.';
 const CITES_623A8 = /623\s*\(a\)\s*\(8\)|1681s-2\s*\(a\)\s*\(8\)/i;
-const CITES_809B = /809\s*\(b\)|1692g/i;
+/** Text that cites the 30-day validation right. Also checked on a validation letter's own text before it is approved (./service.ts). */
+export const CITES_809B = /809\s*\(b\)|1692g/i;
 const SAYS_ITEM_PAST_PERIOD = /\bitem (?:in my credit file )?that appears to be past (?:the|its) (?:reporting )?period/i;
 
 /**

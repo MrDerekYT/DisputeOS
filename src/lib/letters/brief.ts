@@ -11,8 +11,8 @@
  * The brief decides which optional paragraphs a letter carries. Each states a recorded fact and is left out when the
  * fact is not on file: the reported-account line only for an account on a report, the earlier-round paragraph only
  * when an earlier round was sent, the enclosure sentence only for documents attached or accepted, the notice date only
- * when a collector's notice is recorded and its validation period is open. Nothing is supplied by the app, so two
- * clients' letters differ wherever their files differ.
+ * when a collector's notice is recorded for this debt and its validation period is open. Nothing is supplied by the
+ * app, so two clients' letters differ wherever their files differ.
  *
  * Two short lines are connective wording, not facts: a linking sentence after the opening and a closing courtesy. A
  * style seed worked out from the client's id picks them, so one client's letters keep one voice and another client's
@@ -70,9 +70,12 @@ export interface BriefRecord {
   /**
    * Collector notices recorded for the client, newest first. `same_account` is set by the loader when the notice is
    * linked to the account this dispute is about on another report (the same creditor and account digits): each bureau's
-   * report, and each import, has its own row for one debt.
+   * report, and each import, has its own row for one debt. `other_debts` is set by the loader on a notice recorded by
+   * the collector's name alone: how many other collection accounts with that collector the client has on approved
+   * reports (under the notice's name, or the name this debt's own account is reported under), one account several
+   * bureaus report counted once. Such a notice is used only when that is 0; unset, it is not used.
    */
-  notices: { collector_name: string; date_kind: NoticeDateKind; notice_date: string; tradeline_id: string | null; same_account?: boolean }[];
+  notices: { collector_name: string; date_kind: NoticeDateKind; notice_date: string; tradeline_id: string | null; same_account?: boolean; other_debts?: number }[];
   /** Letters already on this dispute that are not void. */
   letters: { template_key: string | null; kind: string; status: string }[];
 }
@@ -106,6 +109,8 @@ export interface LetterBrief {
     identityTheftReports: string[];
     /** The collector's notice recorded for this account (or, with no account on it, for this collector by name), with its validation period (12 CFR 1006.34(b)(5)). */
     notice: { kind: NoticeDateKind; date: string; endsOn: string; daysLeft: number; open: boolean } | null;
+    /** A notice recorded by this collector's name alone is on file but not used for this debt: it could be about another of the client's debts with that collector. */
+    unlinkedNotice: boolean;
     confirmedAccurate: boolean;
   };
   /** The facts every template merges from. What is enclosed and the optional paragraphs depend on the letter: contextFor. */
@@ -121,7 +126,8 @@ export function styleSeed(clientId: string): number {
 
 const say = (day: string) => longDate(new Date(`${day}T00:00:00Z`));
 const tidy = (s: string) => s.replace(/\s+/g, ' ').trim();
-const same = (a: string, b: string) => tidy(a).toLowerCase() === tidy(b).toLowerCase();
+/** How a collector notice's name is compared with a company's: case and spacing aside. The loader counts accounts the same way (./brief-load.ts). */
+export const sameName = (a: string, b: string) => tidy(a).toLowerCase() === tidy(b).toLowerCase();
 
 /** Which reported values identify the entry in dispute: by the fields ticked on the dispute, then by its category. */
 const FIELD_SHOWS: Record<string, ReportedKey[]> = { Balance: ['balance'], 'Account status': ['account_status', 'payment_status'], 'Payment history': ['payment_status'], Dates: ['dofd'] };
@@ -165,10 +171,12 @@ export function buildBrief(r: BriefRecord, o: BriefOptions = {}): LetterBrief {
   // Which notice is this debt's. One collector can hold several of the client's debts, each with its own notice and its
   // own 30 days, so a notice recorded for another account is never used: the letter would state that notice's date and
   // claim the right that runs from it. The notice recorded for this dispute's account comes first; failing that, one
-  // recorded by the collector's name alone, with no account, when the name is the company this dispute goes to.
+  // recorded by the collector's name alone, with no account, when the name is the company this dispute goes to and it
+  // cannot be about another debt: the client has no other collection account with that collector on an approved report.
+  const byName = d && d.target_type === 'collector' ? r.notices.find((n) => !n.tradeline_id && sameName(n.collector_name, d.recipient_name)) ?? null : null;
   const notice = d && d.target_type === 'collector'
     ? r.notices.find((n) => !!d.tradeline_id && !!n.tradeline_id && (n.tradeline_id === d.tradeline_id || n.same_account === true))
-      ?? r.notices.find((n) => !n.tradeline_id && same(n.collector_name, d.recipient_name)) ?? null
+      ?? (byName?.other_debts === 0 ? byName : null)
     : null;
   const period = notice ? validationPeriod({ kind: notice.date_kind, date: notice.notice_date }, r.today) : null;
   let dispute: LetterContext['dispute'] = null;
@@ -185,8 +193,9 @@ export function buildBrief(r: BriefRecord, o: BriefOptions = {}): LetterBrief {
     facts.outcome = d.outcome;
     facts.dueOn = day(d.due_at);
     // A collection is an account a report lists as one, or a debt a collector has written to the client about: a notice
-    // can arrive, and its 30 days can run out, before the collection ever appears on a report.
-    facts.isCollection = tl?.item_type === 'collection' || (d.target_type === 'collector' && !!notice);
+    // can arrive, and its 30 days can run out, before the collection ever appears on a report. A notice recorded by the
+    // collector's name still shows that collector is collecting from the client when it is not used for its date.
+    facts.isCollection = tl?.item_type === 'collection' || (d.target_type === 'collector' && (!!notice || !!byName));
     facts.notice = notice && period ? { kind: notice.date_kind, date: notice.notice_date, open: period.open } : null;
   }
   const context: LetterContext = { client: r.client, dispute, includeSsnLast4: o.includeSsnLast4, orgName: o.orgName, recipientAddress: o.recipientAddress, tz: r.tz, facts, ...(o.now ? { now: o.now } : {}) };
@@ -215,6 +224,7 @@ export function buildBrief(r: BriefRecord, o: BriefOptions = {}): LetterBrief {
     circumstances: {
       bankruptcy, identityTheftReports: r.identityTheftReports,
       notice: notice && period ? { kind: notice.date_kind, date: notice.notice_date, endsOn: period.endsOn, daysLeft: period.daysLeft, open: period.open } : null,
+      unlinkedNotice: !notice && !!byName,
       confirmedAccurate: d?.client_confirmed_accurate ?? false,
     },
     context,
@@ -266,15 +276,24 @@ export function briefParagraphs(b: LetterBrief, o: { identityDocs: boolean }): R
     ? `As it appears on my ${a.bureauLabel} credit report${a.reportDate ? ` dated ${say(a.reportDate)}` : ''}: ${a.reported.map((v) => v.text).join('; ')}.\n` : '';
 
   // The round before this one: when it was sent and what came back. Only outcomes that leave the item in dispute are
-  // restated. "Previously", not "first": the file knows the round before, not everything the client ever sent.
+  // restated. "Previously", not "first": the file knows the round before, not everything the client ever sent. A bureau
+  // or a specialty agency reinvestigated a dispute and sent results; a creditor or a collector was written to and replied.
   let history = '';
   if (h && h.round > 1 && p?.sentOn) {
     const got = p.responseOn ? `, which I received on ${say(p.responseOn)},` : '';
-    const cameBack = p.outcome === 'verified' ? ` Your results${got} stated that the information was verified.`
-      : p.outcome === 'no_response' ? ' I have no record of receiving the results of that dispute.'
-      : p.outcome === 'frivolous' ? ` Your notice${got} said that you needed more information before you would investigate.`
-      : p.outcome === 'unresolved' ? ` Your results${got} did not resolve my dispute.` : '';
-    history = `I previously disputed this item on ${say(p.sentOn)}.${cameBack}\n`;
+    if (b.recipient.kind === 'bureau' || b.recipient.kind === 'agency') {
+      const cameBack = p.outcome === 'verified' ? ` Your results${got} stated that the information was verified.`
+        : p.outcome === 'no_response' ? ' I have no record of receiving the results of that dispute.'
+        : p.outcome === 'frivolous' ? ` Your notice${got} said that you needed more information before you would investigate.`
+        : p.outcome === 'unresolved' ? ` Your results${got} did not resolve my dispute.` : '';
+      history = `I previously disputed this item on ${say(p.sentOn)}.${cameBack}\n`;
+    } else {
+      const cameBack = p.outcome === 'verified' ? ` Your reply${got} said the information was verified.`
+        : p.outcome === 'no_response' ? ' I have no record of receiving a reply.'
+        : p.outcome === 'frivolous' ? ` Your reply${got} said you needed more information before you would review it.`
+        : p.outcome === 'unresolved' ? ` Your reply${got} did not resolve the matter.` : '';
+      history = `I wrote to you about this account on ${say(p.sentOn)}.${cameBack}\n`;
+    }
   }
 
   const evidence = b.enclosures.evidence.map((l) => tidy(l).replace(/[.;:,]+$/, '')).filter(Boolean);
@@ -319,7 +338,9 @@ export function contextFor(b: LetterBrief, tpl: { key: string; kind: LetterKind 
  * new gets the re-dispute; otherwise the letter written for the dispute's category when the facts it rests on are on
  * file, and the general letter of the dispute's kind when they are not. Identity theft and bankruptcy are never
  * drafted as a general letter with the fact left out: their own letter is returned, and it is refused until the fact
- * is on file.
+ * is on file. Nor is an item said to be past its reporting period: the outdated-item letter is returned whatever the
+ * reported date, so an item still inside its period is refused with that date instead of going out as a general
+ * dispute that gives no reason to doubt anything.
  */
 export function disputeLetterKey(b: LetterBrief): string | null {
   const d = b.context.dispute;
@@ -331,7 +352,7 @@ export function disputeLetterKey(b: LetterBrief): string | null {
   const fits = [d.round > 1 && kind === 'bureau_dispute' ? 'redispute_new_information_en' : null, templateKeyForCategory(category)]
     .find((k) => !!k && !!templateByKey(k) && missingFacts(k, b.context).length === 0);
   if (fits) return fits;
-  if (category === 'identity_theft' || category === 'bankruptcy_included') return templateKeyForCategory(category);
+  if (category === 'identity_theft' || category === 'bankruptcy_included' || category === 'obsolete') return templateKeyForCategory(category);
   return templatesFor(kind)?.key ?? null;
 }
 
@@ -349,6 +370,8 @@ export interface Recommendation {
 }
 
 const quoteOutcome = (o: string) => `“${(OUTCOME_LABEL[o as Outcome] ?? o).toLowerCase()}”`;
+/** Why a notice recorded by the collector's name is not used for this debt, and how to make it count (buildBrief). */
+const UNLINKED_NOTICE = 'A notice from this collector is recorded by name only, and the client has another collection account with that collector on an approved report, so the notice is not used for this debt and the letter asks for validation without citing the 30-day right. If the notice is about this debt, link it to the account under “Collections and bankruptcy” on the client’s page.';
 
 /** One line on why a letter fits this dispute. Every figure and date in it is one on file. */
 function whyThisLetter(b: LetterBrief, key: string): string {
@@ -366,7 +389,9 @@ function whyThisLetter(b: LetterBrief, key: string): string {
     case 'inaccurate_status_en': return `The dispute is about the status${bureau ? ` ${bureau} reports` : ''}${shown('account_status') ? ` (${shown('account_status')})` : ''}.`;
     case 'duplicate_account_en': return 'The dispute says the same debt is reported more than once.';
     case 'outdated_item_en':
-      if (f.fallOff?.kind !== 'date') return 'The dispute says the item is past its reporting period.';
+      // Recommended whatever the date (disputeLetterKey): when the date does not put the item past its period, the line
+      // states only what the dispute says, and the refusal gives the date the period runs until.
+      if (f.fallOff?.kind !== 'date' || !f.today || f.fallOff.date >= f.today) return 'The dispute says the item is past its reporting period.';
       // An account that is only late stays reportable: what has aged is the late payment information from that date.
       return f.fallOff.rule === 'seven_years'
         ? `By the reported date of first delinquency, the reporting period for the late payment information from that date appears to have ended on ${say(f.fallOff.date)}. The account itself stays reportable, so the letter is about that late payment information only.`
@@ -378,6 +403,7 @@ function whyThisLetter(b: LetterBrief, key: string): string {
     case 'personal_info_correction_en': return 'The dispute lists personal information entries for the bureau to review.';
     case 'goodwill_en': return 'A courtesy request about reporting the client accepts as accurate. It is not a dispute.';
     case 'validation_request_en':
+      if (!n && b.circumstances.unlinkedNotice) return UNLINKED_NOTICE;
       if (!n) return 'A collection account. No collector notice is recorded for this debt, so the letter disputes the debt and asks for validation without citing the 30-day right. Record the notice first if the client has one.';
       return n.open ? `A collector notice ${n.kind === 'received' ? 'received' : 'sent'} on ${say(n.date)} is recorded. The validation period generally ends on ${say(n.endsOn)}.`
         : `The validation period for the notice ${n.kind === 'received' ? 'received' : 'sent'} on ${say(n.date)} generally ended on ${say(n.endsOn)}. A request can still be sent; the collector is generally not required to answer it in the same way, so the letter asks without citing that right.`;

@@ -61,7 +61,9 @@ export async function frivolousNoticeAction(_: ActionState, fd: FormData): Promi
   const ctx = await requireStaff('disputes:write');
   return run(async () => {
     const d = parseForm(z.object({ id: zUuid, missing: zText(1000), receivedOn: optDate }), fd);
-    await ctx.tx((db) => recordFrivolousNotice(db, actorOf(ctx), d.id, { missing: d.missing, receivedOn: d.receivedOn || null }));
+    // The next round's letter states this day as the day the client received the notice.
+    if (!d.receivedOn) throw new UserError('Enter the date the notice was received.');
+    await ctx.tx((db) => recordFrivolousNotice(db, actorOf(ctx), d.id, { missing: d.missing, receivedOn: d.receivedOn }));
     revalidatePath(`/app/disputes/${d.id}`);
     revalidatePath('/app/disputes');
     return { ok: 'Recorded. A task was created for what the agency asked for, and the client sees the request in their portal.' };

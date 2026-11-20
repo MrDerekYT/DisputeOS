@@ -56,7 +56,11 @@ export async function resumePartner(db: Db, a: PartnerActor, partnerId: string):
   return changed > 0;
 }
 
-/** The partner asked, by reply, phone or any other way, not to be emailed. Same effect as the opt-out link: permanent. */
+/**
+ * The partner asked, by reply, phone or any other way, not to be emailed. Permanent for this workspace, as the opt-out
+ * link is. Unlike the link it stops this workspace's emails only: the deployment-wide list holds what recipients did
+ * themselves, or staff of one workspace could stop another's emails.
+ */
 export async function partnerAskedToStop(db: Db, a: PartnerActor, partnerId: string): Promise<boolean> {
   const changed = await markPartnerOptedOut(db, { orgId: a.orgId, partnerId, actorId: a.userId, summary: 'Asked not to be emailed (recorded by the team). No further email is sent to this address.' });
   if (changed) await audit(db, { orgId: a.orgId, actorId: a.userId, action: 'partner.opted_out', entityType: 'partner', entityId: partnerId, ip: a.ip });

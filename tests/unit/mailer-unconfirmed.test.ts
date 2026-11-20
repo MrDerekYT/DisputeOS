@@ -42,10 +42,23 @@ describe('email service: a send with no answer is "outcome unknown", not a refus
   it('an answer from the service is believed: a refusal is a refusal, an acceptance carries its id', async () => {
     vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ message: 'The example.com domain is not verified.' }), { status: 403 }));
     expect(await sendEmail(MAIL)).toEqual({ ok: false, provider: 'resend', error: 'The example.com domain is not verified.' });
-    vi.stubGlobal('fetch', async () => new Response('bad gateway', { status: 502 }));
-    expect(await sendEmail(MAIL)).toEqual({ ok: false, provider: 'resend', error: 'HTTP 502' });
+    // A request the service turned down, too many requests at once included: nothing was accepted.
+    for (const status of [400, 401, 404, 422, 429]) {
+      vi.stubGlobal('fetch', async () => new Response('{}', { status }));
+      expect(await sendEmail(MAIL), String(status)).toEqual({ ok: false, provider: 'resend', error: `HTTP ${status}` });
+    }
     vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ id: 're_123' }), { status: 200 }));
     expect(await sendEmail(MAIL)).toEqual({ ok: true, provider: 'resend', providerRef: 're_123' });
+  });
+
+  it('a 5xx answer does not say whether the email was accepted (a gateway in front of the service may send it), so it is "outcome unknown"', async () => {
+    for (const status of [500, 502, 503, 504]) {
+      vi.stubGlobal('fetch', async () => new Response('bad gateway', { status }));
+      expect(await sendEmail(MAIL), String(status)).toEqual({ ok: false, provider: 'resend', error: `HTTP ${status}`, unconfirmed: true });
+    }
+    // The service's own message is kept when it gives one.
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ message: 'Internal server error' }), { status: 500 }));
+    expect(await sendEmail(MAIL)).toEqual({ ok: false, provider: 'resend', error: 'Internal server error', unconfirmed: true });
   });
 
   it('holds with the errors Node really produces: a socket closed after the request was read, and a refused connection', async () => {

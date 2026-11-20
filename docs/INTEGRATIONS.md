@@ -89,7 +89,7 @@ Code: `src/lib/partner-emails.ts` (wording, timing), `src/lib/partner-import.ts`
 `src/lib/partner-outreach.ts` (sending, opt-out, bounces), `src/lib/outreach-approval.ts` (the operator's approval),
 `src/lib/partners.ts` (what staff record), `src/lib/lead-texts.ts`, `src/lib/lead-outreach.ts` and `src/lib/us-phone.ts`
 (lead texts), the pages under `/app/partners`, `/unsubscribe/partner/<token>`, `/api/unsubscribe/partner/<token>` and
-`/api/webhooks/resend`, migration `0028_partner_outreach.sql`.
+`/api/webhooks/resend`, migrations `0028_partner_outreach.sql` and `0030_partner_opt_outs.sql`.
 
 **Who is on the list.** Businesses that can refer clients (real estate agents, loan officers, mortgage brokers, car
 dealerships, tax preparers, property managers), added by the agency itself: one at a time, or as a list pasted or
@@ -160,7 +160,7 @@ where does its partner list come from. The Partners and Leads pages tell the age
 The lead follow-up emails need the approval for the same reason as the rest: the enquiry form is public and takes any
 address, and the business name is the From name and part of the subject of every such email, so without the gate a
 workspace nobody has looked at could put a name of its choice in a stranger's inbox. The approval, the switch and both
-addresses are read again with every email that is claimed. What does not need the approval: emails to the workspace's
+addresses are read again with every email that is claimed. Until a workspace is approved, the emails its staff send by hand to a client or lead ("Invite to client portal", an email from the Messages tab, "New client" with the invitation ticked) are limited to 50 an hour for the whole workspace. What does not need the approval: emails to the workspace's
 own team and clients (invitations, sign-in emails, client updates by email).
 Before it records an approval the command prints the mailing address and the reply address the workspace has saved:
 besides the name they are what its automatic emails carry, and the workspace can change both later without a new approval.
@@ -189,11 +189,14 @@ fetch the links in incoming mail: if a fetch were the opt-out, the first email w
 a gateway for good. Every email also carries `List-Unsubscribe` and `List-Unsubscribe-Post: List-Unsubscribe=One-Click`
 (RFC 8058), pointing at `POST /api/unsubscribe/partner/<token>`, so the "unsubscribe" button of a mail program does the
 same. An opt-out the recipient made (the link, the mail program's button, a spam complaint) goes on one list for the
-whole deployment, read by normalised address (lower case, without a "+tag", and for Gmail without dots): an address
-that stopped these emails is not written to through another workspace or as `dana+1@` either. In the other workspace
-that partner is paused, with the reason on its timeline; it is not stamped as opted out there, because that stamp can
-never be lifted. "Asked to stop" pressed by staff is different: it stops that workspace's own emails to the address for
-good and no other workspace's, so one workspace cannot switch off another's partner emails by listing its addresses.
+whole deployment, `public.partner_opt_outs` (migration 0030), keyed by the address as the opt-out list reads it (lower
+case, without a "+tag", and for Gmail without dots): an address that stopped these emails is not written to through
+another workspace or as `dana+1@` either. The list belongs to no workspace and no user, so it survives deleting
+either, and no signed-in person can read or change it. In the other workspace that partner is paused, with the reason
+on its timeline; it is not stamped as opted out there, because that stamp can never be lifted. "Asked to stop"
+pressed by staff is different: it stops that workspace's own emails to the address for good and no other workspace's,
+so one workspace cannot switch off another's partner emails by listing its addresses. The recipient's own opt-out
+counts even when staff had pressed "Asked to stop" first, and the page behind the link still offers its button then.
 Staff can still record that an opted-out partner replied or is interested (they may telephone); that sends nothing and
 does not lift the stop. Where a partner stands in the sequence (new, in sequence, finished) is written by the scheduled
 job only: a signed-in person cannot put an address that bounced, or one whose sequence is over, back in line.
@@ -202,7 +205,9 @@ job only: a signed-in person cannot put an address that bounced, or one whose se
 record replies on the partner's page. Bounces and spam complaints can be reported by the email service: add a webhook
 in Resend for `email.bounced` and `email.complained` pointing at `POST /api/webhooks/resend`, and put its signing
 secret in `RESEND_WEBHOOK_SECRET` (the route answers 404 until then, and trusts a request only when its Svix signature
-verifies; `src/lib/resend-webhook.ts`). A bounce stops that partner; a complaint opts the address out for good. With
+verifies; `src/lib/resend-webhook.ts`). A bounce stops that partner; a complaint opts the address out for good. The
+same webhook covers the automatic follow-up emails to leads: a bounce or a complaint about one ends all automatic
+follow-up to that lead (emails and texts), and the lead's timeline and the Leads page say which it was. With
 three or more bounces since the workspace was approved, and more than one in ten of what was sent, the whole sequence
 holds until the list is cleaned and the operator approves the workspace again. Both numbers are counted from the
 approval date with no time limit, so the hold does not end by itself after a month. Without the webhook, staff press

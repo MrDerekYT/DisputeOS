@@ -302,4 +302,47 @@ describe('scheduled jobs: a run that runs out of time', () => {
     expect(new Set(sentTo).size).toBe(7); // nobody was written to twice
     expect([await leadEmails(), await updates('queued'), await updates('sent')]).toEqual([3, 0, 4]);
   });
+
+  it('when the email service does not answer, the run says so: each lead or partner run that stopped for it is counted and logged', async () => {
+    // Email is "connected": the real driver, with the provider's HTTP API stood in for. It never answers.
+    Object.assign(process.env, { EMAIL_DRIVER: 'resend', RESEND_API_KEY: 're_test_key_for_vitest' });
+    resetEnvCache();
+    const handed: string[] = [];
+    vi.stubGlobal('fetch', async (url: string | URL, init?: RequestInit) => {
+      if (String(url) !== 'https://api.resend.com/emails') throw new Error(`unexpected request to ${String(url)}`);
+      handed.push((JSON.parse(String(init?.body ?? '{}')) as { to: string[] }).to[0]!);
+      throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      let next = addDays(new Date().toISOString().slice(0, 10), 1);
+      while (!isBusinessDay(next)) next = addDays(next, 1);
+      const when = new Date(`${next}T20:00:00Z`);
+      // One workspace with two leads waiting for their welcome email and two partners due their introduction.
+      const o = await makeOrg('JobsSilentService');
+      const { slug } = (await withSystem((db) => db.row<{ slug: string }>('update public.organizations set settings = settings || $2::jsonb where id = $1 returning slug', [o.orgId, JSON.stringify({
+        lead_followup_enabled: true, lead_followup_since: new Date(Date.now() - 60_000).toISOString(), lead_mailing_address: '12 Main St, Austin, TX 78701', lead_reply_email: 'hello@agency.example.test',
+        partner_outreach_enabled: true,
+      })])))!;
+      await approveOutreach(o.orgId);
+      for (let i = 0; i < 2; i++) expect(await submitLead(slug, { fullName: 'Pat Lead', email: `lead-${uniq()}@example.test`, language: 'en', consent: true }, { ip: testIp(), defer: () => undefined })).toEqual({ ok: true });
+      await asUser(o.ownerId, (db) => addPartners(db, { orgId: o.orgId, userId: o.ownerId }, [1, 2].map(() => ({ businessName: 'Hill Realty', contactName: 'Dana Whitfield', category: 'real_estate_agent' as const, email: `p-${uniq()}@biz.example.test`, phone: null, city: 'Austin', state: 'TX', language: 'en' as const, sourceNote: null })), 'Added by hand.'));
+      const sweep = async () => [];
+
+      const first = await runScheduledJobs({ onlyOrgIds: [o.orgId], sweep, now: when });
+      // Not a failure of the job, and nothing was sent; but one lead email and one partner email may or may not have
+      // gone out, each run stopped there, and the result and the log say so.
+      expect(first).toMatchObject({ failures: 0, leadEmails: 0, partnerEmails: 0, unanswered: 2 });
+      expect(handed).toHaveLength(2);
+      expect(warn.mock.calls.map((c) => c.join(' ')).filter((line) => /did not answer/.test(line))).toEqual([expect.stringMatching(/^\[jobs\] 2 /)]);
+      // The next run, the service still silent: the next lead and the next partner are tried, never the same two again.
+      const second = await runScheduledJobs({ onlyOrgIds: [o.orgId], sweep, now: when });
+      expect(second).toMatchObject({ failures: 0, unanswered: 2 });
+      expect(handed).toHaveLength(4);
+      expect(new Set(handed).size).toBe(4);
+      // With nothing left to try, a run that hands nothing over counts nothing.
+      expect(await runScheduledJobs({ onlyOrgIds: [o.orgId], sweep, now: when })).toMatchObject({ failures: 0, unanswered: 0 });
+      expect(handed).toHaveLength(4);
+    } finally { warn.mockRestore(); }
+  });
 });

@@ -310,7 +310,7 @@ describe('“frivolous or irrelevant” notice', () => {
     expect(seen).toEqual([{ note: 'Experian asked for more information before it investigates.' }]);
 
     // Recording it again (a corrected reading of the notice) updates the one open task instead of adding another.
-    await asUser(specialist.userId, (db) => recordFrivolousNotice(db, specialist, disputeId, { missing: `${missing}, and a recent utility bill` }));
+    await asUser(specialist.userId, (db) => recordFrivolousNotice(db, specialist, disputeId, { missing: `${missing}, and a recent utility bill`, receivedOn: on }));
     expect(await withSystem((db) => db.rows('select title from public.tasks where dispute_id = $1', [disputeId]))).toEqual([{ title: `Client to provide: ${missing}, and a recent utility bill` }]);
   });
 

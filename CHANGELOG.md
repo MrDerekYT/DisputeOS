@@ -1,5 +1,34 @@
 # Changelog
 
+## Review fixes, third round: letters, disputes and outreach (unreleased)
+
+Migration `0030_partner_opt_outs.sql`: additive, safe to run again, needs no superuser. A development database that ran
+an earlier copy of `0028_partner_outreach.sql` has to run that file again by hand (`psql -v ON_ERROR_STOP=1 -f ...`) or
+be rebuilt (`npm run db:reset`); production never ran it.
+
+- **Debt validation letters use only the notice recorded for that debt.** A notice recorded by the collector's name
+  alone is no longer used when the client has another collection account with that collector; the letter then asks
+  without citing Section 809(b), and the recommendation says to link the notice to the account.
+- **A letter is checked again when it is sent for approval and when it is approved**: a recorded response, a
+  collector's 30 days that have ended, a document no longer accepted, or the client confirming the item is accurate
+  stops it, with what changed and "Draft the letter again". Recording that a letter was mailed is not re-checked.
+- **Recording an outcome needs the date the response was received** (except "No response", which has its own
+  button), and recording an agency's "frivolous or irrelevant" notice needs the date of the notice. Neither can be in
+  the future or before the dispute was sent, and an impossible date such as February 30 is refused with a plain
+  message. Letters no longer print a receipt date nobody entered, and "No response" is no longer shown as a day a
+  response arrived.
+- **An "Item may be past the reporting period" dispute** gets the outdated-item letter unless staff pick another by
+  name, so an item still inside its period is refused with the reason instead of drafted as a general dispute.
+- **Wording**: the follow-up's subject reads "Status of the dispute I sent on <date>"; the goodwill request opens "To
+  whom it may concern:"; "Other" is no longer printed among the information to review; a later round of a letter to a
+  creditor or collector speaks of "your reply", not of a bureau's results; a debt validation request is titled without
+  the statute, and when it cites Section 809(b) the citation sits on the dispute sentence and the list starts "Please
+  include:"; a specialty agency's name is no longer printed twice when staff paste its address.
+- **The reason check**: a reason that plainly says what is disputed ("The judgment was vacated on May 12, 2021") is no
+  longer held for not using a listed word; an empty or bare reason still is.
+- **Outreach**, **the mailing address**, **the portal's text card** and **emails the service did not answer**: see the
+  section below, which now describes the final behaviour.
+
 ## Referral partners, text follow-up, and the operator's approval for outreach (unreleased)
 
 Migration `0028_partner_outreach.sql`: additive and safe to run again. Four new tables (`partners`, `partner_outreach`,
@@ -35,12 +64,16 @@ docs/INTEGRATIONS.md, "Referral partners and lead text follow-up".
   approves the workspace again. Where a partner stands in the sequence is written by the scheduled job only.
 - **Opt-outs.** Every email carries an opt-out link that opens a page with one button (opening the page changes
   nothing, because mail scanners open links), and the one-click unsubscribe headers mail programs act on. An opt-out is
-  permanent for that address in that agency; the database refuses to undo it. An opt-out the recipient made also keeps
-  every other workspace from emailing that mailbox, in any spelling: there the partner is paused, with the reason on its
-  timeline. "Asked to stop" pressed by staff stops that workspace's own emails only, so one workspace cannot switch off
-  another's by listing its addresses.
+  permanent for that address in that agency; the database refuses to undo it. An opt-out the recipient made (the link,
+  the mail program's button, a spam complaint) also goes on one list for the whole deployment (migration
+  `0030_partner_opt_outs.sql`), so no workspace emails that mailbox again, in any spelling; in another workspace the
+  partner is paused, with the reason on its timeline. The list belongs to no workspace or user, survives deleting
+  either, and no signed-in person can read or change it. "Asked to stop" pressed by staff stops that workspace's own
+  emails only, so one workspace cannot switch off another's by listing its addresses; the recipient's own opt-out still
+  counts afterwards, and the page behind the link still offers its button.
 - **Bounces and spam complaints** reach the app through a signed Resend webhook (`/api/webhooks/resend`,
-  `RESEND_WEBHOOK_SECRET`); without it staff press "Bounced". Partner emails can use their own sending address and key
+  `RESEND_WEBHOOK_SECRET`); without it staff press "Bounced". The same webhook ends all automatic follow-up to a lead
+  whose follow-up email bounced or was marked as spam, and the Leads page says which it was. Partner emails can use their own sending address and key
   (`OUTREACH_EMAIL_FROM`, `OUTREACH_RESEND_API_KEY`), so they do not share a sending reputation with sign-in emails.
 - **Wording** (`src/lib/partner-emails.ts`): fixed, in English and Spanish, per category, saying what the agency does
   and that no result, score or approval can be promised. Each email says it is a business solicitation and shows the
@@ -64,16 +97,23 @@ docs/INTEGRATIONS.md, "Referral partners and lead text follow-up".
   for the whole deployment (`OUTREACH_PLATFORM_DAILY_TEXTS`, default 300). STOP applies, the public form cannot switch
   texts back on for a number that replied STOP, and the same form sent several times at once records one consent. A
   business name that contains a web address sends no lead texts.
-- **Lead follow-up emails** (already live): besides the approval above, an email the service gives no answer for is
-  no longer tried again (it could have arrived, and a second copy would follow); the switch, the approval and both
-  addresses are read again with every email.
+- **Lead follow-up emails** (already live): besides the approval above, an email the service gives no answer for (a
+  timeout, a dropped connection, or an HTTP 5xx) is no longer tried again: it could have arrived, and a second copy
+  would follow. The switch, the approval and both addresses are read again with every email, and the follow-up texts
+  read them again with every text.
+- **Emails staff send by hand** ("Invite to client portal", an email from the Messages tab, "New client" with the
+  invitation ticked): until the operator approves the workspace, at most 50 an hour for the whole workspace. When the
+  email service does not answer, the screens say the email may or may not have arrived instead of "failed", and so do
+  the test email on the Get set up page and a client update by email. The invitation greets the client by first name
+  only when it reads as a name.
 - **Client updates by text** (already live): sent to US mobile numbers only, and only for an approved workspace. A STOP
   reply ends every consent for that number however many client records carry it, and a workspace cannot pull another
   client's reply to itself by typing the number onto records of its own. The test text on the Setup page follows the
   same rules and no longer carries the workspace name.
 - **Scheduled job**: runs at 09:00 and 20:00 UTC (`vercel.json`). Every workspace's own work comes first and the
   outreach after it, each with a deadline; what is left goes out with the next run, the workspaces that waited longest
-  first, and the run's result says what was not reached.
+  first, and the run's result says what was not reached (`notReached`, `unfinished`) and how many email runs stopped
+  because the email service did not answer (`unanswered`).
 - **Public enquiry form**: the limit for one address is applied before the agency's hourly limit is counted, so one
   address posting over and over cannot close an agency's form for everyone else.
 - **Not built, on purpose**: calls of any kind, auto-dialling, voicemail drops, and texts to partners.
@@ -108,14 +148,19 @@ No migration. The setting lives in `organizations.settings.letter_auto_tailor`; 
   a difference between two bureaus (one value per bureau, from each bureau's newest approved report), the entries a
   finding lists, the reported date of first delinquency, or the client's own recorded statement. A reason that only
   asks for something to be verified is held at approval until a person adds what the client's records show, and the
-  form says so. Nothing is pre-filled for a payment-history dispute or an inquiry the client does not recognize: a
-  person writes the client's own words. No drafted reason asks for a removal. "Client says payments were never late"
-  starts a payment-history dispute, not a "Not my account" one.
+  form says so. Nothing is pre-filled for a payment-history dispute, an inquiry the client does not recognize, or a
+  request to the creditor to check what it reports: a person writes the client's own words. Dates are written out
+  ("March 5, 2018"), the date in question is named, and the date of first delinquency is mentioned only when the
+  evidence is about it. A duplicate is asked about so that the debt is "not reported as owed twice" (a collector and the
+  original creditor may both report it correctly). No drafted reason asks for a removal. "Client says payments were never
+  late" starts a payment-history dispute, not a "Not my account" one, and a dispute drafted in bulk from a finding is
+  about the finding's own first account.
 - **One first-round dispute of a kind per account and bureau.** A second one is refused while the first is open or
   after it was resolved without a change, and the message points to starting the next round from the earlier dispute.
   A different issue with the same account, the same issue with another bureau, and an item that was deleted or
-  corrected and came back can still be started. The next round of a dispute about an account typed by staff keeps the
-  account's name and digits.
+  corrected and came back can still be started. The same holds for an item with a specialty agency (ChexSystems, Early
+  Warning and the like). The next round of a dispute about an account typed by staff keeps the account's name and
+  digits.
 - **AI wording is tailoring** (`src/lib/letters/tailor.ts`, on top of the unchanged protected rewriting). "Suggest
   better wording" may reword only the linking sentence and the closing lines, and may exchange the salutation and the
   sign-off for another from a short fixed list. Every other line is locked by where it stands in the letter and is
@@ -166,8 +211,9 @@ No migration. The setting lives in `organizations.settings.letter_auto_tailor`; 
   has ended or after a response was recorded, a debt validation letter that would cite the 30-day right with no open
   collector notice on file for that debt.
 - **A letter that states the client's position is drafted only for a dispute entered with that position.** "Not my
-  account", "Duplicate account", "Account included in bankruptcy" and "Request to update a paid account" are greyed
-  out for any other dispute type, and the message says which type to start. The same gates hold an agency's own copy
+  account", "Duplicate account", "Account included in bankruptcy", "Request to update a paid account", "Inaccurate
+  balance", "Inaccurate account status" and "Inaccurate payment history or dates" are greyed out for any other dispute
+  type (an "Other" dispute with the matching field ticked counts), and the message says which type to start. The same gates hold an agency's own copy
   of a letter, and an own template that still cites a right the built-in letters do not claim (Section 623(a)(8), or
   Section 809(b) with no open notice) is not drafted from.
 - **Outdated item, for an account that is only late**: the letter is about the late payment information that appears

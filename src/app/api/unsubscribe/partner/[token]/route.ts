@@ -15,7 +15,7 @@ export const dynamic = 'force-dynamic';
 export async function POST(req: Request, { params }: { params: Promise<{ token: string }> }) {
   const limit = await rateLimit(`partner-unsubscribe:ip:${clientIp(req.headers) ?? 'unknown'}`, 60, 60);
   if (!limit.allowed) return new NextResponse('Too many requests', { status: 429, headers: { 'retry-after': String(limit.retryAfterSec) } });
-  const r = await optOutPartner((await params).token);
+  const r = await optOutPartner((await params).token, 'one_click');
   return new NextResponse(r ? 'You will not receive these emails again.' : 'This link is not valid.', { status: r ? 200 : 404, headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' } });
 }
 

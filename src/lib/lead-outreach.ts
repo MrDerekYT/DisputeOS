@@ -81,6 +81,33 @@ export async function optOutLead(token: string): Promise<{ orgId: string; orgNam
   });
 }
 
+/**
+ * A spam complaint or a bounce the email service reported for an automatic follow-up email to a lead (matched by the
+ * id the service gave when it accepted the email). Either one ends all automatic follow-up to that lead, as the
+ * opt-out link does: the person said they do not want these emails, or the address does not take them. The timeline
+ * says which it was. Reporting it again changes nothing. Returns false when the id is not one of the follow-up emails.
+ * Reached through POST /api/webhooks/resend; written to Resend's documented webhook, not exercised against it.
+ */
+export async function recordLeadDeliveryEvent(providerRef: string, kind: 'bounced' | 'complained'): Promise<boolean> {
+  if (!providerRef) return false;
+  return withSystem(async (db) => {
+    const o = await db.row<{ org_id: string; client_id: string }>(
+      `select o.org_id, o.client_id from public.lead_outreach o join public.communications m on m.id = o.communication_id
+        where m.provider_ref = $1 and m.channel = 'email' and m.direction = 'outbound' limit 1`, [providerRef.slice(0, 200)]);
+    if (!o) return false;
+    if (await db.run('update public.clients set outreach_opt_out_at = now() where id = $1 and org_id = $2 and outreach_opt_out_at is null', [o.client_id, o.org_id])) {
+      const reason = kind === 'complained' ? 'complaint' : 'bounce';
+      await db.run("insert into public.client_events (org_id, client_id, kind, summary, meta) values ($1, $2, 'lead_opt_out', $3, $4)", [o.org_id, o.client_id,
+        kind === 'complained'
+          ? 'The email service reported that this person marked an automatic follow-up email as spam. No further automatic follow-up is sent to them.'
+          : 'The email service reported that an automatic follow-up email to this address came back undelivered. No further automatic follow-up is sent to it.',
+        JSON.stringify({ reason })]);
+      await audit(db, { orgId: o.org_id, actorLabel: 'Email service report', action: 'lead.opted_out', entityType: 'client', entityId: o.client_id, meta: { reason } });
+    }
+    return true;
+  });
+}
+
 // ---------------------------------------------------------------- lead state (shared by the job and the Leads page)
 /**
  * A communication row (alias `m`) that counts as the team being in touch: sent or logged by the team, and not an email
@@ -346,8 +373,12 @@ export async function recordEnquirySmsConsent(db: Db, a: { orgId: string; client
 
 export interface LeadTextResult {
   sent: number; failed: number; /** Held back by quiet hours; they go out with a later run. */ waiting: number; blocked: LeadTextBlocker | null;
-  /** Why a run with nothing in the way stopped before the list was done: the agency's or the deployment's 24-hour limit, or time. */
-  held?: 'daily_cap' | 'platform_cap' | 'time' | null;
+  /**
+   * Why a run with nothing in the way stopped before the list was done: the agency's or the deployment's 24-hour
+   * limit, or time. 'switched_off': follow-up or texts were switched off, the workspace was renamed, or the approval
+   * ended, while the run was under way.
+   */
+  held?: 'daily_cap' | 'platform_cap' | 'time' | 'switched_off' | null;
 }
 export interface LeadTextOptions {
   /** Only this lead (the welcome right after an enquiry). */
@@ -374,10 +405,11 @@ const TEXT_LABEL = Object.fromEntries(LEAD_TEXT_STEPS.map((s) => [s.key, s.label
  * hours and the whole deployment at most OUTREACH_PLATFORM_DAILY_TEXTS, both counted under a lock when a text is
  * claimed; a text that failed or was not delivered still counts.
  *
- * Same guarantees as the emails: nothing is sent unless the agency switched follow-up and texts on and a text service
- * is connected; each (lead, step) is claimed through the unique key before the text is handed over, with every stop
- * condition read again under a row lock; a text whose outcome was never recorded is not sent again, and neither is one
- * that failed. No message is approved one by one.
+ * Same guarantees as the emails: nothing is sent unless the operator approved the workspace under its current name and
+ * the agency switched follow-up and texts on and a text service is connected; each (lead, step) is claimed through the
+ * unique key before the text is handed over, with the approval, the name, the switches and every stop condition read
+ * again at that moment (the run ends when any of the first three changed); a text whose outcome was never recorded is
+ * not sent again, and neither is one that failed. No message is approved one by one.
  */
 export async function runLeadTexts(orgId: string, opts: LeadTextOptions = {}): Promise<LeadTextResult> {
   const now = opts.now ?? new Date();
@@ -421,6 +453,11 @@ export async function runLeadTexts(orgId: string, opts: LeadTextOptions = {}): P
     //    to the text service, so a form fed with dead numbers reaches the limit like any other.
     const claim = await withSystem(async (db) => {
       await db.run('select pg_advisory_xact_lock(hashtextextended($1, 28))', ['lead-texts']);
+      // The approval is for the name every text starts with, and it can be withdrawn while a run is under way; so can
+      // the switches. All are read again here, and the run ends when any of them changed.
+      const cur = await db.row<ApprovalRow & { settings: Record<string, unknown> }>(`select ${APPROVAL_COLS}, settings from public.organizations where id = $1 and status = 'active'`, [orgId]);
+      const s = outreachSettings(cur?.settings);
+      if (!cur || cur.name !== org.name || s.since !== settings.since || leadTextBlocker(s, true, cur)) return 'switched_off' as const;
       const used = await db.row<{ org: number; platform: number }>(
         `select count(*) filter (where org_id = $1)::int as org, count(*)::int as platform from public.lead_outreach
           where step in (${TEXT_STEPS_SQL}) and created_at > now() - interval '24 hours'`, [orgId]);
@@ -436,7 +473,7 @@ export async function runLeadTexts(orgId: string, opts: LeadTextOptions = {}): P
         "insert into public.lead_outreach (org_id, client_id, step, status) values ($1, $2, $3, 'sending') on conflict (client_id, step) do nothing returning id", [orgId, l.id, step]);
       return row ? { id: row.id, to: state.consentPhone, lang: fresh.preferred_language === 'es' ? 'es' as const : 'en' as const } : null;
     });
-    if (claim === 'daily_cap' || claim === 'platform_cap') { out.held = claim; break; }
+    if (claim === 'daily_cap' || claim === 'platform_cap' || claim === 'switched_off') { out.held = claim; break; }
     if (!claim) continue;
 
     // 2. Send outside any transaction.

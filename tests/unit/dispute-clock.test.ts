@@ -375,8 +375,11 @@ describe('specificity check', () => {
   it('specific information: a ticked field, a category that names it, or the reason naming it', () => {
     const vague = 'The creditor told me in writing that this entry belongs to another customer.';
     const dated = 'The date opened is shown as 2019 but I opened this account in 2021.';
-    expect(found({ category: 'other', fields: [], reason: vague, body: letter('en', { reason: vague, fields: [] }) })).toEqual(['information']);
-    expect(found({ category: 'other', fields: ['Other'], reason: vague, body: letter('en', { reason: vague, fields: ['Other'] }) })).toEqual(['information']);
+    // A reason that already states the client's facts names what is disputed; only a bare request is held for it.
+    const bare = 'Please verify this entry.';
+    expect(found({ category: 'other', fields: [], reason: bare, body: letter('en', { reason: bare, fields: [] }) })).toEqual(['information', 'reason']);
+    expect(found({ category: 'other', fields: ['Other'], reason: bare, body: letter('en', { reason: bare, fields: ['Other'] }) })).toEqual(['information', 'reason']);
+    expect(found({ category: 'other', fields: [], reason: vague, body: letter('en', { reason: vague, fields: [] }) })).toEqual([]);
     expect(found({ category: 'other', fields: ['Dates'], reason: vague, body: letter('en', { reason: vague, fields: ['Dates'] }) })).toEqual([]);
     expect(found({ category: 'other', fields: [], reason: dated, body: letter('en', { reason: dated, fields: [] }) })).toEqual([]);
     expect(found({ category: 'incorrect_status', fields: [] })).toEqual([]);

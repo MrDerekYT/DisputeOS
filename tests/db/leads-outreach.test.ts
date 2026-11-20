@@ -1,8 +1,11 @@
 import { afterAll, describe, expect, it, vi } from 'vitest';
+import { POST as resendWebhook } from '@/app/api/webhooks/resend/route';
 import { runScheduledJobs } from '@/lib/automation/jobs';
+import { resetEnvCache } from '@/lib/env';
 import { optOutLead, optOutToken, runLeadOutreach } from '@/lib/lead-outreach';
 import { submitLead } from '@/lib/leads';
 import { sentLog, type Email, type SendResult } from '@/lib/mailer';
+import { resendSignature } from '@/lib/resend-webhook';
 import { addClient, approveOutreach, closePool, makeOrg, testIp, uniq, withSystem, type TestOrg } from './helpers';
 
 afterAll(closePool);
@@ -172,6 +175,39 @@ describe('automatic follow-up to leads', () => {
     expect(await steps(l3.id)).toEqual([{ step: 'welcome', status: 'failed', attempts: 1 }]);
   });
 
+  it('an HTTP 5xx from the email service is not a refusal: the email may have been accepted, so the step is not sent again', async () => {
+    // The real driver, with the email service's HTTP API stood in for: a gateway error first, then the service answering.
+    const saved = { ...process.env };
+    Object.assign(process.env, { EMAIL_DRIVER: 'resend', RESEND_API_KEY: 're_test_key_for_vitest' });
+    resetEnvCache();
+    const handed: string[] = [];
+    let answer = 504;
+    vi.stubGlobal('fetch', async (url: string | URL, init?: RequestInit) => {
+      if (String(url) !== 'https://api.resend.com/emails') throw new Error(`unexpected request to ${String(url)}`);
+      handed.push((JSON.parse(String(init?.body ?? '{}')) as { to: string[] }).to[0]!);
+      return answer === 200 ? new Response(JSON.stringify({ id: `re_${uniq()}` }), { status: 200 }) : new Response('gateway timeout', { status: answer });
+    });
+    try {
+      const a = await agency('Leads504', ON());
+      const emails = [`lead-${uniq()}@example.test`, `lead-${uniq()}@example.test`];
+      // `defer` is given and never run: the welcome is left to the runs below.
+      for (const email of emails) expect(await submitLead(a.slug, { fullName: 'Pat Lead', email, language: 'en', consent: true }, { ip: testIp(), defer: () => undefined })).toEqual({ ok: true });
+      const ids = await withSystem((db) => db.rows<{ id: string; email: string }>('select id, email from public.clients where org_id = $1 order by created_at', [a.orgId]));
+      expect(await runLeadOutreach(a.orgId)).toEqual({ sent: 0, failed: 0, blocked: null, held: 'no_answer' });
+      expect(await steps(ids[0]!.id)).toEqual([{ step: 'welcome', status: 'sending', attempts: 1 }]);
+      // The service answers again: the other lead gets the welcome, the first one is not handed over a second time.
+      answer = 200;
+      expect(await runLeadOutreach(a.orgId)).toEqual({ sent: 1, failed: 0, blocked: null });
+      expect(await runLeadOutreach(a.orgId)).toEqual({ sent: 0, failed: 0, blocked: null });
+      expect(handed).toEqual(emails);
+      expect(await steps(ids[0]!.id)).toEqual([{ step: 'welcome', status: 'sending', attempts: 1 }]);
+    } finally {
+      vi.unstubAllGlobals();
+      process.env = { ...saved };
+      resetEnvCache();
+    }
+  });
+
   it('switched on with an address: each step goes out once, on schedule, and is recorded', async () => {
     const a = await agency('LeadsOn', ON());
     const l = await enquire(a);
@@ -245,6 +281,55 @@ describe('automatic follow-up to leads', () => {
 
     expect(await runLeadOutreach(a.orgId, box.opts)).toEqual({ sent: 0, failed: 0, blocked: null });
     expect(box.mails).toHaveLength(4);
+  });
+
+  it('a spam complaint or a bounce the email service reports for a follow-up email ends the automatic follow-up for that lead', async () => {
+    const saved = { ...process.env };
+    const secret = `whsec_${Buffer.from(`a-signing-secret-for-tests-${uniq()}`).toString('base64')}`;
+    Object.assign(process.env, { RESEND_WEBHOOK_SECRET: secret });
+    resetEnvCache();
+    try {
+      const a = await agency('LeadsReported', ON());
+      const [spam, bounced, quiet] = [await enquire(a), await enquire(a), await enquire(a)];
+      const mails: Email[] = [];
+      const send = async (m: Email): Promise<SendResult> => { mails.push(m); return { ok: true, provider: 'resend', providerRef: `re_${uniq()}${uniq()}` }; };
+      expect((await runLeadOutreach(a.orgId, { live: true, send })).sent).toBe(3);
+      const refOf = async (clientId: string) => (await withSystem((db) => db.row<{ ref: string }>(
+        'select m.provider_ref as ref from public.lead_outreach o join public.communications m on m.id = o.communication_id where o.client_id = $1', [clientId])))!.ref;
+      /** What Resend POSTs, signed with the webhook's secret as Svix signs it. */
+      const report = async (type: string, emailId: string, sign = secret) => {
+        const body = JSON.stringify({ type, created_at: new Date().toISOString(), data: { email_id: emailId } });
+        const id = `msg_${uniq()}`;
+        const ts = String(Math.floor(Date.now() / 1000));
+        const res = await resendWebhook(new Request('http://localhost:3000/api/webhooks/resend', {
+          method: 'POST', body, headers: { 'svix-id': id, 'svix-timestamp': ts, 'svix-signature': `v1,${resendSignature(sign, id, ts, body)}`, 'x-forwarded-for': testIp() } }));
+        return res.status === 200 ? await res.json() : res.status;
+      };
+      // A request that is not signed with the secret changes nothing, as before.
+      expect(await report('email.complained', await refOf(spam.id), `whsec_${Buffer.from('another-secret').toString('base64')}`)).toBe(403);
+      expect(await count('select count(*)::int as n from public.clients where id = $1 and outreach_opt_out_at is not null', [spam.id])).toBe(0);
+
+      expect(await report('email.complained', await refOf(spam.id))).toEqual({ ok: true, matched: true });
+      expect(await report('email.bounced', await refOf(bounced.id))).toEqual({ ok: true, matched: true });
+      // The service sends a report again: nothing is recorded twice. An id that is not one of these emails matches nothing.
+      expect(await report('email.complained', await refOf(spam.id))).toEqual({ ok: true, matched: true });
+      expect(await report('email.bounced', `re_${uniq()}`)).toEqual({ ok: true, matched: false });
+
+      for (const l of [spam, bounced]) expect(await count('select count(*)::int as n from public.clients where id = $1 and outreach_opt_out_at is not null', [l.id])).toBe(1);
+      const timeline = (clientId: string) => withSystem((db) => db.rows<{ summary: string }>("select summary from public.client_events where client_id = $1 and kind = 'lead_opt_out'", [clientId]));
+      expect(await timeline(spam.id)).toEqual([{ summary: 'The email service reported that this person marked an automatic follow-up email as spam. No further automatic follow-up is sent to them.' }]);
+      expect(await timeline(bounced.id)).toEqual([{ summary: 'The email service reported that an automatic follow-up email to this address came back undelivered. No further automatic follow-up is sent to it.' }]);
+      const audits = (clientId: string) => withSystem((db) => db.rows<{ action: string; actor_label: string; metadata: unknown }>("select action, actor_label, metadata from public.audit_logs where entity_id = $1 and action = 'lead.opted_out'", [clientId]));
+      expect(await audits(spam.id)).toEqual([{ action: 'lead.opted_out', actor_label: 'Email service report', metadata: { reason: 'complaint' } }]);
+      expect(await audits(bounced.id)).toEqual([{ action: 'lead.opted_out', actor_label: 'Email service report', metadata: { reason: 'bounce' } }]);
+      // Two days later the follow-up goes to the lead nobody reported, and to nobody else.
+      for (const l of [spam, bounced, quiet]) await age(a, l.id, 2);
+      expect((await runLeadOutreach(a.orgId, { live: true, send })).sent).toBe(1);
+      expect(mails.slice(3).map((m) => m.to)).toEqual([quiet.email]);
+    } finally {
+      process.env = { ...saved };
+      resetEnvCache();
+    }
   });
 
   it('re-checks every stop condition at the moment of sending, not only when the run started', async () => {

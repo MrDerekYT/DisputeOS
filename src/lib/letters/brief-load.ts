@@ -10,7 +10,7 @@ import { INTAKE_REQUIRED, intakeStatus } from '../intake';
 import { loadIntakeDocs } from '../intake-load';
 import type { Evidence } from '../reports/analysis';
 import { dayInZone } from '../util';
-import { buildBrief, type BriefDisputeRow, type BriefOptions, type BriefRecord, type BriefTradelineRow, type LetterBrief } from './brief';
+import { buildBrief, sameName, type BriefDisputeRow, type BriefOptions, type BriefRecord, type BriefTradelineRow, type LetterBrief } from './brief';
 
 /**
  * The date of birth on the client's record as a day, or null. It is kept encrypted and is read here only to be stated
@@ -72,12 +72,29 @@ export async function loadBriefRecord(db: Db, clientId: string, disputeId: strin
   if (d.target_type === 'collector') {
     // A notice is this account's when it is linked to the same report row, or to a row with the same creditor and
     // account digits (another bureau's report of the debt, or a later import). A key without digits says too little.
-    record.notices = await db.rows<BriefRecord['notices'][number]>(
+    const notices = await db.rows<BriefRecord['notices'][number]>(
       `select n.collector_name, n.date_kind, n.notice_date::text, n.tradeline_id,
               coalesce(n.tradeline_id is not null and t.match_key ~ '^[^|]+[|][^|]+$'
                 and t.match_key = (select x.match_key from public.tradelines x where x.id = $2 and x.client_id = $1), false) as same_account
          from public.collector_notices n left join public.tradelines t on t.id = n.tradeline_id
         where n.client_id = $1 order by n.notice_date desc, n.created_at desc`, [clientId, d.tradeline_id]);
+    // A notice recorded by the collector's name alone can be about any of the client's debts with that collector, so
+    // the brief uses it only when there is no other one: the client's other collection accounts on an approved report
+    // under that name (or the name this debt's own account is reported under) are counted, this dispute's own account
+    // left out and one account several bureaus report (the same creditor and account digits) counted once.
+    if (notices.some((n) => !n.tradeline_id)) {
+      const accounts = await db.rows<{ id: string; creditor_name: string; match_key: string }>(
+        `select t.id, t.creditor_name, t.match_key from public.tradelines t join public.credit_reports r on r.id = t.report_id
+          where t.client_id = $1 and t.item_type = 'collection' and r.status = 'approved'`, [clientId]);
+      const keyed = (k: string | null | undefined): k is string => !!k && /^[^|]+\|[^|]+$/.test(k);
+      const own = d.tradeline_id ? await db.row<{ creditor_name: string; match_key: string }>('select creditor_name, match_key from public.tradelines where id = $1 and client_id = $2', [d.tradeline_id, clientId]) : null;
+      for (const n of notices.filter((x) => !x.tradeline_id)) {
+        const names = [n.collector_name, ...(own ? [own.creditor_name] : [])];
+        const others = accounts.filter((t) => names.some((x) => sameName(t.creditor_name, x)) && t.id !== d.tradeline_id && !(keyed(own?.match_key) && t.match_key === own?.match_key));
+        n.other_debts = new Set(others.map((t) => (keyed(t.match_key) ? t.match_key : t.id))).size;
+      }
+    }
+    record.notices = notices;
   }
   record.letters = await db.rows<BriefRecord['letters'][number]>("select template_key, kind, status from public.letters where dispute_id = $1 and status <> 'void' order by created_at", [d.id]);
   return record;

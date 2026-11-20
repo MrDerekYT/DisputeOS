@@ -54,8 +54,10 @@ compliant; state requirements vary and change. **Consult a consumer-finance atto
 | **TCPA** | SMS is not implemented; consent kind `communications` exists for email/portal | Separate express written consent before any SMS |
 
 **Human approval before external communication:** letters need a manager's approval of the exact text (edits void the
-approval); automations that message clients wait in the Inbox; the system never mails or emails a dispute itself — a person
-sends it and records that they did.
+approval); the facts a letter rests on (a recorded response, a collector's 30-day period, accepted documents, the client
+confirming an item is accurate) are checked again when it is sent for approval and when it is approved, and a letter
+whose facts changed must be drafted again; automations that message clients wait in the Inbox; the system never mails or
+emails a dispute itself — a person sends it and records that they did.
 
 **The AI never fabricates:** it works only from stored report data; an LLM may reword but its output is discarded if any
 number/date changes or a prohibited claim appears; personal identifiers are stripped before any text leaves the server;

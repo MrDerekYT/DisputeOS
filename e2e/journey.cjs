@@ -253,6 +253,9 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
 
     await check('record the outcome and resolve; history shows every step', async () => {
       await staff.getByLabel('Outcome').selectOption('updated');
+      // The date the response was received is required; this journey sends the dispute today, so today is the only valid day.
+      const received = staff.getByLabel('Date response received');
+      await received.fill(await received.getAttribute('max'));
       await staff.getByRole('button', { name: 'Record response' }).click();
       await expectText(staff, 'Response recorded');
       await staff.reload();

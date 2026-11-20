@@ -8,23 +8,14 @@ import { fireTrigger } from '../automation/engine';
 import { findBlockedClaims } from '../compliance/claims';
 import { logEvent } from '../crm';
 import { can, PermissionError } from '../rbac';
-import { businessToday, createLetter, LetterError } from '../letters/service';
+import { createLetter, LetterError } from '../letters/service';
 import { procedureTemplateKey } from '../letters/templates';
 import { addDays, procedureDescriptionDue, receivedDay, REINVESTIGATION_DAYS, sayDay, withinOriginalPeriod, type Day } from './clock';
 import { isAgencyDispute } from './next-steps';
-import { CONFIRMED_ACCURATE_STOP, DisputeError, type DActor } from './service';
+import { checkReceivedOn, CONFIRMED_ACCURATE_STOP, DisputeError, notFuture, type DActor } from './service';
 import { getEnv } from '../env';
 
 export const PROCEDURE_KIND = 'method_of_verification';
-
-const isDay = (v: string) => /^\d{4}-\d{2}-\d{2}$/.test(v) && !Number.isNaN(new Date(`${v}T00:00:00Z`).getTime());
-/** Not in the future for anyone: judged against the later of the agency's day and the UTC day. */
-function notFuture(day: Day, what: string): void {
-  if (!isDay(day)) throw new DisputeError(`Enter ${what} as a valid date.`);
-  const t = businessToday();
-  const utc = new Date().toISOString().slice(0, 10);
-  if (day > (utc > t ? utc : t)) throw new DisputeError(`${what[0]!.toUpperCase()}${what.slice(1)} cannot be in the future.`);
-}
 
 /**
  * "The client sent more information on <date>". 15 U.S.C. § 1681i(a)(1)(B): when the agency receives relevant
@@ -120,11 +111,12 @@ export async function recordProcedureDates(db: Db, actor: DActor, letterId: stri
  * consumer has not given it enough information to investigate, and its notice must say why and identify "any
  * information required to investigate the disputed information". Staff type what the notice asked for; that, and only
  * that, becomes a task and a document request the client sees in the portal. No reason is suggested or invented here.
+ * The day the notice arrived is required: the next round's letter states it as the day the client received the notice.
  */
 export async function recordFrivolousNotice(db: Db, actor: DActor, id: string, r: { missing: string; receivedOn?: Day | null }): Promise<void> {
   if (!can(actor.role, 'disputes:write')) throw new PermissionError('disputes:write');
-  const d = await db.row<{ client_id: string; status: string; target_type: string; item_label: string; recipient_name: string; assigned_to: string | null }>(
-    'select client_id, status, target_type, item_label, recipient_name, assigned_to from public.disputes where id = $1 for update', [id]);
+  const d = await db.row<{ client_id: string; status: string; target_type: string; item_label: string; recipient_name: string; assigned_to: string | null; submitted_at: string | null }>(
+    'select client_id, status, target_type, item_label, recipient_name, assigned_to, submitted_at from public.disputes where id = $1 for update', [id]);
   if (!d) throw new DisputeError('Dispute not found.');
   if (!isAgencyDispute(d.target_type)) throw new DisputeError('This notice comes from a credit bureau or a specialty agency.');
   if (!['submitted', 'under_investigation', 'response_received'].includes(d.status)) throw new DisputeError('Only a submitted dispute can have a response recorded.');
@@ -132,11 +124,11 @@ export async function recordFrivolousNotice(db: Db, actor: DActor, id: string, r
   if (missing.length < 5) throw new DisputeError('Enter what the agency’s notice said was missing, in its words.');
   const claim = findBlockedClaims(missing)[0];
   if (claim) throw new DisputeError(`That text contains a claim we cannot allow: “${claim.excerpt}” — ${claim.why}`);
-  if (r.receivedOn) notFuture(r.receivedOn, 'the date the notice was received');
+  const receivedOn = checkReceivedOn(r.receivedOn, d.submitted_at, 'the date the notice was received');
 
   await db.run(
     `update public.disputes set outcome = 'frivolous', frivolous_missing = $2, response_at = $3, status = 'response_received' where id = $1`,
-    [id, missing, r.receivedOn ? `${r.receivedOn}T12:00:00Z` : new Date()]);
+    [id, missing, `${receivedOn}T12:00:00Z`]);
   await db.run('insert into public.dispute_events (org_id, dispute_id, actor_id, kind, note, client_visible) values ($1, $2, $3, $4, $5, true)',
     [actor.orgId, id, actor.userId, 'outcome', `${d.recipient_name} asked for more information before it investigates.`]);
   // The staff task: exactly what the notice asked for, nothing added. One open task per dispute; recording again updates it.

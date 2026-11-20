@@ -66,10 +66,12 @@ export async function sendTestEmail(a: TestActor, opts: { send?: (mail: Email) =
     text: `This is a test email. You asked for it on the “Get set up” page of ${PRODUCT.name}.\n\nIf you are reading this, email from ${org} is being delivered. It was sent only to you: nothing was sent to a client.\n`,
   });
   const live = r.provider === 'resend';
-  await record(a, 'email', EMAIL_TEST_KEY, r.provider, live && r.ok, live && !r.ok);
+  // No answer from Resend is not a refusal: the email may have gone out, so the checklist is left as it was.
+  await record(a, 'email', EMAIL_TEST_KEY, r.provider, live && r.ok, live && !r.ok && !r.unconfirmed);
   if (!live) return { ok: false, message: 'Not delivered: emails are written to a local log here (EMAIL_DRIVER=log). Nothing left this server.' };
   if (r.ok) return { ok: true, message: `Resend accepted it${r.providerRef ? ` (id ${r.providerRef})` : ''}. Look for it at ${a.email}, and in the spam folder too.` };
   const why = r.error ?? 'no reason given';
+  if (r.unconfirmed) return { ok: false, message: `Resend did not answer (${why}), so it is not known whether the email was sent. Look in your inbox; if it is not there, try again.` };
   return { ok: false, message: `Resend refused it: “${why}”.${/domain|verif/i.test(why) ? ' That usually means the sending domain is not verified in Resend yet, or EMAIL_FROM is not on that domain.' : ''}` };
 }
 

@@ -37,8 +37,9 @@ export interface SendResult {
   providerRef?: string;
   error?: string;
   /**
-   * The email service gave no answer (a timeout, a connection that dropped), so it is not known whether it accepted
-   * the email. A sender that must never write to someone twice treats this as "outcome unknown", not as a refusal.
+   * The email service gave no answer (a timeout, a connection that dropped), or answered with a server error (HTTP
+   * 5xx, which a gateway in front of the service also sends), so it is not known whether it accepted the email. A
+   * sender that must never write to someone twice treats this as "outcome unknown", not as a refusal.
    */
   unconfirmed?: boolean;
 }
@@ -67,7 +68,8 @@ export const emailDisabled = (): boolean => getEnv().EMAIL_DRIVER === 'disabled'
  *  - `disabled`: an explicit "no email provider". Nothing is sent and nothing is written anywhere; the result says so,
  *    and callers show the person what to do instead (for example, hand over an invitation link themselves).
  * Only `resend` delivers. Callers must treat any other provider as "not delivered": see `delivers()`.
- * A result with `unconfirmed` means the service did not answer: the email may or may not have gone out.
+ * A result with `unconfirmed` means the service did not answer, or answered with a server error: the email may or may
+ * not have gone out. A 4xx answer (429 included) is a refusal: nothing was accepted.
  */
 export async function sendEmail(mail: Email): Promise<SendResult> {
   const env = getEnv();
@@ -83,7 +85,8 @@ export async function sendEmail(mail: Email): Promise<SendResult> {
         signal: AbortSignal.timeout(15_000),
       });
       const body = (await res.json().catch(() => ({}))) as { id?: string; message?: string };
-      if (!res.ok) return { ok: false, provider: 'resend', error: body.message ?? `HTTP ${res.status}` };
+      // A 5xx does not say whether the email was accepted before the error, so it is not a refusal either.
+      if (!res.ok) return { ok: false, provider: 'resend', error: body.message ?? `HTTP ${res.status}`, ...(res.status >= 500 ? { unconfirmed: true } : {}) };
       return { ok: true, provider: 'resend', providerRef: body.id };
     } catch (e) {
       // No answer arrived. Unless no connection was ever made, the service may still have accepted the email.

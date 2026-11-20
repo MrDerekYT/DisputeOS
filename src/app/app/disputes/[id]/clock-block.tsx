@@ -36,7 +36,8 @@ export function ClockBlock({ d, letters, lang, today, tz, canLetter }: { d: Cloc
   if (!isAgencyDispute(d.target_type) || !d.due_at || !['submitted', 'under_investigation', 'response_received', 'resolved', 'on_hold'].includes(d.status)) return null;
   const procedure = letters.find((l) => l.kind === PROCEDURE_KIND && l.status !== 'void') ?? null;
   const mailed = letters.find((l) => l.kind !== PROCEDURE_KIND && l.status === 'sent') ?? null;
-  const responseOn = d.response_at ? toDay(d.response_at, tz) : null;
+  // "No response" is stored with the moment it was recorded; that is not a day a response arrived.
+  const responseOn = d.response_at && d.outcome !== 'no_response' ? toDay(d.response_at, tz) : null;
   const rows = disputeClock({
     dueAt: d.due_at, extended: d.deadline_extended, moreInfoOn: d.more_info_on, completedOn: d.investigation_completed_on, responseOn, tz,
     procedure: procedure?.status === 'sent' ? { sentOn: procedure.sent_on, receivedOn: procedure.received_on, replyDueOn: procedure.reply_due_on, replyReceivedOn: procedure.reply_received_on } : null,
@@ -134,7 +135,7 @@ export function ClockBlock({ d, letters, lang, today, tz, canLetter }: { d: Cloc
               <input type="hidden" name="id" value={d.id} />
               <p className="text-[0.8125rem] text-muted">An agency that will not investigate generally has to say why and what information it needs (15 U.S.C. § 1681i(a)(3)). Type what its notice asked for. That becomes a task, and the client sees the request in their portal.</p>
               <TextArea label="What did the agency say was missing?" name="missing" rows={3} required maxLength={1000} hint="Use the notice’s own words. Do not add a reason the client has not given." />
-              <Field label="Date the notice was received" name="receivedOn" type="date" max={today} />
+              <Field label="Date the notice was received" name="receivedOn" type="date" max={today} required />
               <SubmitButton variant="secondary">Record notice and create the task</SubmitButton>
             </ActionForm>
           </details>

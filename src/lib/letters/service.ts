@@ -6,10 +6,10 @@ import { audit } from '../audit';
 import { findBlockedClaims } from '../compliance/claims';
 import { logEvent } from '../crm';
 import { can, PermissionError, type Role } from '../rbac';
-import { buildValues, mergeTemplate, unresolvedPlaceholders } from './render';
+import { buildValues, longDate, mergeTemplate, unresolvedPlaceholders } from './render';
 import { buildBrief, contextFor, disputeLetterKey } from './brief';
 import { loadBriefRecord } from './brief-load';
-import { missingFacts, missingFactsForOwnTemplate } from './library';
+import { CITES_809B, missingFacts, missingFactsForOwnTemplate } from './library';
 import { specialtyTemplateKey, templateByKey, templatesFor, type LetterKind } from './templates';
 import { parseAgencyItem, specialtyAgency } from '../credit/agencies';
 import { procedureDescriptionDue } from '../disputes/clock';
@@ -17,6 +17,8 @@ import { CONTENT_KINDS, contentIssues, SPECIFICITY_KINDS, specificityIssues, sta
 
 export interface LActor { orgId: string; userId: string; role: Role; meta?: { ip?: string | null } }
 export class LetterError extends UserError {}
+/** 15 U.S.C. § 1679b(a)(1): once the client has confirmed the item is reported accurately, no further letter about it is drafted or approved. */
+export const CONFIRMED_ACCURATE = 'The client confirmed this item is reported accurately, so no further letter or round is offered for it.';
 /** Said when someone tries to draft from an agency template that is marked as written in Spanish. */
 export const SPANISH_TEMPLATE = 'This template is written in Spanish. Letters go to US bureaus, creditors and collectors and are written in English: open it under Letters, Templates, put it into English and mark it as English, or pick another letter.';
 
@@ -40,8 +42,7 @@ export async function createLetter(
   const record = await loadBriefRecord(db, input.clientId, input.disputeId ?? null);
   if (!record) throw new LetterError('Client not found.');
   if (input.disputeId && !record.dispute) throw new LetterError('That dispute does not belong to this client.');
-  // 15 U.S.C. § 1679b(a)(1): once the client has confirmed the item is reported accurately, no further letter is drafted about it.
-  if (record.dispute?.client_confirmed_accurate) throw new LetterError('The client confirmed this item is reported accurately, so no further letter or round is offered for it.');
+  if (record.dispute?.client_confirmed_accurate) throw new LetterError(CONFIRMED_ACCURATE);
   const brief = buildBrief(record, { reasonOverride: input.reasonOverride, recipientName: input.recipientName, recipientAddress: input.recipientAddress, includeSsnLast4: input.includeSsnLast4, orgName: input.orgName });
   const base = brief.context;
   const dispute = base.dispute ?? null;
@@ -172,6 +173,45 @@ export async function specificityInputFor(db: Db, letterId: string): Promise<Omi
   return { category: d.category, reason: d.reason, fields: d.fields, account };
 }
 
+const say = (day: string) => longDate(new Date(`${day}T00:00:00Z`));
+
+/**
+ * What a letter rests on that has changed since it was drafted, as a refusal, or null. A draft can wait while the file
+ * moves on: a response is recorded, a collector's 30 days run out, a document is rejected, the client confirms the item
+ * is reported accurately. So the checks createLetter ran are run again on the file as it is now (missingFacts for the
+ * letter's template; for an agency's own template, missingFactsForOwnTemplate), and a validation request whose text
+ * cites Section 809(b) needs a collector notice with an open validation period on file for the debt. Run when a letter
+ * is sent for approval and when it is approved; not when it is recorded as sent (markSent), which records what happened.
+ */
+async function changedSinceDrafted(db: Db, letterId: string, body: string): Promise<string | null> {
+  const l = await db.row<{ client_id: string; dispute_id: string | null; template_key: string | null; kind: LetterKind }>(
+    'select client_id, dispute_id, template_key, kind from public.letters where id = $1', [letterId]);
+  if (!l) return null;
+  const record = l.dispute_id ? await loadBriefRecord(db, l.client_id, l.dispute_id) : null;
+  if (record?.dispute?.client_confirmed_accurate) return CONFIRMED_ACCURATE;
+  const brief = record?.dispute ? buildBrief(record) : null;
+  if (brief) {
+    let missing: string[] = [];
+    if (l.template_key?.startsWith('org:')) {
+      // The agency's template as it is now, active or not: the letter was drafted from it.
+      const o = await db.row<{ kind: LetterKind; body: string; base_key: string | null }>('select kind, body, base_key from public.letter_templates where id = $1', [l.template_key.slice(4)]);
+      const fallbackKey = templatesFor(o?.kind ?? l.kind)?.key ?? l.template_key;
+      missing = o ? missingFactsForOwnTemplate({ baseKey: o.base_key, fallbackKey, kind: o.kind, body: o.body }, brief.context) : missingFacts(fallbackKey, brief.context, l.kind);
+    } else if (l.template_key && templateByKey(l.template_key)) {
+      missing = missingFacts(l.template_key, brief.context);
+    }
+    if (missing.length) return `This letter no longer fits what is on file. ${missing.join(' ')} Draft the letter again.`;
+  }
+  if (l.kind === 'validation_request' && CITES_809B.test(body) && !brief?.context.facts?.notice?.open) {
+    const n = brief?.circumstances.notice;
+    const why = n ? `the validation period for the notice ${n.kind} on ${say(n.date)} generally ended on ${say(n.endsOn)}`
+      : brief?.circumstances.unlinkedNotice ? 'the notice recorded by this collector’s name could be about another of the client’s debts with that collector, so it is not used for this one'
+        : 'no notice with an open validation period is on file for this debt';
+    return `This letter cites Section 809(b) of the Fair Debt Collection Practices Act, which applies to a request sent within 30 days of the collector’s notice, and ${why}. Draft the letter again.`;
+  }
+  return null;
+}
+
 export async function setLetterStatus(db: Db, actor: LActor, letterId: string, to: 'pending_approval' | 'approved' | 'draft' | 'void'): Promise<void> {
   const l = await db.row<{ status: string; client_id: string; created_by: string | null; title: string }>('select status, client_id, created_by, title from public.letters where id = $1 for update', [letterId]);
   if (!l) throw new LetterError('Letter not found.');
@@ -179,12 +219,16 @@ export async function setLetterStatus(db: Db, actor: LActor, letterId: string, t
   const cur = await currentBody(db, letterId);
   if (to === 'pending_approval') {
     if (!can(actor.role, 'letters:write')) throw new PermissionError('letters:write');
+    const changed = await changedSinceDrafted(db, letterId, cur?.body ?? '');
+    if (changed) throw new LetterError(changed);
     const b = await letterBlockers(db, letterId, cur?.body ?? '');
     if (b.length) throw new LetterError(b.join(' · '));
   }
   if (to === 'approved') {
     if (!can(actor.role, 'letters:approve')) throw new PermissionError('letters:approve');
     if (l.status !== 'pending_approval') throw new LetterError('Send the letter for approval first.');
+    const changed = await changedSinceDrafted(db, letterId, cur?.body ?? '');
+    if (changed) throw new LetterError(changed);
     const b = await letterBlockers(db, letterId, cur?.body ?? '');
     if (b.length) throw new LetterError(b.join(' · '));
   }

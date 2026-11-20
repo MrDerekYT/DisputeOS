@@ -5,7 +5,7 @@ import { Avatar, Badge, EmptyState, Notice, PageHeader, Section } from '@/compon
 import { ActionForm, Check, Field, Select, SubmitButton, TextArea } from '@/components/forms';
 import { requireStaff } from '@/lib/auth/context';
 import { consentStatus } from '@/lib/compliance/disclosures';
-import { draftReason, REASON_PROMPT, reportedFor } from '@/lib/disputes/reasons';
+import { asWritten, draftReason, REASON_PROMPT, reportedFor } from '@/lib/disputes/reasons';
 import { loadReportedRows } from '@/lib/disputes/service';
 import { CATEGORIES, categoryForFinding, FIELD_OPTIONS, mustNameAccount } from '@/lib/disputes/workflow';
 import { letterForCategory } from '@/lib/letters/brief';
@@ -104,7 +104,7 @@ export default async function NewDisputePage({ searchParams }: { searchParams: P
   const isInquiry = category === 'unauthorized_inquiry';
   // What the hint under the reason says. A drafted reason either states a value read from a report, or is a starting
   // point; a bare request to verify in a letter to a bureau is held by the specificity check until a person adds to it.
-  const fromReport = evidence.some((e) => e.source === 'reported' && reason.includes(e.value));
+  const fromReport = evidence.some((e) => e.source === 'reported' && reason.includes(asWritten(e.value))); // a date as the reason writes it out
   const held = !fromReport && cat.target === 'bureau' && reason.startsWith('Please verify ');
   // The letter a dispute of this kind starts with. Once the dispute exists, its page recommends from the whole file.
   const fits = letterForCategory(category);

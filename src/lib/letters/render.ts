@@ -115,6 +115,20 @@ function historyOrDates(d: NonNullable<LetterContext['dispute']> | null | undefi
   return history && dates ? 'the payment history and dates' : history ? 'the payment history' : dates ? 'the dates' : 'the payment history or dates';
 }
 
+/** A name as it is compared with what staff typed: case, punctuation and spacing aside ("TELECHECK SERVICES INC"). */
+const bareName = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+/**
+ * The address staff typed for a specialty agency with no verified one. The letter prints the agency's name above it,
+ * so a first line that is that name, copied with the address from the agency's instructions, is left out rather than
+ * printed twice. Nothing left means there is no address: the letter then carries a marked line.
+ */
+function typedAgencyAddress(typed: string | null | undefined, names: (string | null | undefined)[]): string | null {
+  const lines = (typed ?? '').split('\n').map((l) => l.trim()).filter(Boolean);
+  const own = new Set(names.filter((n): n is string => !!n?.trim()).map(bareName));
+  if (lines.length && own.has(bareName(lines[0]!))) lines.shift();
+  return lines.length ? lines.join('\n') : null;
+}
+
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 /**
  * The item as a letter names it. A dispute's label is written for a list on screen ("ACME BANK ••1234 (Experian)"); a
@@ -134,7 +148,9 @@ export function buildValues(c: LetterContext): Record<string, string> {
   const bureau = d?.bureau ? BUREAU_ADDRESSES[d.bureau] : undefined;
   const agency = specialtyAgency(d?.agency);
   // A specialty agency's address comes from the registry when one is verified there; otherwise only from what staff typed. Never a guess.
-  const agencyAddress = agency ? addressBlock(agency) ?? (d?.recipient_address?.trim() || null) : null;
+  const agencyAddress = agency ? addressBlock(agency) ?? typedAgencyAddress(d?.recipient_address, [agency.name, d?.recipient_name]) : null;
+  // "Other" is the form's catch-all tick, not information a recipient can look up: it is not printed.
+  const fields = (d?.fields ?? []).filter((f) => f.trim().toLowerCase() !== 'other');
   const encl = c.enclosures?.length ? `Enclosures:\n${c.enclosures.map((e) => `  - ${e}`).join('\n')}\n` : c.enclosuresNone ? 'Enclosures: none\n' : '';
   const say = (v: string | Date) => longDate(new Date(`${toDay(v, c.tz)}T00:00:00Z`));
   const address = formatAddress(c.client.address);
@@ -152,6 +168,8 @@ export function buildValues(c: LetterContext): Record<string, string> {
   // A collector must stop collecting until it mails verification only when the consumer writes within the 30 days that
   // follow its notice (15 U.S.C. § 1692g(b)). So the statute is cited, and the notice date stated, only when a notice is
   // on file and its period is open today. Otherwise the letter disputes the debt and asks, without claiming that right.
+  // Where it is cited, it is cited for the dispute: the statute gives verification and the original creditor's name and
+  // address, and the list the letter asks for goes further, so the list is a request ("Please include:"), not a right.
   const n = f.notice ?? null;
   const lateOnly = f.fallOff?.kind === 'date' && f.fallOff.rule === 'seven_years';
   const noticeDay = n ? (n.kind === 'received' ? `which I received on ${say(n.date)}` : `which was sent on ${say(n.date)}`) : '';
@@ -170,7 +188,7 @@ export function buildValues(c: LetterContext): Record<string, string> {
     reason: d?.reason ?? '[REASON NEEDED]',
     agency_identity_text: agencyIdentityLines(agency, d?.agency_item, 'en', { dob }).map((l) => `${l}\n`).join(''),
     agency_item_text: d?.agency_item ? `${agencyItemLines(d.agency_item, 'en').join('\n')}\n` : '[ITEM NEEDED]\n',
-    fields_text: d?.fields.length ? `Specific information I am asking you to review: ${d.fields.join(', ')}.\n` : '',
+    fields_text: fields.length ? `Specific information I am asking you to review: ${fields.join(', ')}.\n` : '',
     enclosures: encl,
     round_text: d && d.round > 1 ? ` — request ${d.round}` : '',
     // The earlier round's sent date, for a re-dispute. (With no earlier round it is the day this dispute was sent, which
@@ -197,7 +215,7 @@ export function buildValues(c: LetterContext): Record<string, string> {
     current_details_text: `  Name: ${c.client.full_name}\n  Address: ${address.replace(/\n/g, ', ')}`,
     disputed_subject: historyOrDates(d),
     validation_intro: n?.open
-      ? `I am writing in response to your written notice about the debt referenced above, ${noticeDay}. Under Section 809(b) of the Fair Debt Collection Practices Act (15 U.S.C. § 1692g(b)), I dispute this debt and request that you provide validation of it, including:`
+      ? `I am writing in response to your written notice about the debt referenced above, ${noticeDay}. Under Section 809(b) of the Fair Debt Collection Practices Act (15 U.S.C. § 1692g(b)), I dispute this debt. I ask that you provide validation of it. Please include:`
       : `${n ? 'I am writing in response to your written notice about the debt referenced above.' : 'I am writing about the debt referenced above.'} I dispute this debt and ask that you provide validation of it, including:`,
     validation_cease: n?.open
       ? 'Until you mail me verification of the debt, I ask that you cease collection of it, as the statute provides.'

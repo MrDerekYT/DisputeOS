@@ -140,12 +140,13 @@ describe('situation letters through the pipeline', () => {
     const l = await asUser(owner.userId, (db) => createLetter(db, owner, { clientId: client, disputeId: notMine }));
     expect((await letterRow(l))!.template_key).toBe('not_my_account_en');
     expect(await body(l)).toMatch(/an account in my credit file that I do not recognize as mine/);
-    // "Obsolete" with no account and so no reported date: the outdated letter cannot state a date, so the general one is used.
+    // "Obsolete" with no account and so no reported date: the outdated letter cannot state a date, and is refused with
+    // what to use instead, whether it is asked for by name or not. A person picks the general dispute.
     const old = await asUser(owner.userId, (db) => createDispute(db, owner, { clientId: client, category: 'obsolete', bureau: 'equifax', reason: 'The collection is shown with a first delinquency date in 2015.' }));
-    const g = await asUser(owner.userId, (db) => createLetter(db, owner, { clientId: client, disputeId: old }));
-    expect((await letterRow(g))!.template_key).toBe('bureau_dispute_en');
-    // Asked for by name, it is refused instead.
+    await expect(asUser(owner.userId, (db) => createLetter(db, owner, { clientId: client, disputeId: old }))).rejects.toThrow(/names no account on a report[\s\S]*no reporting period to state\. Use the general dispute/);
     await expect(asUser(owner.userId, (db) => createLetter(db, owner, { clientId: client, disputeId: old, templateKey: 'outdated_item_en' }))).rejects.toThrow(/no reporting period to state/);
+    const g = await asUser(owner.userId, (db) => createLetter(db, owner, { clientId: client, disputeId: old, templateKey: 'bureau_dispute_en' }));
+    expect((await letterRow(g))!.template_key).toBe('bureau_dispute_en');
   });
 
   it('refuses an identity theft block until an accepted identity theft report and an accepted photo ID are on file, then encloses the report', async () => {

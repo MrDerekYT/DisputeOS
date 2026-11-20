@@ -6,6 +6,11 @@
 -- for outreach); and three existing functions from 0018 replaced with the same behaviour plus the new values. No
 -- existing row is changed, and nothing here needs a superuser.
 --
+-- This file was changed after it was first written, before any release. scripts/migrate.mjs applies a file once, by
+-- name, and never again when it changes. So a database that ran an earlier copy of it (a development database of this
+-- branch) has to run it again by hand, `psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/0028_partner_outreach.sql`,
+-- or be rebuilt with `npm run db:reset`. Production never ran it.
+--
 -- What this schema does NOT hold, on purpose: a text or call queue for partners. A partner's phone number is stored
 -- for the agency's own reference only; no table here can carry a text message or a call to a partner.
 

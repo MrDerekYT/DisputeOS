@@ -148,11 +148,11 @@ describe('client updates by text', () => {
     const o = await agency('RealTrigger', { response_recorded: { sms: true } });
     const c = await portalClient(o, { consent: true });
     const disputeId = await addDispute(o.orgId, c.clientId, 'submitted');
-    await asUser(o.ownerId, (db) => recordResponse(db, { orgId: o.orgId, userId: o.ownerId, role: 'owner' }, disputeId, { outcome: 'verified' }));
+    await asUser(o.ownerId, (db) => recordResponse(db, { orgId: o.orgId, userId: o.ownerId, role: 'owner' }, disputeId, { outcome: 'verified', receivedOn: businessToday() }));
     expect(await updates(c.clientId)).toMatchObject([{ event: 'response_recorded', channel: 'sms', status: 'queued' }]);
     // A rolled-back transaction leaves nothing behind to send.
     const second = await addDispute(o.orgId, c.clientId, 'submitted');
-    await expect(asUser(o.ownerId, async (db) => { await recordResponse(db, { orgId: o.orgId, userId: o.ownerId, role: 'owner' }, second, { outcome: 'verified' }); throw new Error('rolled back'); })).rejects.toThrow('rolled back');
+    await expect(asUser(o.ownerId, async (db) => { await recordResponse(db, { orgId: o.orgId, userId: o.ownerId, role: 'owner' }, second, { outcome: 'verified', receivedOn: businessToday() }); throw new Error('rolled back'); })).rejects.toThrow('rolled back');
     expect(await updates(c.clientId)).toHaveLength(1);
     await deliverClientUpdates(o.orgId, { now: NOON });
     expect(textsTo(c.number)).toHaveLength(1);
@@ -211,6 +211,21 @@ describe('client updates by text', () => {
     expect(await recordSmsStatus(sid, 'undelivered', '30034')).toEqual({ kind: 'status', matched: 1 });
     expect(await comms(c2.clientId)).toMatchObject([{ status: 'failed' }]);
     expect(await updates(c2.clientId)).toMatchObject([{ status: 'failed', error: 'The carrier did not deliver it (Twilio error 30034)' }]);
+  });
+
+  it('an email update the email service never answered for is kept as failed, saying it may or may not have arrived', async () => {
+    const o = await agency('EmailNoAnswer', { team_message: { email: true } });
+    const c = await portalClient(o);
+    expect(await queue(o, c.clientId, 'team_message')).toBe(1);
+    const silent = async (_: Email): Promise<SendResult> => ({ ok: false, provider: 'resend', error: 'The operation was aborted due to timeout', unconfirmed: true });
+    expect(await deliverClientUpdates(o.orgId, { now: NOON, email: silent })).toEqual({ sent: 0, failed: 1, skipped: 0, waiting: 0 });
+    expect(await updates(c.clientId)).toMatchObject([{ channel: 'email', status: 'failed', provider: 'resend', error: 'The email service did not answer; it may or may not have arrived.' }]);
+    expect(await comms(c.clientId)).toMatchObject([{ direction: 'outbound', channel: 'email', status: 'failed' }]);
+    // A refusal the service did answer with keeps its own reason.
+    expect(await queue(o, c.clientId, 'team_message')).toBe(1);
+    const refused = async (_: Email): Promise<SendResult> => ({ ok: false, provider: 'resend', error: 'The agency.test domain is not verified.' });
+    expect(await deliverClientUpdates(o.orgId, { now: NOON, email: refused })).toEqual({ sent: 0, failed: 1, skipped: 0, waiting: 0 });
+    expect((await updates(c.clientId)).at(-1)).toMatchObject({ status: 'failed', error: 'The agency.test domain is not verified.' });
   });
 
   it('a changed phone number or a missing portal sign-in stops the text', async () => {

@@ -83,6 +83,21 @@ describe('setup test sends', () => {
     expect((await audits(o, 'setup.test_email')).map((a) => a.metadata)).toEqual([{ provider: 'resend', accepted: false }, { provider: 'resend', accepted: true }, { provider: 'resend', accepted: false }]);
   });
 
+  it('email: when Resend does not answer, the page says it is not known whether the email went out, and the step is not marked as failed', async () => {
+    const o = await makeOrg('SetupEmailSilent');
+    useEnv(RESEND);
+    expect((await sendTestEmail(actor(o), fakeEmail({ ok: true, provider: 'resend', providerRef: 'id_1' }))).ok).toBe(true);
+    const proof = (await settings(o))[EMAIL_TEST_KEY];
+    expect(typeof proof).toBe('string');
+    const silent = fakeEmail({ ok: false, provider: 'resend', error: 'The operation was aborted due to timeout', unconfirmed: true });
+    expect(await sendTestEmail(actor(o), silent)).toEqual({
+      ok: false, message: 'Resend did not answer (The operation was aborted due to timeout), so it is not known whether the email was sent. Look in your inbox; if it is not there, try again.',
+    });
+    expect(silent.sent).toHaveLength(1);
+    // The checklist keeps what the earlier, answered test proved.
+    expect((await settings(o))[EMAIL_TEST_KEY]).toBe(proof);
+  });
+
   it('email: says so when email is not connected or is only a local log, and never claims a delivery', async () => {
     const o = await makeOrg('SetupEmailOff');
     const mail = fakeEmail({ ok: true, provider: 'resend' });

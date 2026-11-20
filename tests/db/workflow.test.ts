@@ -227,7 +227,7 @@ describe('dispute → letter → approval → submission → response → next r
     const notice = await asUser(specialist.userId, (db) => recordCollectorNotice(db, { ...specialist, meta: {} }, { clientId, tradelineId: col, kind: 'received', date: day(7) }));
     const l2 = await asUser(specialist.userId, (db) => createLetter(db, specialist, { clientId, disputeId: d }));
     const open = (await withSystem((db) => currentBody(db, l2)))!.body;
-    expect(open).toMatch(/I am writing in response to your written notice about the debt referenced above, which I received on [A-Z][a-z]+ \d{1,2}, \d{4}\. Under Section 809\(b\) of the Fair Debt Collection Practices Act \(15 U\.S\.C\. § 1692g\(b\)\), I dispute this debt and request that you provide validation of it, including:/);
+    expect(open).toMatch(/I am writing in response to your written notice about the debt referenced above, which I received on [A-Z][a-z]+ \d{1,2}, \d{4}\. Under Section 809\(b\) of the Fair Debt Collection Practices Act \(15 U\.S\.C\. § 1692g\(b\)\), I dispute this debt\. I ask that you provide validation of it\. Please include:/);
     expect(open).toContain('Until you mail me verification of the debt, I ask that you cease collection of it, as the statute provides.');
 
     // The same notice, received four months ago: the 30 days are over, so the right is not claimed.
