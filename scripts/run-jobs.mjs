@@ -25,5 +25,10 @@ if (!res.ok) {
 }
 const body = JSON.parse(text);
 console.log(`Scheduled jobs: ${body.orgs} organization(s), ${body.executed} action(s) run, ${body.pending} waiting for approval, ${body.skipped} skipped (already done), ${body.failures} failure(s).`);
+console.log(`Messages sent: ${body.leadEmails ?? 0} lead email(s), ${body.clientUpdates ?? 0} client update(s), ${body.leadTexts ?? 0} lead text(s), ${body.partnerEmails ?? 0} partner email(s).`);
+if (body.notReached) console.warn(`  ${body.notReached} organization(s) were not reached before the time ran out; run again.`);
+if (body.unfinished) console.warn(`  ${body.unfinished} organization(s) still had lead emails or client updates to send when the time ran out; run again.`);
+if (body.unanswered) console.warn(`  ${body.unanswered} lead or partner email run(s) stopped because the email service did not answer; the email being sent may or may not have arrived and is not sent again. Check the email service.`);
+if (body.outreachCutShort) console.warn('  Outreach (lead texts, partner emails) stopped before every organization had its turn; run again.');
 for (const f of body.failed ?? []) console.error(`  FAILED ${f.orgId}: ${f.error}`);
 process.exit(body.failures > 0 ? 1 : 0);

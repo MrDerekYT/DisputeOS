@@ -8,7 +8,8 @@ import { parseForm, run, UserError, zBool, zDate, zOpt, zText, zUuid } from '@/l
 import { audit } from '@/lib/audit';
 import { loadDisputeCounts, polishedProgress } from '@/lib/ai/assistant';
 import { AI_OFF, notChargedNote, withAiCredits } from '@/lib/ai/credits';
-import { requireStaff } from '@/lib/auth/context';
+import { requireStaff, type Ctx } from '@/lib/auth/context';
+import { rateLimit } from '@/lib/auth/rate-limit';
 import { createInviteToken } from '@/lib/auth/service';
 import { fireTrigger } from '@/lib/automation/engine';
 import { consentDoc, type ConsentKind } from '@/lib/compliance/disclosures';
@@ -17,13 +18,19 @@ import { intakeSummary } from '@/lib/intake';
 import { loadIntake } from '@/lib/intake-load';
 import { encryptPII } from '@/lib/crypto';
 import { getEnv } from '@/lib/env';
+import { greetingName } from '@/lib/lead-emails';
+import { emailIsLive } from '@/lib/lead-outreach';
 import { delivers, sendEmail } from '@/lib/mailer';
+import { APPROVAL_COLS, outreachApproved, type ApprovalRow } from '@/lib/outreach-approval';
 import { deleteObject, putObject } from '@/lib/storage';
 import { readUpload, UploadError } from '@/lib/upload';
 import { sha256Hex } from '@/lib/crypto';
 import { portalLoginPath } from '@/lib/org-brand';
 import { PRODUCT } from '@/lib/product';
 import { dayBucket, hourBucket, queueClientUpdate } from '@/lib/client-updates/service';
+
+/** What staff are told when the email service gave no answer: the email may have gone out, so it is not simply "failed". */
+const UNANSWERED = 'The email service did not answer, so it may or may not have arrived.';
 
 const email = z.string().trim().toLowerCase().email('Enter a valid email address').max(254);
 const optEmail = z.union([email, z.literal('')]).transform((v) => v || undefined);
@@ -44,6 +51,22 @@ const profileShape = {
   assignedTo: zUuid.optional().or(z.literal('')),
   tags: zOpt(200),
 };
+
+/**
+ * Staff email to an address on a client or lead record (the portal invitation, a message, a new client with the
+ * invitation box ticked) leaves through the deployment's one email service, and the address may be one a stranger
+ * typed into the public enquiry form. Until the platform operator has approved the workspace (src/lib/outreach-approval.ts),
+ * those three share a limit of UNAPPROVED_EMAILS_PER_HOUR for the whole workspace; an approved workspace has none.
+ * Counted only while email is connected, since nothing leaves otherwise. Call before anything is created or sent, and
+ * outside a transaction: the counter has a connection of its own.
+ */
+const UNAPPROVED_EMAILS_PER_HOUR = 50;
+async function holdUnapprovedEmail(ctx: Pick<Ctx, 'orgId' | 'tx'>): Promise<void> {
+  if (!emailIsLive()) return;
+  if (outreachApproved(await ctx.tx((db) => db.row<ApprovalRow>(`select ${APPROVAL_COLS} from public.organizations where id = $1`, [ctx.orgId])))) return;
+  const limit = await rateLimit(`staff-email:org:${ctx.orgId}`, UNAPPROVED_EMAILS_PER_HOUR, 3600);
+  if (!limit.allowed) throw new UserError(`This workspace can send ${UNAPPROVED_EMAILS_PER_HOUR} emails an hour until the platform operator has approved it. Try again later.`);
+}
 
 function addressOf(d: { line1?: string; line2?: string; city?: string; state?: string; zip?: string }) {
   return { line1: d.line1 ?? '', line2: d.line2 ?? '', city: d.city ?? '', state: d.state ?? '', zip: d.zip ?? '' };
@@ -81,6 +104,7 @@ export async function createClientAction(_: ActionState, fd: FormData): Promise<
     if (consents.length && !d.signedName) throw new UserError('Enter the name the client signed with to record consents.');
     if (d.invite && !d.email) throw new UserError('An email address is required to invite the client to the portal.');
     if (d.assignedTo && !ctx.can('clients:assign') && d.assignedTo !== ctx.userId) throw new UserError('You can only assign clients to yourself.');
+    if (d.invite && d.email) await holdUnapprovedEmail(ctx);
 
     const ssn = d.ssn?.replace(/\D/g, '') ?? '';
     let inviteLink = '';
@@ -105,16 +129,18 @@ export async function createClientAction(_: ActionState, fd: FormData): Promise<
     });
     revalidatePath('/app/clients');
     if (inviteLink && d.email) {
+      const name = greetingName(d.fullName);
       const sent = await sendEmail({
         to: d.email,
         subject: `${ctx.session.orgName}: your secure client portal`,
-        text: `Hello ${d.fullName.split(' ')[0]},\n\n${ctx.session.orgName} has invited you to your secure client portal, where you can see progress, upload documents and message your specialist.\n\nCreate your account: ${inviteLink}\n\nThis link expires in 7 days.`,
+        text: `Hello${name ? ` ${name}` : ''},\n\n${ctx.session.orgName} has invited you to your secure client portal, where you can see progress, upload documents and message your specialist.\n\nCreate your account: ${inviteLink}\n\nThis link expires in 7 days.`,
       });
       if (!delivers(sent)) {
         return { ok: `Client created, but email delivery is not configured. Share this one-time invitation link with the client: ${inviteLink} — then open the client from the Clients list.` };
       }
       // Not an error state: the client exists, so the form must not invite a second submission.
       if (!sent.ok) {
+        if (sent.unconfirmed) return { ok: `Client created. ${UNANSWERED} Ask the client before sending the invitation again; the link to share is: ${inviteLink} — then open the client from the Clients list.` };
         return { ok: `Client created, but the invitation email could not be sent (${sent.error ?? 'delivery failed'}). Share this one-time invitation link with the client instead: ${inviteLink} — then open the client from the Clients list.` };
       }
     }
@@ -265,10 +291,11 @@ export async function sendMessageAction(_: ActionState, fd: FormData): Promise<A
     if (d.channel === 'email') {
       channel = 'email';
       if (!client.email) throw new UserError('This client has no email address.');
+      await holdUnapprovedEmail(ctx);
       const r = await sendEmail({ to: client.email, subject: d.subject || `Message from ${ctx.session.orgName}`, text: d.body });
       status = !delivers(r) ? 'queued' : r.ok ? 'sent' : 'failed';
       providerRef = r.providerRef ?? null;
-      note = !delivers(r) ? 'Recorded, but email is not connected so nothing was delivered.' : r.ok ? 'Email sent.' : `Email failed: ${r.error}`;
+      note = !delivers(r) ? 'Recorded, but email is not connected so nothing was delivered.' : r.ok ? 'Email sent.' : r.unconfirmed ? `${UNANSWERED} Check with the client before sending it again.` : `Email failed: ${r.error}`;
     } else if (d.channel === 'note_call' || d.channel === 'note_sms') {
       channel = d.channel === 'note_call' ? 'call' : 'sms';
       direction = 'internal';
@@ -424,16 +451,15 @@ export async function invitePortalAction(_: ActionState, fd: FormData): Promise<
   return run(async () => {
     const d = parseForm(z.object({ clientId: zUuid }), fd);
     let link = '';
-    let to = '';
-    let first = '';
+    const c = await ctx.tx((db) => db.row<{ email: string | null; full_name: string; portal_user_id: string | null }>('select email, full_name, portal_user_id from public.clients where id = $1', [d.clientId]));
+    if (!c) throw new UserError('Client not found.');
+    if (c.portal_user_id) throw new UserError('This client already has portal access.');
+    if (!c.email) throw new UserError('Add an email address to the client first.');
+    const to = c.email;
+    const first = greetingName(c.full_name);
+    await holdUnapprovedEmail(ctx);
     await ctx.tx(async (db) => {
-      const c = await db.row<{ email: string | null; full_name: string; portal_user_id: string | null }>('select email, full_name, portal_user_id from public.clients where id = $1', [d.clientId]);
-      if (!c) throw new UserError('Client not found.');
-      if (c.portal_user_id) throw new UserError('This client already has portal access.');
-      if (!c.email) throw new UserError('Add an email address to the client first.');
-      to = c.email;
-      first = c.full_name.split(' ')[0] ?? '';
-      const token = await createInviteToken(db, { orgId: ctx.orgId, email: c.email, role: 'client', clientId: d.clientId, invitedBy: ctx.userId });
+      const token = await createInviteToken(db, { orgId: ctx.orgId, email: to, role: 'client', clientId: d.clientId, invitedBy: ctx.userId });
       link = `${getEnv().APP_URL}/invite/${token}`;
       await logEvent(db, ctx, d.clientId, 'portal_invited', 'Portal invitation created');
     });
@@ -441,10 +467,10 @@ export async function invitePortalAction(_: ActionState, fd: FormData): Promise<
     const sent = await sendEmail({
       to,
       subject: `${ctx.session.orgName}: your secure client portal`,
-      text: `Hello ${first},\n\n${ctx.session.orgName} has set up a secure portal for you. There you can follow each item we work on, upload documents, sign your agreements and message your specialist.\n\nCreate your account (this link expires in 7 days):\n${link}\n\nAfter that, sign in any time at:\n${signIn}\n\nIf you weren't expecting this, you can ignore this email.`,
+      text: `Hello${first ? ` ${first}` : ''},\n\n${ctx.session.orgName} has set up a secure portal for you. There you can follow each item we work on, upload documents, sign your agreements and message your specialist.\n\nCreate your account (this link expires in 7 days):\n${link}\n\nAfter that, sign in any time at:\n${signIn}\n\nIf you weren't expecting this, you can ignore this email.`,
     });
     return !delivers(sent)
       ? { ok: `Email delivery is not configured. Share this one-time link with the client: ${link}` }
-      : sent.ok ? { ok: `Invitation emailed to ${to}.` } : { error: `Could not send the email: ${sent.error}` };
+      : sent.ok ? { ok: `Invitation emailed to ${to}.` } : sent.unconfirmed ? { error: `${UNANSWERED} Ask the client before sending the invitation again.` } : { error: `Could not send the email: ${sent.error}` };
   });
 }

@@ -20,7 +20,7 @@ function Address({ agency }: { agency: Agency }) {
   }
   return (
     <TextArea label="Dispute mailing address" name="recipientAddress" rows={3} required maxLength={400}
-      hint={`There is no verified dispute address on file for ${agency.shortName}, so nothing is filled in. Copy it from the agency’s current instructions or its dispute form.`} />
+      hint={`There is no verified dispute address on file for ${agency.shortName}, so nothing is filled in. Copy it from the agency’s current instructions or its dispute form. Enter the address lines only: the letter prints “${agency.name}” above them.`} />
   );
 }
 

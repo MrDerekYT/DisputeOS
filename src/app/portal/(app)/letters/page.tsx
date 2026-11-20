@@ -14,6 +14,7 @@ export default async function PortalLetters() {
   return (
     <div className="max-w-3xl space-y-6">
       <PortalTitle>{t('letters')}</PortalTitle>
+      {lang === 'es' && rows.length > 0 && <p className="text-sm text-muted">{t('lettersEnglish')}</p>}
       {rows.length === 0 ? <EmptyState title={t('noLetters')} icon={<FileText size={20} />} action={<Link href="/portal/messages" className="btn-primary">{t('messageTeam')}</Link>} /> : (
         <ul className="card divide-y divide-line/70">{rows.map((l) => (
           <li key={l.id} className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3 p-4 sm:px-5">

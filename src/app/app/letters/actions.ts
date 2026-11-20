@@ -9,10 +9,10 @@ import { parseForm, run, UserError, zBool, zDate, zOpt, zText, zUuid } from '@/l
 import { audit } from '@/lib/audit';
 import { requireStaff, type Ctx } from '@/lib/auth/context';
 import { findBlockedClaims } from '@/lib/compliance/claims';
-import { sameProtectedContent } from '@/lib/ai/protected';
-import type { Db } from '@/lib/db';
 import { suggestForLetter } from '@/lib/letters/suggest';
-import { createLetter, currentBody, markSent, saveVersion, setLetterStatus, type LActor } from '@/lib/letters/service';
+import { createLetter, markSent, saveVersion, setLetterStatus, type LActor } from '@/lib/letters/service';
+import { tailorIssue } from '@/lib/letters/tailor';
+import { autoTailorDraft, loadTailorSubject } from '@/lib/letters/tailor-load';
 import { KIND_LABEL } from '@/lib/letters/templates';
 
 const actorOf = (ctx: Ctx): LActor => ({ orgId: ctx.orgId, userId: ctx.userId, role: ctx.role, meta: ctx.meta });
@@ -32,6 +32,8 @@ export async function createLetterAction(_: ActionState, fd: FormData): Promise<
         recipientAddress: d.recipientAddress, includeSsnLast4: d.includeSsn, orgName: ctx.session.orgName,
       });
     });
+    // Only when the agency turned it on: the same AI wording step as the button, saved as a new draft version.
+    await autoTailorDraft(actorOf(ctx), id, ctx.tx);
     redirect(`/app/letters/${id}`);
   });
 }
@@ -73,9 +75,10 @@ export async function restoreVersionAction(fd: FormData) {
   let error = '';
   try {
     await ctx.tx(async (db) => {
-      const v = await db.row<{ body: string }>('select body from public.letter_versions where letter_id = $1 and version = $2', [d.id, d.version]);
+      const v = await db.row<{ body: string; source: string }>('select body, source from public.letter_versions where letter_id = $1 and version = $2', [d.id, d.version]);
       if (!v) throw new UserError('Version not found.');
-      await saveVersion(db, actorOf(ctx), d.id, v.body, 'manual_edit', `Restored version ${d.version}`);
+      // A restored AI-worded version is still AI wording: it keeps that mark until a person approves the new version.
+      await saveVersion(db, actorOf(ctx), d.id, v.body, v.source === 'ai_draft' ? 'ai_draft' : 'manual_edit', `Restored version ${d.version}`);
     });
   } catch (e) {
     if (!(e instanceof UserError)) throw e;
@@ -85,53 +88,44 @@ export async function restoreVersionAction(fd: FormData) {
   if (error) redirect(`/app/letters/${d.id}?error=${refusalCode(error)}`);
 }
 
-/** Names that must never be editable by the model for this letter: the client, the recipient and the creditor. */
-async function protectedTermsFor(db: Db, letterId: string): Promise<string[]> {
-  const r = await db.row<{ client: string; recipient: string | null; creditor: string | null; item: string | null }>(
-    `select c.full_name as client, d.recipient_name as recipient, t.creditor_name as creditor, d.item_label as item
-       from public.letters l join public.clients c on c.id = l.client_id
-       left join public.disputes d on d.id = l.dispute_id left join public.tradelines t on t.id = d.tradeline_id
-      where l.id = $1`, [letterId]);
-  if (!r) return [];
-  return [r.client, ...r.client.split(/\s+/).filter((w) => w.length > 2), r.recipient, r.creditor, r.item].filter((x): x is string => !!x);
-}
-
 /**
  * Step 1 of AI wording help: produce a suggestion and show it next to the current text. NOTHING is saved here.
  * The model only receives the connective wording; every fact-bearing passage is hidden behind a marker and restored
- * server-side (src/lib/ai/protected.ts). A returned suggestion costs AI credits whether or not it is then accepted; it
- * is kept for this version of the letter, so asking again for the same version shows it again without a new charge.
+ * server-side (src/lib/ai/protected.ts, with the letter's own names, reason and enclosures locked by
+ * src/lib/letters/tailor.ts). It is asked to write in the voice kept for this client. A returned suggestion costs AI
+ * credits whether or not it is then accepted; it is kept for this version of the letter, so asking again for the same
+ * version shows it again without a new charge.
  */
 export async function aiSuggestLetterAction(_: ActionState, fd: FormData): Promise<ActionState> {
   const ctx = await requireStaff('letters:write');
   return run(async () => {
     const d = parseForm(z.object({ id: zUuid }), fd);
-    const loaded = await ctx.tx(async (db) => ({ cur: await currentBody(db, d.id), terms: await protectedTermsFor(db, d.id) }));
-    if (!loaded.cur) throw new UserError('Letter not found.');
-    const out = await suggestForLetter({ orgId: ctx.orgId, userId: ctx.userId, letterId: d.id, version: loaded.cur.version, body: loaded.cur.body, protectedTerms: loaded.terms }, ctx.tx);
+    const s = await ctx.tx((db) => loadTailorSubject(db, d.id));
+    if (!s) throw new UserError('Letter not found.');
+    const out = await suggestForLetter({ orgId: ctx.orgId, userId: ctx.userId, letterId: d.id, version: s.version, body: s.body, protectedTerms: s.protectedTerms, seed: s.seed, specificity: s.specificity }, ctx.tx);
     revalidatePath(`/app/letters/${d.id}`); // the balance shown beside the button
     if (!out.ok) return { error: out.message };
     const paid = out.cost > 0 ? `Suggestion ready (${out.cost} AI credits used).` : 'This is the suggestion already paid for on this version; no new charge.';
-    return { ok: `${paid} Compare it with the current text below. Nothing has been saved.`, data: { before: loaded.cur.body, after: out.text, version: String(loaded.cur.version), provider: out.provider } };
+    return { ok: `${paid} Compare it with the current text below. Nothing has been saved.`, data: { before: s.body, after: out.text, version: String(s.version), provider: out.provider } };
   });
 }
 
 /**
  * Step 2: a person accepts the suggestion they just compared. The text is re-checked on the server against the
  * letter as it is NOW (it may not be the version the suggestion was made from, and the browser is not trusted):
- * every protected passage must be unchanged. It is saved as a new draft version, which still needs approval.
+ * every protected passage must be unchanged and the wording must pass the same checks as when it was made. It is
+ * saved as a new draft version, which still needs approval.
  */
 export async function aiAcceptLetterAction(_: ActionState, fd: FormData): Promise<ActionState> {
   const ctx = await requireStaff('letters:write');
   return run(async () => {
     const d = parseForm(z.object({ id: zUuid, version: z.coerce.number().int().min(1), text: z.string().min(20).max(30000), provider: zOpt(80) }), fd);
     const v = await ctx.tx(async (db) => {
-      const cur = await currentBody(db, d.id);
+      const cur = await loadTailorSubject(db, d.id);
       if (!cur) throw new UserError('Letter not found.');
       if (cur.version !== d.version) throw new UserError('The letter changed after this suggestion was made. Ask for a new suggestion.');
-      if (!sameProtectedContent(cur.body, d.text, await protectedTermsFor(db, d.id))) throw new UserError('This suggestion changes a name, amount, date or dispute statement, so it was not saved.');
-      const claims = findBlockedClaims(d.text);
-      if (claims.length) throw new UserError(`This suggestion contains a prohibited claim (${claims[0]!.why}), so it was not saved.`);
+      const issue = tailorIssue(cur.body, d.text, cur);
+      if (issue) throw new UserError(`This suggestion was not saved: ${issue}.`);
       return saveVersion(db, actorOf(ctx), d.id, d.text, 'ai_draft', `AI wording suggestion accepted by staff (${d.provider ?? 'ai'})`);
     });
     revalidatePath(`/app/letters/${d.id}`);
@@ -144,7 +138,7 @@ export async function saveTemplateAction(_: ActionState, fd: FormData): Promise<
   const ctx = await requireStaff('letters:approve');
   return run(async () => {
     const d = parseForm(
-      z.object({ id: zUuid.optional().or(z.literal('')), name: zText(160), kind: z.enum(kinds), language: z.enum(['en', 'es']), body: z.string().trim().min(40, 'Template is too short').max(20000), baseKey: zOpt(80) }),
+      z.object({ id: zUuid.optional().or(z.literal('')), name: zText(160), kind: z.enum(kinds), body: z.string().trim().min(40, 'Template is too short').max(20000), baseKey: zOpt(80), nowEnglish: zBool }),
       fd,
     );
     const claims = findBlockedClaims(d.body);
@@ -152,9 +146,10 @@ export async function saveTemplateAction(_: ActionState, fd: FormData): Promise<
     let id = d.id;
     await ctx.tx(async (db) => {
       if (d.id) {
-        await db.run('update public.letter_templates set name = $2, kind = $3, language = $4, body = $5, version = version + 1 where id = $1', [d.id, d.name, d.kind, d.language, d.body]);
+        // A template saved as Spanish before letters became English only is marked English when the person editing says its text now is.
+        await db.run("update public.letter_templates set name = $2, kind = $3, body = $4, version = version + 1, language = case when $5::boolean then 'en' else language end where id = $1", [d.id, d.name, d.kind, d.body, d.nowEnglish]);
       } else {
-        const r = await db.row<{ id: string }>('insert into public.letter_templates (org_id, base_key, name, kind, language, body, created_by) values ($1,$2,$3,$4,$5,$6,$7) returning id', [ctx.orgId, d.baseKey ?? null, d.name, d.kind, d.language, d.body, ctx.userId]);
+        const r = await db.row<{ id: string }>('insert into public.letter_templates (org_id, base_key, name, kind, language, body, created_by) values ($1,$2,$3,$4,$5,$6,$7) returning id', [ctx.orgId, d.baseKey ?? null, d.name, d.kind, 'en', d.body, ctx.userId]);
         id = r!.id;
       }
       await audit(db, { orgId: ctx.orgId, actorId: ctx.userId, action: d.id ? 'template.updated' : 'template.created', entityType: 'letter_template', entityId: id, ip: ctx.meta.ip });

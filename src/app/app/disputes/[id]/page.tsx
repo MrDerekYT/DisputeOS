@@ -19,7 +19,10 @@ import { intakeStateLabel, intakeSummary } from '@/lib/intake';
 import { loadIntake } from '@/lib/intake-load';
 import { agencyIdentityLines, agencyItemLines, parseAgencyItem, specialtyAgency } from '@/lib/credit/agencies';
 import { MailRequirements } from '@/components/mail-requirements';
+import { recommendLetter } from '@/lib/letters/brief';
+import { loadBrief } from '@/lib/letters/brief-load';
 import { ClockBlock } from './clock-block';
+import { RecommendLetter } from './recommend-letter';
 
 export const metadata: Metadata = { title: 'Dispute' };
 
@@ -33,7 +36,7 @@ interface D {
 
 function Transition({ id, to, label, variant = 'primary', confirm, children }: { id: string; to: DisputeStatus; label: string; variant?: 'primary' | 'secondary' | 'danger'; confirm?: string; children?: React.ReactNode }) {
   return (
-    <ActionForm action={transitionAction} className="inline-flex flex-wrap items-end gap-2">
+    <ActionForm action={transitionAction} className="mr-3 inline-flex flex-wrap items-end gap-2">
       <input type="hidden" name="id" value={id} /><input type="hidden" name="to" value={to} />
       {children}
       {confirm ? <ConfirmButton className={`btn-${variant}`} message={confirm}>{label}</ConfirmButton> : <SubmitButton variant={variant}>{label}</SubmitButton>}
@@ -64,10 +67,12 @@ export default async function DisputePage({ params }: { params: Promise<{ id: st
     const check = ['submitted', 'under_investigation', 'response_received'].includes(d.status) ? await loadRecheck(db, id) : null;
     // Only looked at when a bureau or specialty agency dispute is about to be recorded as sent.
     const idDocs = d.status === 'approved' && (d.target_type === 'bureau' || d.target_type === 'agency') ? intakeSummary(await loadIntake(db, d.client_id)).notAccepted : [];
-    return { d, events, evidence, letters, docs, consents, tasks, children, team, check, idDocs };
+    // The letter that fits this dispute, from what is on file (no AI). Only before it is sent: afterwards the legal clock block says what can follow.
+    const brief = !d.submitted_at && !d.client_confirmed_accurate && !['resolved', 'cancelled'].includes(d.status) && ctx.can('letters:write') ? await loadBrief(db, d.client_id, id) : null;
+    return { d, events, evidence, letters, docs, consents, tasks, children, team, check, idDocs, rec: brief ? recommendLetter(brief) : null };
   });
   if (!data) notFound();
-  const { d, events, evidence, letters, docs, consents, tasks, children, team, check, idDocs } = data;
+  const { d, events, evidence, letters, docs, consents, tasks, children, team, check, idDocs, rec } = data;
   const agency = specialtyAgency(d.agency);
   const item = parseAgencyItem(d.agency_item);
   const cs = consentStatus(consents);
@@ -212,18 +217,25 @@ export default async function DisputePage({ params }: { params: Promise<{ id: st
                     <h3 className="mb-2 text-sm font-semibold">2 · Record the outcome</h3>
                     <ActionForm action={recordResponseAction} className="space-y-3">
                       <input type="hidden" name="id" value={d.id} />
-                      <Select label="Outcome" name="outcome" required defaultValue={d.outcome ?? ''} placeholder="Choose…" options={OUTCOMES.filter((o) => o !== 'frivolous').map((o) => ({ value: o, label: OUTCOME_LABEL[o] }))} />
-                      <Field label="Date response received" name="receivedOn" type="date" />
+                      <Select label="Outcome" name="outcome" required defaultValue={d.outcome ?? ''} placeholder="Choose…" options={OUTCOMES.filter((o) => o !== 'frivolous' && o !== 'no_response').map((o) => ({ value: o, label: OUTCOME_LABEL[o] }))} />
+                      <Field label="Date response received" name="receivedOn" type="date" max={today} required hint="The day the results arrived. Letters that follow state this date." />
                       <Field label="Date the agency completed its reinvestigation" name="completedOn" type="date" defaultValue={d.investigation_completed_on ?? ''} hint="Optional. Only if the response states it." />
                       <TextArea label="Notes" name="notes" rows={2} defaultValue={d.outcome_notes} />
                       <SubmitButton>Record response</SubmitButton>
+                    </ActionForm>
+                    {/* "No response" has no day of arrival to give, so it is recorded on its own, without the date the form above requires. */}
+                    <ActionForm action={recordResponseAction} className="mt-4 flex flex-wrap items-center gap-3 border-t border-line pt-4">
+                      <input type="hidden" name="id" value={d.id} /><input type="hidden" name="outcome" value="no_response" /><input type="hidden" name="notes" value={d.outcome_notes ?? ''} />
+                      <span className="text-[0.8125rem] text-muted">Nothing came back?</span>
+                      <SubmitButton variant="secondary">Record no response</SubmitButton>
                     </ActionForm>
                   </div>
                 </div>
               )}
               {d.status === 'response_received' && <Transition id={d.id} to="resolved" label="Mark resolved" />}
               {d.status === 'on_hold' && <Transition id={d.id} to={d.submitted_at ? 'under_investigation' : 'draft'} label="Resume" />}
-              {d.status === 'resolved' && ['verified', 'unresolved', 'no_response', 'frivolous'].includes(d.outcome ?? '') && !children.length && !d.client_confirmed_accurate && (
+              {/* The next round is started here, once. A next round that was cancelled does not count: it will not proceed. */}
+              {d.status === 'resolved' && ['verified', 'unresolved', 'no_response', 'frivolous'].includes(d.outcome ?? '') && !children.some((c) => c.status !== 'cancelled') && !d.client_confirmed_accurate && (
                 <details className="rounded-xl border border-line-strong/60 p-4">
                   <summary className="cursor-pointer text-sm font-semibold">Start round {d.round + 1}</summary>
                   <ActionForm action={nextRoundAction} className="mt-4 space-y-3">
@@ -316,6 +328,7 @@ export default async function DisputePage({ params }: { params: Promise<{ id: st
           </Section>
 
           <Section plain title="Letters" actions={open && !d.client_confirmed_accurate ? <Link href={`/app/letters/new?clientId=${d.client_id}&disputeId=${d.id}`} className="btn-secondary btn-sm">New</Link> : undefined}>
+            {rec && <RecommendLetter disputeId={d.id} clientId={d.client_id} rec={rec} canDraft={ctx.can('letters:write')} />}
             {letters.length === 0 ? <p className="text-sm text-muted">No letter yet.</p> : (
               <ul className="space-y-2">{letters.map((l) => (
                 <li key={l.id}><Link href={`/app/letters/${l.id}`} className="flex items-center justify-between gap-2 rounded-xl bg-raised p-3 text-sm transition-colors hover:bg-line">

@@ -30,7 +30,11 @@ import { IntakeBlock } from './intake-block';
 import { SpecialtyBlock } from './specialty-block';
 import { ProtectionsBlock } from './protections-block';
 import { AgingOffBlock } from './aging-off-block';
+import { CaseToolsBlock } from './case-tools-block';
+import { BankCollectionsBlock } from './bank-collections-block';
+import { PersonalInfoBlock } from './personal-info-block';
 import { SmsConsentBlock } from './sms-consent-block';
+import { ReferredByBlock } from './referred-by-block';
 import { ChargeBlock } from './charge-block';
 import { loadSpecialty } from '@/lib/credit/specialty-reports';
 import { businessToday } from '@/lib/letters/service';
@@ -279,6 +283,8 @@ async function Overview({ id, ctx, c, first }: { id: string; ctx: Ctx; c: C; fir
 
         <SmsConsentBlock ctx={ctx} clientId={id} phone={c.phone} lang={c.preferred_language} />
 
+        <ReferredByBlock ctx={ctx} clientId={id} />
+
         <Section plain title="Draft an update for the client">
           <p className="text-sm text-muted">Creates a plain-language progress note from the dispute data above. You review and send it.</p>
           <Link href={`/app/clients/${id}?tab=messages&draft=progress`} className="btn-secondary mt-3">Draft update for {first}</Link>
@@ -334,6 +340,9 @@ async function ReportsTab({ id, ctx }: { id: string; ctx: Ctx }) {
           </div>
         )}
         <AgingOffBlock ctx={ctx} clientId={id} />
+        <CaseToolsBlock ctx={ctx} clientId={id} />
+        <BankCollectionsBlock ctx={ctx} clientId={id} />
+        <PersonalInfoBlock ctx={ctx} clientId={id} />
         {specialty && <SpecialtyBlock clientId={id} states={specialty.states} bankingConcern={specialty.bankingConcern} files={specialtyFiles} today={businessToday()} />}
         <ProtectionsBlock ctx={ctx} clientId={id} />
       </div>

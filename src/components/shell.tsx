@@ -27,6 +27,8 @@ export function staffNav(ctx: Ctx, counts: { tasks?: number; inbox?: number } = 
   if (ctx.can('analytics:read')) items.push({ href: '/app/analytics', label: 'Analytics', icon: 'chart', group: tools });
   if (ctx.can('billing:read')) items.push({ href: '/app/billing', label: 'Billing', icon: 'card', group: admin });
   if (ctx.can('team:manage') || ctx.can('analytics:team')) items.push({ href: '/app/team', label: 'Team', icon: 'team', group: admin });
+  // Referral partners (businesses that can send clients) and their email sequence. Agencies only.
+  if (ctx.session.orgMode === 'agency') items.push({ href: '/app/partners', label: 'Partners', icon: 'handshake', group: admin });
   // An agency's public website, hosted by this app (personal workspaces have none).
   if (ctx.can('settings:manage') && ctx.session.orgMode === 'agency') items.push({ href: '/app/website', label: 'Website', icon: 'globe', group: admin });
   // Every staff member has a Settings page (their own password and security); workspace settings on it stay admin-only.

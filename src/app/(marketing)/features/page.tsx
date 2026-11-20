@@ -68,7 +68,7 @@ export default function FeaturesPage() {
         <Points items={[
           ['One item, one reason, its evidence', 'A dispute is tied to a specific item and reason. Several findings can be drafted at once; each stays a draft until someone reviews it.'],
           ['Consent before submission', 'A dispute cannot be submitted until the client’s disclosure, contract and authorization are on file, each with a timestamp.'],
-          ['Letters from editable templates', 'Eleven templates with live merge fields, a preview, PDF export and version history. The main letters are also available in Spanish.'],
+          ['Letters from editable templates', 'A library of letters, one per situation, grouped by who they go to, with live merge fields, a preview, PDF export and version history. Letters are written in English; the client portal is in English and Spanish.'],
           ['Manager approval of the exact text', 'A letter needs a manager’s approval. Editing an approved letter voids the approval and returns it to draft.'],
           ['Another round needs something new', 'A second or later round requires new information, so the same dispute is not simply sent again.'],
           ['A claims guard', 'Guarantees, promised deletions, score promises and “new credit identity” language are rejected in templates, automations and AI output, and flagged in staff-written text.'],

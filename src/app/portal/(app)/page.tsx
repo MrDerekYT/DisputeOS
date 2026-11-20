@@ -16,6 +16,7 @@ import { fill, type PortalKey } from '@/lib/portal-i18n';
 import { cn, daysUntil, fmtDate, relTimeIn } from '@/lib/util';
 import { portalUploadAction } from '../actions';
 import { PortalFileInput } from '../file-input';
+import { CollectorNotices } from './collector-notices';
 
 export const metadata: Metadata = { title: 'Your case' };
 
@@ -168,6 +169,8 @@ export default async function PortalHome() {
             <p className="mt-3"><Link href="/portal/protect" className="link inline-flex items-center gap-1.5 text-sm">{t('pf_link')} <ArrowRight size={14} aria-hidden /></Link></p>
             <p className="mt-4 max-w-2xl text-[0.8125rem] leading-relaxed text-muted">{t('progressNote')}</p>
           </PortalBlock>
+
+          <CollectorNotices ctx={ctx} clientId={client.id} t={t} lang={lang} className="order-4" />
 
           {d.scores.length > 0 && <PortalBlock id="scores" title={t('scoresTitle')} className="order-5"><ScoreHistory rows={d.scores} note={t('scoresNote')} lang={client.preferred_language} /></PortalBlock>}
 

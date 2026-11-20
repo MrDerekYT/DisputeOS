@@ -9,6 +9,7 @@ import { requireStaff } from '@/lib/auth/context';
 import { getEnv } from '@/lib/env';
 import { outreachSettings } from '@/lib/lead-outreach';
 import { saveSiteAction, setSitePublishedAction } from './actions';
+import { DomainSection } from './domain-section';
 
 export const metadata: Metadata = { title: 'Website' };
 const ROWS = Array.from({ length: L.items }, (_, i) => i);
@@ -104,12 +105,13 @@ export default async function WebsitePage({ searchParams }: { searchParams: Prom
             </ActionForm>
           </Section>
 
+          <DomainSection ctx={ctx} />
+
           <Section plain title="Good to know">
             <ul className="space-y-3 text-[0.8125rem] leading-relaxed text-muted">
               <li>Text is plain text. It is checked when you save: promises of results, removals, score increases and “free” offers are not accepted.</li>
               <li>There is no testimonials or star-rating section: endorsements in advertising carry FTC rules of their own.</li>
               <li>The footer always shows the required notices and your business name{address ? <> with this mailing address: <span className="text-ink">{address}</span>.</> : <>. Add your mailing address under <Link href="/app/leads#follow-up" className="link">Leads</Link> and it is shown there too.</>}</li>
-              <li>A custom domain (yourname.com) is not self-service: it has to be connected by the platform operator.</li>
             </ul>
           </Section>
         </aside>

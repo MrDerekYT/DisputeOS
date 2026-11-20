@@ -115,23 +115,35 @@ export async function unpublishSite(db: Db, orgId: string): Promise<void> {
 
 export const sitePath = (slug: string) => `/a/${encodeURIComponent(slug)}`;
 
-export interface PublicSite { brand: OrgBrand; content: SiteContent; /** The agency's mailing address (the lead follow-up setting), or '' when none is saved. */ address: string }
+export interface PublicSite {
+  brand: OrgBrand; content: SiteContent;
+  /** The agency's mailing address (the lead follow-up setting), or '' when none is saved. */ address: string;
+  /** The agency's own verified domain (migration 0023), when it has one: the site's canonical address. */ domain?: string | null;
+}
+
+/** The address search engines and link previews should use: the agency's verified domain, or /a/<slug> on the platform. */
+export const siteHome = (site: Pick<PublicSite, 'brand' | 'domain'>) => (site.domain ? `https://${site.domain}` : abs(sitePath(site.brand.slug)));
 
 /** A published site by its slug. Unpublished sites, personal workspaces and inactive workspaces all read as "no such site". */
 export async function publicSiteBySlug(slug: string | null | undefined): Promise<PublicSite | null> {
   const brand = await orgBrandBySlug(slug);
   if (!brand) return null;
-  const row = await withSystem((db) => db.row<{ settings: Record<string, unknown> | null }>(
-    "select settings from public.organizations where slug = $1 and status = 'active' and mode = 'agency'", [brand.slug]));
+  const row = await withSystem((db) => db.row<{ settings: Record<string, unknown> | null; domain: string | null }>(
+    `select o.settings, (select d.domain from public.agency_domains d where d.org_id = o.id and d.status = 'verified') as domain
+       from public.organizations o where o.slug = $1 and o.status = 'active' and o.mode = 'agency'`, [brand.slug]));
   const content = parseSite(row?.settings);
   if (!content.published) return null;
-  return { brand, content, address: outreachSettings(row?.settings).address };
+  return { brand, content, address: outreachSettings(row?.settings).address, domain: row?.domain ?? null };
 }
 
-/** Slugs of every published site, for the sitemap. */
+/**
+ * Slugs of every published site whose address is on the platform, for the platform's sitemap. A site with its own
+ * verified domain is left out: its canonical address is that domain, which serves its own /sitemap.xml.
+ */
 export async function publishedSiteSlugs(): Promise<string[]> {
   const rows = await withSystem((db) => db.rows<{ slug: string }>(
-    "select slug from public.organizations where status = 'active' and mode = 'agency' and settings->'website'->>'published' = 'true' order by slug limit 5000"));
+    `select o.slug from public.organizations o where o.status = 'active' and o.mode = 'agency' and o.settings->'website'->>'published' = 'true'
+        and not exists (select 1 from public.agency_domains d where d.org_id = o.id and d.status = 'verified') order by o.slug limit 5000`));
   return rows.map((r) => r.slug);
 }
 
@@ -161,7 +173,7 @@ export function siteLd(site: PublicSite, lang: 'en' | 'es' = 'en') {
     '@context': 'https://schema.org',
     '@type': 'ProfessionalService',
     name: brand.name,
-    url: abs(sitePath(brand.slug)) + (lang === 'es' ? '?lang=es' : ''),
+    url: siteHome(site) + (lang === 'es' ? '?lang=es' : ''),
     ...(c.intro ? { description: c.intro } : {}),
     ...(c.phone ? { telephone: c.phone } : {}),
     ...(c.email ? { email: c.email } : {}),

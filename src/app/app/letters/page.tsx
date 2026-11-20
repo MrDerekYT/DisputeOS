@@ -66,11 +66,11 @@ export default async function LettersPage({ searchParams }: { searchParams: Prom
         <div className="space-y-10">
           <section>
             <h2 className="mb-1 text-lg font-semibold">Standard templates</h2>
-            <p className="mb-4 max-w-3xl text-sm text-muted">Starting points that cite the statute behind each request. They are not legal advice and promise no result — have counsel review them for your business and state.</p>
+            <p className="mb-4 max-w-3xl text-sm text-muted">Written in English. Starting points: a letter cites a statute only where its request rests on one, and the letters to a creditor cite none. They are not legal advice and promise no result — have counsel review them for your business and state.</p>
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
               {TEMPLATES.map((t) => (
                 <article key={t.key} className="panel flex flex-col p-5">
-                  <div className="mb-2 text-[0.8125rem] font-medium text-muted">{KIND_LABEL[t.kind]} · {t.language === 'es' ? 'Español' : 'English'}</div>
+                  <div className="mb-2 text-[0.8125rem] font-medium text-muted">{KIND_LABEL[t.kind]}</div>
                   <h3 className="font-semibold leading-snug">{t.name}</h3>
                   <p className="mt-1.5 flex-1 text-sm text-muted">{t.description}</p>
                   <div className="mt-4 flex gap-2">
@@ -86,10 +86,11 @@ export default async function LettersPage({ searchParams }: { searchParams: Prom
             {data.org.length === 0 ? <p className="text-sm text-muted">{canTemplate ? 'Customize a standard template to create your own version.' : 'No custom templates yet. Managers can create them.'}</p> : (
               <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{data.org.map((t) => (
                 <article key={t.id} className="panel p-5">
-                  <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[0.8125rem] font-medium text-muted">{KIND_LABEL[t.kind]} · v{t.version}{!t.active && <Badge tone="warn">Inactive</Badge>}</div>
+                  <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[0.8125rem] font-medium text-muted">{KIND_LABEL[t.kind]} · v{t.version}{!t.active && <Badge tone="warn">Inactive</Badge>}{t.language !== 'en' && <Badge tone="warn">Spanish: not used</Badge>}</div>
                   <h3 className={`font-semibold ${t.active ? '' : 'text-muted'}`}>{t.name}</h3>
+                  {t.language !== 'en' && <p className="mt-1.5 text-sm text-muted">Letters are written in English, so no letter is drafted from this template. {canTemplate ? 'Edit it, put it into English and mark it as English to use it again.' : 'A manager can put it into English.'}</p>}
                   <div className="mt-4 flex gap-2">
-                    {t.active && <Link href={`/app/letters/new?templateKey=org:${t.id}`} className="btn-secondary btn-sm">Use</Link>}
+                    {t.active && t.language === 'en' && <Link href={`/app/letters/new?templateKey=org:${t.id}`} className="btn-secondary btn-sm">Use</Link>}
                     {canTemplate && <Link href={`/app/letters/templates/${t.id}`} className="btn-ghost btn-sm">Edit</Link>}
                     {canTemplate && <form action={toggleTemplateAction}><input type="hidden" name="id" value={t.id} /><button className="btn-ghost btn-sm" type="submit">{t.active ? 'Deactivate' : 'Activate'}</button></form>}
                   </div>

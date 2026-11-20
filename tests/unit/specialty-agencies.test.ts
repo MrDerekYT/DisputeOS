@@ -106,30 +106,31 @@ const ITEM = { name: 'First Coast Bank', reference: 'xxxx4321', date: '03/14/202
 const REASON = 'The disclosure lists an unpaid balance of $312.40. My bank statement dated 04/02/2024 shows the account was paid in full and closed by me.';
 /** What a person types over the marked lines before approving. Synthetic values. */
 const filled = (body: string) => body.replace('[DATE OF BIRTH NEEDED]', '01/02/1990').replace('[SOCIAL SECURITY NUMBER NEEDED]', '000-00-6789').replace('[CONSUMER ID NEEDED]', 'EWS-000123');
-const letter = (agency: string, lang: 'en' | 'es', over: { recipient_address?: string | null } = {}) => {
+const letter = (agency: string, _lang: 'en', over: { recipient_address?: string | null } = {}) => {
   const a = specialtyAgency(agency)!;
-  const tpl = templateByKey(specialtyTemplateKey(a.kind, lang))!;
+  const tpl = templateByKey(specialtyTemplateKey(a.kind))!;
   const values = buildValues({
-    client, language: lang, now: new Date('2026-11-19T12:00:00Z'), enclosures: ['Bank statement dated 04/02/2024'],
+    client, now: new Date('2026-11-19T12:00:00Z'), enclosures: ['Bank statement dated 04/02/2024'],
     dispute: { item_label: `${ITEM.name} · ${ITEM.reference} (${a.shortName})`, bureau: null, recipient_name: a.name, reason: REASON, fields: [], round: 1, agency: a.key, agency_item: ITEM, recipient_address: over.recipient_address ?? null },
   });
   return mergeTemplate(tpl.body, values);
 };
 
 describe('specialty dispute letters', () => {
-  it('has one template per kind of agency in English and Spanish, kept out of the template pickers', () => {
-    expect(SPECIALTY_TEMPLATES).toHaveLength(AGENCY_KINDS.length * 2);
-    for (const k of AGENCY_KINDS) for (const l of LANGS) {
-      const t = templateByKey(specialtyTemplateKey(k, l))!;
-      expect(t).toMatchObject({ kind: 'specialty_dispute', language: l, recipient: 'agency' });
+  it('has one template per kind of agency, in English only, kept out of the general template list', () => {
+    expect(SPECIALTY_TEMPLATES).toHaveLength(AGENCY_KINDS.length);
+    for (const k of AGENCY_KINDS) {
+      const t = templateByKey(specialtyTemplateKey(k))!;
+      expect(t).toMatchObject({ kind: 'specialty_dispute', language: 'en', recipient: 'agency' });
+      expect(templateByKey(`specialty_${k}_es`)).toBeUndefined();
     }
     expect(TEMPLATES.some((t) => t.kind === 'specialty_dispute')).toBe(false);
     expect(kindForWorkflow('specialty')).toBe('specialty_dispute');
     expect(CATEGORIES[SPECIALTY_CATEGORY]).toMatchObject({ workflow: 'specialty', target: 'agency' });
   });
 
-  it('passes the claims guard and the approval check for every agency, in both languages', () => {
-    for (const a of SPECIALTY_AGENCIES) for (const l of LANGS) {
+  it('passes the claims guard and the approval check for every agency', () => {
+    for (const a of SPECIALTY_AGENCIES) for (const l of ['en'] as const) {
       const body = letter(a.key, l, { recipient_address: a.disputeAddress ? null : 'PO Box 1\nAnytown, ST 00000' });
       expect(findBlockedClaims(body), `${a.key} ${l}`).toEqual([]);
       expect(findGuideClaims(body), `${a.key} ${l}`).toEqual([]);
@@ -141,7 +142,7 @@ describe('specialty dispute letters', () => {
     const chex = letter('chexsystems', 'en');
     expect(chex).toContain('Tampa, FL 33602\nDate of birth: [DATE OF BIRTH NEEDED]\nSocial Security number: [SOCIAL SECURITY NUMBER NEEDED]\n\nChex Systems, Inc.');
     expect(unresolvedPlaceholders(letter('early_warning', 'en'))).toEqual(['[CONSUMER ID NEEDED]']);
-    expect(letter('nctue', 'es')).toContain('Fecha de nacimiento: [DATE OF BIRTH NEEDED]\nNúmero de Seguro Social: [SOCIAL SECURITY NUMBER NEEDED]');
+    expect(letter('nctue', 'en')).toContain('Date of birth: [DATE OF BIRTH NEEDED]\nSocial Security number: [SOCIAL SECURITY NUMBER NEEDED]');
     for (const t of SPECIALTY_TEMPLATES) expect(findGuideClaims(t.body), t.key).toEqual([]);
   });
 
@@ -154,8 +155,8 @@ describe('specialty dispute letters', () => {
     }
     expect(letter('chexsystems', 'en')).toMatch(/Fair Credit Reporting Act gives me the right to dispute/);
     expect(letter('chexsystems', 'en')).toMatch(/reasonable reinvestigation[\s\S]*results in writing/);
-    expect(letter('lexisnexis', 'es')).toMatch(/Ley de Informes de Crédito Justos \(FCRA\) me da el derecho de disputar/);
-    expect(letter('lexisnexis', 'es')).toMatch(/reinvestigación razonable[\s\S]*resultados por escrito/);
+    expect(letter('lexisnexis', 'en')).toMatch(/Fair Credit Reporting Act gives me the right to dispute/);
+    expect(letter('lexisnexis', 'en')).not.toMatch(/Ley de Informes|reinvestigación|A quien corresponda|Atentamente/);
   });
 
   it('states only the facts that were entered, and lists the enclosures', () => {
@@ -164,11 +165,11 @@ describe('specialty dispute letters', () => {
     expect(en).toContain('Enclosures:');
     expect(en).toContain('the checking and savings account information in my consumer file');
     expect(letter('lexisnexis', 'en')).toContain('the public record and background information in my consumer file');
-    expect(letter('chexsystems', 'es')).toContain('Anexos:');
+    expect(letter('chexsystems', 'en')).not.toContain('Anexos');
     // A field left blank is left out, not filled with a placeholder or a guess.
     const a = specialtyAgency('innovis')!;
-    const sparse = mergeTemplate(templateByKey(specialtyTemplateKey(a.kind, 'en'))!.body, buildValues({
-      client, language: 'en', dispute: { item_label: 'First Coast Bank (Innovis)', bureau: null, recipient_name: a.name, reason: REASON, fields: [], round: 1, agency: a.key, agency_item: { name: 'First Coast Bank' }, recipient_address: 'PO Box 1\nAnytown, ST 00000' },
+    const sparse = mergeTemplate(templateByKey(specialtyTemplateKey(a.kind))!.body, buildValues({
+      client, dispute: { item_label: 'First Coast Bank (Innovis)', bureau: null, recipient_name: a.name, reason: REASON, fields: [], round: 1, agency: a.key, agency_item: { name: 'First Coast Bank' }, recipient_address: 'PO Box 1\nAnytown, ST 00000' },
     }));
     expect(sparse).not.toMatch(/Reference or masked number|Date shown|Amount shown|Consumer ID|Date of birth|Social Security/);
     expect(unresolvedPlaceholders(sparse)).toEqual([]);

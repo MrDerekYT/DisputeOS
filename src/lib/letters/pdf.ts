@@ -1,7 +1,7 @@
 import { PRODUCT } from '../product';
 /**
  * Minimal, dependency-free PDF writer for plain-text letters (US Letter, Helvetica, automatic wrapping and pagination).
- * Intentionally simple: letters are text. Text uses WinAnsi so accented Latin characters (Spanish letters) render correctly.
+ * Intentionally simple: letters are text. Text uses WinAnsi so accented Latin characters (a client's name or address) render correctly.
  */
 const PAGE_W = 612;
 const PAGE_H = 792;

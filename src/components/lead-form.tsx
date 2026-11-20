@@ -1,14 +1,19 @@
 import type { ReactNode } from 'react';
 import { Check, Field, Select, SubmitButton, TextArea } from '@/components/forms';
 import { LEAD_GOALS } from '@/lib/leads';
+import { leadSmsConsentText } from '@/lib/lead-texts';
 import { fill, tr, type Lang, type PortalKey } from '@/lib/portal-i18n';
 
 /**
  * The fields of an agency's public enquiry form: the same ones on /start/<slug> and on the agency's website. Put it
  * inside an ActionForm whose action calls submitLead. It collects contact details only, and includes the honeypot
  * and the consent box that submitLead requires.
+ *
+ * `offerTexts` adds a second box, for text messages. It is separate from the "you may contact me" box, never ticked
+ * for the person, optional, and worded on its own (the wording is the consent that gets stored). It is only shown
+ * when the agency has switched text follow-up on and a text service is connected; without a tick no text is sent.
  */
-export function LeadFields({ slug, orgName, lang, src, children }: { slug: string; orgName: string; lang: Lang; src?: string | null; children?: ReactNode }) {
+export function LeadFields({ slug, orgName, lang, src, offerTexts, children }: { slug: string; orgName: string; lang: Lang; src?: string | null; offerTexts?: boolean; children?: ReactNode }) {
   const t = tr(lang);
   return (
     <>
@@ -24,6 +29,7 @@ export function LeadFields({ slug, orgName, lang, src, children }: { slug: strin
       <Select label={t('lead_lang')} name="language" defaultValue={lang} options={[{ value: 'en', label: 'English' }, { value: 'es', label: 'Español' }]} />
       <TextArea label={t('lead_message')} name="message" rows={3} maxLength={1000} hint={t('lead_messageHint')} />
       <Check name="consent">{fill(t('lead_consent'), { org: orgName })}</Check>
+      {offerTexts && <Check name="smsConsent">{leadSmsConsentText(lang, orgName)}</Check>}
       {children}
       <SubmitButton className="btn-lg w-full" pendingText={t('sending')}>{t('send')}</SubmitButton>
     </>

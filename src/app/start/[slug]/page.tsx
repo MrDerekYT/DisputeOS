@@ -8,15 +8,17 @@ import { ActionForm } from '@/components/forms';
 import { LeadFields } from '@/components/lead-form';
 import { orgBrandBySlug } from '@/lib/org-brand';
 import { leadSourceTag } from '@/lib/lead-emails';
+import { leadTextsOfferedBySlug } from '@/lib/lead-outreach';
 import { publicSiteBySlug, sitePath } from '@/lib/agency-site';
 import { siteCopy } from '@/lib/agency-site-copy';
 import { leadFormPath } from '@/lib/leads';
 import { fill, parseLang, qs, tr } from '@/lib/portal-i18n';
+import { resolveSlugParam } from '@/lib/request-host';
 import { submitLeadAction } from './actions';
 
 /** The agency's own name in the title and description, so a link shared in a message or on social media previews as theirs. */
 export async function generateMetadata({ params, searchParams }: { params: Promise<{ slug: string }>; searchParams: Promise<{ lang?: string }> }): Promise<Metadata> {
-  const brand = await orgBrandBySlug((await params).slug);
+  const brand = await orgBrandBySlug((await resolveSlugParam((await params).slug)).slug);
   if (!brand) return { title: 'Get started', robots: { index: false } };
   const es = parseLang((await searchParams).lang) === 'es';
   const title = es ? `Empiece con ${brand.name}` : `Get started with ${brand.name}`;
@@ -28,7 +30,8 @@ export async function generateMetadata({ params, searchParams }: { params: Promi
 
 /** An agency's public enquiry form (English, or Spanish with `?lang=es`). It collects contact details only — never SSNs, dates of birth or account numbers. */
 export default async function LeadFormPage({ params, searchParams }: { params: Promise<{ slug: string }>; searchParams: Promise<{ sent?: string; lang?: string; src?: string }> }) {
-  const { slug } = await params;
+  // On an agency's own domain the middleware rewrites "/start" here with the internal slug "_host".
+  const { slug, onDomain } = await resolveSlugParam((await params).slug);
   const sp = await searchParams;
   const brand = await orgBrandBySlug(slug);
   if (!brand) notFound();
@@ -42,9 +45,9 @@ export default async function LeadFormPage({ params, searchParams }: { params: P
   const hasSite = (await publicSiteBySlug(brand.slug)) !== null;
   const footer = (
     <>
-      {hasSite && <><Link href={`${sitePath(brand.slug)}${qs({ lang: lang === 'es' && 'es' })}`} className={link}>{fill(siteCopy(lang)('backToSite'), { org: brand.name })}</Link> · </>}
-      {t('lead_already')} <Link href={`/portal/login${qs({ org: brand.slug, lang: lang === 'es' && 'es' })}`} className={link}>{t('lead_signIn')}</Link>
-      {!sp.sent && <> · <Link href={`${leadFormPath(brand.slug)}${qs({ lang: other === 'es' && 'es', src })}`} lang={other} hrefLang={other} className={link}>{other === 'es' ? 'Español' : 'English'}</Link></>}
+      {hasSite && <><Link href={`${onDomain ? '/' : sitePath(brand.slug)}${qs({ lang: lang === 'es' && 'es' })}`} className={link}>{fill(siteCopy(lang)('backToSite'), { org: brand.name })}</Link> · </>}
+      {t('lead_already')} <Link href={`/portal/login${qs({ org: !onDomain && brand.slug, lang: lang === 'es' && 'es' })}`} className={link}>{t('lead_signIn')}</Link>
+      {!sp.sent && <> · <Link href={`${onDomain ? '/start' : leadFormPath(brand.slug)}${qs({ lang: other === 'es' && 'es', src })}`} lang={other} hrefLang={other} className={link}>{other === 'es' ? 'Español' : 'English'}</Link></>}
     </>
   );
   if (sp.sent) {
@@ -56,8 +59,8 @@ export default async function LeadFormPage({ params, searchParams }: { params: P
   }
   return (
     <AuthLayout portal brand={brand} lang={lang} title={t('lead_title')} subtitle={fill(t('lead_sub'), { org: brand.name })} footer={footer}>
-      <ActionForm action={submitLeadAction} className="space-y-4">
-        <LeadFields slug={brand.slug} orgName={brand.name} lang={lang} src={src} />
+      <ActionForm action={submitLeadAction} className="space-y-4" onSuccessHref={onDomain ? `/start?sent=1${lang === 'es' ? '&lang=es' : ''}` : undefined}>
+        <LeadFields slug={brand.slug} orgName={brand.name} lang={lang} src={src} offerTexts={await leadTextsOfferedBySlug(brand.slug)} />
       </ActionForm>
       <p className="mt-6 border-t border-line pt-4 text-[0.8125rem] leading-relaxed text-muted">{t('lead_legal')}</p>
     </AuthLayout>

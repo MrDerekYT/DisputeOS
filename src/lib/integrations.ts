@@ -2,6 +2,7 @@ import { getEnv } from './env';
 import { providerStatus } from './ai/provider';
 import { PRODUCT } from './product';
 import { smsStatus } from './sms';
+import { vercelMissing } from './vercel-domains';
 
 /**
  * What is actually connected, derived from configuration — not from marketing. `verified` means the integration has
@@ -25,6 +26,7 @@ export function integrationStatus(): Integration[] {
   const emailLive = env.EMAIL_DRIVER === 'resend' && !!env.RESEND_API_KEY;
   const sandbox = env.APP_ENV === 'development' || env.APP_ENV === 'test';
   const sms = smsStatus();
+  const domainsAuto = vercelMissing().length === 0;
   return [
     { key: 'db', name: 'PostgreSQL database', status: 'active', verified: true, detail: 'Row-level security enforces tenant isolation. Verified by the automated test suite against PostgreSQL 16.' },
     { key: 'storage', name: 'Document storage', status: 'active', verified: true, detail: env.STORAGE_DRIVER === 'db'
@@ -70,10 +72,13 @@ export function integrationStatus(): Integration[] {
       detail: 'No external e-signature provider (DocuSign, Dropbox Sign) is connected.',
       manualPath: 'Clients sign in the portal by typing their full legal name; the app stores the name, time, IP address and a hash of the exact text shown. Staff can also record a consent signed on paper.',
       needs: 'Only if your attorney requires a third-party signing service: an account with that provider and the integration' },
-    { key: 'custom_domain', name: 'Custom domains for agency websites', status: 'manual', verified: false,
-      detail: 'Each agency website is hosted at an address on this app (/a/<workspace>). Connecting an agency’s own domain is not automated and cannot be done from the app.',
-      manualPath: 'Share the address shown on the Website page. For an agency’s own domain, the platform operator adds the domain at the hosting provider and routes it to that agency’s site address.',
-      needs: 'Domain verification, certificates and per-domain routing built into the app (for example through the hosting provider’s domains API)' },
+    { key: 'custom_domain', name: 'Custom domains for agency websites', verified: false,
+      status: domainsAuto ? 'active' : 'manual',
+      detail: domainsAuto
+        ? 'An agency connects a domain it owns on its Website page: the app adds it to the hosting project (Vercel), shows the DNS records to create and marks it connected only when the provider reports it verified and correctly configured and the workspace’s own TXT record is in the domain’s DNS. Implemented to the documented API; not yet exercised against the live service from this codebase.'
+        : `Not connected to the hosting provider (${vercelMissing().join(', ')} not set). An agency can save its domain on its Website page, and it stays “not connected yet” until the platform operator adds it by hand. Every agency website keeps working at its address on this app (/a/<workspace>).`,
+      ...(domainsAuto ? {} : { manualPath: 'The platform operator adds the domain to the hosting project, gives the agency the DNS records (the TXT record shown on its Website page among them), then confirms it with: npm run domain:verify -- <domain> (needs PII_ENCRYPTION_KEY in its environment). Steps: docs/DEPLOY-VERCEL.md' }),
+      needs: 'VERCEL_API_TOKEN and VERCEL_PROJECT_ID (plus VERCEL_TEAM_ID when the project belongs to a team). Buying a domain is not built in: the agency buys it from any registrar' },
     { key: 'crm', name: 'External CRM sync', status: 'manual', verified: false, detail: 'No CRM sync is connected.', manualPath: 'Export a client’s full record as JSON from their profile, or read clients and disputes through the API.', needs: 'A specific CRM to sync with, and the integration' },
   ];
 }

@@ -16,7 +16,7 @@ export default async function EditClientPage({ params }: { params: Promise<{ id:
   const ctx = await requireStaff('clients:write');
   const { client, team } = await ctx.tx(async (db) => ({
     client: await db.row<ClientDefaults & { id: string }>(
-      'select id, full_name, email, phone, preferred_language, status, stage, source, goals, assigned_to, tags, address, ssn_last4 from public.clients where id = $1', [id]),
+      'select id, full_name, email, phone, preferred_language, status, stage, source, goals, assigned_to, tags, address, ssn_last4, (dob_encrypted is not null) as has_dob from public.clients where id = $1', [id]),
     team: await staffMembers(db),
   }));
   if (!client) notFound();

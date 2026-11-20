@@ -3,7 +3,7 @@ import { agencyByKey } from '@/lib/credit/agencies';
 import { loadSpecialty, setBankingConcern, setSpecialtyReport } from '@/lib/credit/specialty-reports';
 import { addEvidence, createDispute, createSpecialtyDispute, recordResponse, startNextRound, transitionDispute, type DActor } from '@/lib/disputes/service';
 import { confirmIdentityDocs } from '@/lib/intake-load';
-import { createLetter, currentBody, saveVersion, setLetterStatus } from '@/lib/letters/service';
+import { businessToday, createLetter, currentBody, saveVersion, setLetterStatus } from '@/lib/letters/service';
 import { buildPlan, loadPlanInput } from '@/lib/plan';
 import { addClient, addMember, addPortalClient, asUser, closePool, makeOrg, withSystem, type TestOrg } from './helpers';
 import { recordConsentRows } from './consents';
@@ -85,11 +85,19 @@ describe('specialty dispute lifecycle (ChexSystems)', () => {
     for (const fact of ['First Coast Bank', 'xxxx4321', '03/14/2024', '$312.40', REASON, 'Bank statement dated 04/02/2024', 'Jordan Rivera', '123 Main St']) expect(body).toContain(fact);
     expect(body).toMatch(/Fair Credit Reporting Act gives me the right to dispute/);
     expect(body).not.toMatch(/delete|remove|§/i);
-    // ChexSystems says the letter must state these. The app never fills them in: they are marked for a person.
-    expect(body.match(/\[[A-Z ]+NEEDED\]/g)).toEqual(['[DATE OF BIRTH NEEDED]', '[SOCIAL SECURITY NUMBER NEEDED]']);
-    // Choosing the picker's default bureau template for a specialty dispute still gives the specialty letter, in that language.
-    const es = await asUser(specialist.userId, (db) => createLetter(db, specialist, { clientId, disputeId, templateKey: 'bureau_dispute_es' }));
-    expect(await withSystem((db) => db.row('select template_key, language from public.letters where id = $1', [es]))).toEqual({ template_key: 'specialty_bank_account_es', language: 'es' });
+    // ChexSystems says the letter must state these. The date of birth is on the client's record, so it is stated. The
+    // Social Security number is never filled in by the app: it is marked for a person.
+    expect(body).toContain('Date of birth: March 3, 1985\nSocial Security number: [SOCIAL SECURITY NUMBER NEEDED]\n');
+    expect(body.match(/\[[A-Z ]+NEEDED\]/g)).toEqual(['[SOCIAL SECURITY NUMBER NEEDED]']);
+    // With no date of birth on the record, that line is marked too: nothing is guessed.
+    const bare = await addClient(A.orgId, 'Casey Doe', { identity: false });
+    const bareDispute = await asUser(specialist.userId, (db) => createSpecialtyDispute(db, specialist, { clientId: bare, agency: 'chexsystems', item: ITEM, reason: REASON }));
+    const bareLetter = await asUser(specialist.userId, (db) => createLetter(db, specialist, { clientId: bare, disputeId: bareDispute }));
+    expect((await withSystem((db) => currentBody(db, bareLetter)))!.body.match(/\[[A-Z ]+NEEDED\]/g)).toEqual(expect.arrayContaining(['[DATE OF BIRTH NEEDED]', '[SOCIAL SECURITY NUMBER NEEDED]']));
+    // Choosing the picker's general bureau letter for a specialty dispute still gives the specialty letter. The Spanish templates are gone.
+    await expect(asUser(specialist.userId, (db) => createLetter(db, specialist, { clientId, disputeId, templateKey: 'bureau_dispute_es' }))).rejects.toThrow(/Template not found/);
+    const es = await asUser(specialist.userId, (db) => createLetter(db, specialist, { clientId, disputeId, templateKey: 'bureau_dispute_en' }));
+    expect(await withSystem((db) => db.row('select template_key, language from public.letters where id = $1', [es]))).toEqual({ template_key: 'specialty_bank_account_en', language: 'en' });
     await asUser(specialist.userId, (db) => setLetterStatus(db, specialist, es, 'void'));
   });
 
@@ -99,9 +107,9 @@ describe('specialty dispute lifecycle (ChexSystems)', () => {
     await asUser(manager.userId, (db) => transitionDispute(db, manager, disputeId, 'approved'));
     await expect(asUser(manager.userId, (db) => transitionDispute(db, manager, disputeId, 'submitted'))).rejects.toThrow(/no approved letter/);
     // The lines ChexSystems requires must be completed by a person before the letter can move on. Synthetic values.
-    await expect(asUser(specialist.userId, (db) => setLetterStatus(db, specialist, letterId, 'pending_approval'))).rejects.toThrow(/DATE OF BIRTH NEEDED.*SOCIAL SECURITY NUMBER NEEDED/);
+    await expect(asUser(specialist.userId, (db) => setLetterStatus(db, specialist, letterId, 'pending_approval'))).rejects.toThrow(/Fill in or remove: \[SOCIAL SECURITY NUMBER NEEDED\]/);
     const draft = (await withSystem((db) => currentBody(db, letterId)))!.body;
-    await asUser(specialist.userId, (db) => saveVersion(db, specialist, letterId, draft.replace('[DATE OF BIRTH NEEDED]', '01/02/1990').replace('[SOCIAL SECURITY NUMBER NEEDED]', '000-00-6789')));
+    await asUser(specialist.userId, (db) => saveVersion(db, specialist, letterId, draft.replace('[SOCIAL SECURITY NUMBER NEEDED]', '000-00-6789')));
     await asUser(specialist.userId, (db) => setLetterStatus(db, specialist, letterId, 'pending_approval'));
     await asUser(manager.userId, (db) => setLetterStatus(db, manager, letterId, 'approved'));
     await expect(asUser(manager.userId, (db) => transitionDispute(db, manager, disputeId, 'submitted'))).rejects.toThrow(/Required consents are missing/);
@@ -134,7 +142,8 @@ describe('specialty dispute lifecycle (ChexSystems)', () => {
   });
 
   it('records the response and outcome, and a next round stays a specialty dispute', async () => {
-    await asUser(specialist.userId, (db) => recordResponse(db, specialist, disputeId, { outcome: 'verified', notes: 'Reply says the bank confirmed the record.' }));
+    // The dispute was recorded as sent today, so the reply can only have arrived today. The day is required.
+    await asUser(specialist.userId, (db) => recordResponse(db, specialist, disputeId, { outcome: 'verified', notes: 'Reply says the bank confirmed the record.', receivedOn: businessToday() }));
     await asUser(specialist.userId, (db) => transitionDispute(db, specialist, disputeId, 'resolved'));
     expect(await withSystem((db) => db.row('select status, outcome from public.disputes where id = $1', [disputeId]))).toEqual({ status: 'resolved', outcome: 'verified' });
     const events = await withSystem((db) => db.rows<{ to_status: string | null }>("select to_status from public.dispute_events where dispute_id = $1 and kind = 'status_changed' order by created_at", [disputeId]));

@@ -54,6 +54,18 @@ describe('public enquiry form', () => {
     expect(results.slice(0, 5)).toEqual([true, true, true, true, true]);
     expect(results.slice(5)).toEqual([false, false]);
   });
+
+  it('one address posting over and over does not close the form for everyone else', async () => {
+    const other = await makeOrg('GrowthBusy');
+    const s = (await withSystem((db) => db.row<{ slug: string }>('select slug from public.organizations where id = $1', [other.orgId])))!.slug;
+    const noisy = testIp();
+    const answers = [];
+    // More posts than the agency's whole hourly allowance (60), all from one address.
+    for (let i = 0; i < 70; i++) answers.push((await submitLead(s, lead(), { ip: noisy, defer: () => undefined })).ok);
+    expect(answers.filter(Boolean)).toHaveLength(5);
+    // The refused ones were not counted against the agency: the next visitor gets through.
+    expect(await submitLead(s, lead(), { ip: testIp(), defer: () => undefined })).toEqual({ ok: true });
+  });
 });
 
 describe('drafting several disputes from findings', () => {

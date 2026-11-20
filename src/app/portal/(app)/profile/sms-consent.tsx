@@ -2,22 +2,42 @@ import { ActionForm, Check, SubmitButton } from '@/components/forms';
 import { Badge, Section } from '@/components/ui';
 import type { Ctx } from '@/lib/auth/context';
 import { smsConsentHistory, smsConsentText } from '@/lib/client-updates/service';
+import { APPROVAL_COLS, outreachApproved, type ApprovalRow } from '@/lib/outreach-approval';
 import { fill, type Lang, type PortalKey } from '@/lib/portal-i18n';
-import { smsUsable, toE164 } from '@/lib/sms';
+import { smsUsable, toUsE164 } from '@/lib/sms';
 import { fmtDate } from '@/lib/util';
 import { portalSmsOptInAction, portalSmsOptOutAction } from '../../sms-actions';
 
 /**
- * Text message updates: the client agrees or withdraws here. Shown when texts can be sent at all, or when there is a
- * consent to withdraw. The consent wording on screen is exactly what is stored with the record.
+ * Text message updates: the client agrees or withdraws here. Shown when a text could really follow, or when there is a
+ * consent to withdraw. A text can follow only when a text service is connected and the platform operator has approved
+ * the workspace (src/lib/outreach-approval.ts), and only to a US number (src/lib/sms.ts), so the opt-in is offered
+ * under those conditions only. The consent wording on screen is exactly what is stored with the record.
  */
 export async function SmsConsentCard({ ctx, clientId, phone, lang, t }: { ctx: Ctx; clientId: string; phone: string | null; lang: Lang; t: (k: PortalKey) => string }) {
-  const history = await ctx.tx((db) => smsConsentHistory(db, clientId));
+  const { history, org } = await ctx.tx(async (db) => ({
+    history: await smsConsentHistory(db, clientId),
+    org: await db.row<ApprovalRow>(`select ${APPROVAL_COLS} from public.organizations where id = $1`, [ctx.orgId]),
+  }));
   const active = history.find((h) => !h.revoked_at);
-  if (!active && !smsUsable()) return null;
-  const e164 = toE164(phone);
+  // Whether a text can leave at all. When it cannot, a consent on file is shown as paused, never as "On".
+  const canSend = smsUsable() && outreachApproved(org);
+  if (!active && !canSend) return null;
+  // A consent on file for a number that is not a US one sends nothing, so it reads as off here.
+  const e164 = toUsE164(phone);
   const changed = !!active && e164 !== active.phone;
   const last = history[0];
+  if (!canSend) {
+    // Only reached with a consent on file: nothing to offer, only the withdrawal.
+    return (
+      <Section title={t('sms_title')} id="sms">
+        <div className="flex flex-wrap items-center gap-2"><Badge tone="neutral">{t('sms_paused')}</Badge></div>
+        <p className="mt-2 text-sm text-muted">{t('sms_intro')}</p>
+        <p className="mt-3 text-sm">{t('sms_pausedNote')}</p>
+        <ActionForm action={portalSmsOptOutAction} className="mt-3"><SubmitButton variant="secondary">{t('sms_turnOff')}</SubmitButton></ActionForm>
+      </Section>
+    );
+  }
   return (
     <Section title={t('sms_title')} id="sms">
       <div className="flex flex-wrap items-center gap-2"><Badge tone={active && !changed ? 'ok' : 'neutral'}>{active && !changed ? t('sms_on') : t('sms_off')}</Badge></div>

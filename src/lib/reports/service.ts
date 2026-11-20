@@ -7,6 +7,8 @@ import { BUREAUS, type Bureau } from '../util';
 import { analyze, normCreditor, type AnalysisIdentity, type AnalysisInquiry, type AnalysisPublicRecord, type AnalysisTradeline } from './analysis';
 import type { ParsedReport } from './types';
 import { watchReinsertions } from '../disputes/reinsertion';
+import { syncCaseFindings } from '../credit/case-tools';
+import { businessToday } from '../letters/service';
 
 export interface Actor { orgId: string; userId: string; meta?: { ip?: string | null } }
 
@@ -106,6 +108,8 @@ export async function regenerateFindings(db: Db, actor: Actor, clientId: string,
   }
   // Reinsertion watch: the newest approved report of each bureau against this client's recorded deletions (idempotent).
   for (const r of input.reports) created += await watchReinsertions(db, actor, r.id);
+  // Medical collection screen and bankruptcy discharge audit: their own findings, retired by their own pass (idempotent).
+  created += await syncCaseFindings(db, actor, clientId, businessToday(now));
   return { created, removed };
 }
 

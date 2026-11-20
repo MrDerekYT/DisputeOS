@@ -78,3 +78,11 @@ with the certificate verified (`DATABASE_CA_CERT` for a private CA; `?sslmode=di
 Set `PII_ENCRYPTION_KEY` to the new key and `PII_ENCRYPTION_KEY_ID` to a new id; move the old values to
 `PII_ENCRYPTION_KEY_PREVIOUS` / `_PREVIOUS_ID`. New writes use the new key; old rows and files still decrypt.
 Remove the previous key only after re-encrypting (a re-encryption job is on the roadmap, not yet built).
+
+The same key signs three things that are not encrypted data. They keep working during a rotation as long as the
+previous key is set:
+
+- the opt-out links in emails already sent to leads and partners (a link signed with the previous key still works);
+- the TXT record value an agency is shown for a custom domain that is **not connected yet**: the value changes with the
+  key, and a record made with the previous key still counts while `PII_ENCRYPTION_KEY_PREVIOUS` is set. Domains that
+  are already connected are not affected.

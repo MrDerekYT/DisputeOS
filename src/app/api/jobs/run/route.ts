@@ -13,6 +13,11 @@ export const maxDuration = 60;
  * GET exists for Vercel Cron (vercel.json), which can only send GET and adds that same Authorization header from the
  * project's CRON_SECRET. A GET without the secret is refused before anything runs, and the response is never cached.
  * Running twice is safe: the jobs skip what is already done.
+ * The run stops starting new work after 40 seconds (JOBS_DEADLINE_MS), well inside maxDuration, so the platform never
+ * cuts it off in the middle of a send; what was not reached is reported (`notReached`, `outreachCutShort`) and comes
+ * first in a later run. An organization whose own lead emails or client updates were still going out at that moment
+ * stops there too (`unfinished`); what it has left stays queued for a later run. A lead or partner email run that
+ * stopped because the email service did not answer is counted in `unanswered`.
  * Answers 200 even when an organization's jobs failed; the body lists the failures and `failures` counts them.
  */
 async function handle(req: Request) {

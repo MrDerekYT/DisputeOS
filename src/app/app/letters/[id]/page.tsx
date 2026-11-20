@@ -18,7 +18,10 @@ import { loadIntakeDocs } from '@/lib/intake-load';
 import { MailRequirements } from '@/components/mail-requirements';
 import { specialtyAgency } from '@/lib/credit/agencies';
 import { BUREAU_LABEL, fmtDate, isUuid, relTime, type Bureau } from '@/lib/util';
+import { tailorIssue } from '@/lib/letters/tailor';
+import { letterOverlap, loadTailorSubject } from '@/lib/letters/tailor-load';
 import { aiAcceptLetterAction, aiSuggestLetterAction, letterStatusAction, markSentAction, restoreVersionAction, saveLetterAction } from '../actions';
+import { WordingOverlapNote } from './wording-overlap';
 import { PRODUCT } from '@/lib/product';
 
 export const metadata: Metadata = { title: 'Letter' };
@@ -42,10 +45,17 @@ export default async function LetterPage({ params, searchParams }: { params: Pro
     const enclose = l.status === 'approved' && toBureau ? intakeStatus(await loadIntakeDocs(db, l.client_id), businessToday(), INTAKE_ITEMS) : null;
     // Unfilled fields, prohibited claims and, for a bureau or specialty dispute letter, what the specificity check finds missing.
     const blockers = l.status === 'sent' || l.status === 'void' ? [] : await letterBlockers(db, id, versions[0]?.body ?? '');
-    return { l, versions, credits: await getBalance(ctx.orgId, db), kept: await storedSuggestion(db, id, versions[0]?.version ?? 0), enclose, blockers };
+    const subject = l.status === 'sent' || l.status === 'void' ? null : await loadTailorSubject(db, id);
+    // How much of this letter's wording is also in other clients' recent letters. Counted here from stored text: no AI.
+    // Shown while the wording can still change: on a draft, and to the manager who is about to approve it.
+    const overlap = subject && (l.status === 'draft' || l.status === 'pending_approval') ? await letterOverlap(db, subject) : null;
+    // The suggestion already paid for on this version, shown again only while it still passes the wording checks.
+    const stored = subject ? await storedSuggestion(db, id, subject.version) : null;
+    const kept = stored && subject && !tailorIssue(subject.body, stored.body, subject) ? stored : null;
+    return { l, versions, credits: await getBalance(ctx.orgId, db), kept, enclose, blockers, overlap };
   });
   if (!data) notFound();
-  const { l, versions, credits, kept, enclose, blockers } = data;
+  const { l, versions, credits, kept, enclose, blockers, overlap } = data;
   const agency = specialtyAgency(l.dispute_agency);
   const enclosures = enclose?.filter((e) => e.state === 'accepted') ?? [];
   const notOnFile = enclose?.filter((e) => e.state !== 'accepted' && INTAKE_REQUIRED.includes(e.item)) ?? [];
@@ -67,7 +77,7 @@ export default async function LetterPage({ params, searchParams }: { params: Pro
         actions={<>{aiPending && <AiTag title="This version was worded by AI and has not been approved by a person yet">AI wording, not yet approved</AiTag>}<StatusBadge status={l.status} /><a className="btn-secondary" href={`/api/letters/${l.id}/pdf`}><Download size={15} aria-hidden /> PDF</a></>} />
 
       {sp.error && <div className="mb-4" role="alert"><Notice tone="warn" title="That did not go through">{refusalMessage(sp.error)}</Notice></div>}
-      {l.status === 'draft' && <div className="mb-4"><Notice tone="warn" title="Draft">Not yet approved. The PDF is watermarked as a draft until a manager approves it.{aiPending && ' The wording of this version was suggested by AI and accepted by a teammate: read it in full before it goes for approval.'}</Notice></div>}
+      {l.status === 'draft' && <div className="mb-4"><Notice tone="warn" title="Draft">Not yet approved. The PDF is watermarked as a draft until a manager approves it.{aiPending && ' The wording of this version was suggested by AI and has not been approved: read it in full before it goes for approval.'}</Notice></div>}
       {l.status === 'approved' && <div className="mb-4"><Notice tone="ok" title="Approved">Approved by {l.approver ?? 'a manager'} on {fmtDate(l.approved_at)}.{aiApproved && ' The wording began as an AI draft; a person approved this exact text.'} {viaDispute ? 'Mail it, then record the submission on the dispute. That marks this letter as sent and starts the response deadline.' : 'Mail it, then record that it was sent.'}</Notice></div>}
       {l.status === 'sent' && <div className="mb-4"><DeliveryRecord sentOn={l.sent_on ?? l.sent_at} method={l.sent_method} tracking={l.tracking_number} source={l.delivery_source} recordedBy={l.recorder} carrierDeliveredAt={l.carrier_delivered_at} /></div>}
 
@@ -132,11 +142,12 @@ export default async function LetterPage({ params, searchParams }: { params: Pro
 
           {!locked && (
             <Section plain title="AI wording help" actions={<AiTag />}>
+              <WordingOverlapNote overlap={overlap} />
               <p className="mb-3 text-sm text-muted">{!ai.active ? AI_OFF.no_provider : credits < AI_COSTS.letter_suggestion ? AI_OFF.no_credits : ai.note}</p>
               <p className="mb-3 text-sm">AI credits: <strong>{credits}</strong> <span className="text-muted">· a suggestion costs {AI_COSTS.letter_suggestion}, charged only when one is returned and kept for this version of the letter, so it is not charged twice.{ctx.can('settings:manage') && <> <Link className="link" href="/app/assistant#ai-credits">Details</Link></>}</span></p>
               <AiSuggest id={l.id} suggest={aiSuggestLetterAction} accept={aiAcceptLetterAction}
                 stored={kept ? { before: body, after: kept.body, version: String(versions[0]!.version), provider: kept.provider } : undefined} />
-              <p className="mt-2 text-xs text-muted">The AI only sees the connecting wording. Names, amounts, dates, account references, bureau names and dispute statements are hidden from it and put back unchanged. You compare before and after, and nothing is saved until you accept. An accepted suggestion is a new draft that still needs approval.</p>
+              <p className="mt-2 text-xs text-muted">The AI sees only the standard salutation, linking sentence, closing lines and sign-off, and is asked to reword them in the voice kept for this client. Every other line of the letter is hidden from it and put back unchanged: names, addresses, amounts, dates, account references, headings, the reason, the enclosures and every request. The salutation and the sign-off have to come from a short fixed list, and the reworded linking and closing lines are checked against a list of courtesy words. That check is a word list, so read those lines yourself: you compare before and after, and nothing is saved until you accept. An accepted suggestion is a new draft that still needs approval.</p>
             </Section>
           )}
 
@@ -147,7 +158,7 @@ export default async function LetterPage({ params, searchParams }: { params: Pro
               const aiMark = v.source === 'ai_draft' && !(current && aiApproved);
               return (
               <li key={v.version} className="text-sm">
-                <div className="flex items-center justify-between gap-2"><span className="flex flex-wrap items-center gap-1.5 font-semibold">v{v.version}{current && <Badge tone="brand">Current</Badge>}{aiMark && <AiTag title="Worded by AI, accepted by staff as a draft">AI wording</AiTag>}{v.source === 'ai_draft' && !aiMark && <Badge tone="ok">AI draft, approved by a person</Badge>}</span>
+                <div className="flex items-center justify-between gap-2"><span className="flex flex-wrap items-center gap-1.5 font-semibold">v{v.version}{current && <Badge tone="brand">Current</Badge>}{aiMark && <AiTag title="Worded by AI and saved as a draft">AI wording</AiTag>}{v.source === 'ai_draft' && !aiMark && <Badge tone="ok">AI draft, approved by a person</Badge>}</span>
                   <span className="flex shrink-0 gap-3"><a className="text-xs text-muted underline hover:text-ink" href={`/api/letters/${l.id}/pdf?version=${v.version}`} aria-label={`PDF of version ${v.version}`}>PDF</a>
                     {!locked && v.version !== l.current_version && <form action={restoreVersionAction}><input type="hidden" name="id" value={l.id} /><input type="hidden" name="version" value={v.version} /><button className="text-xs text-muted underline hover:text-ink" type="submit" aria-label={`Restore version ${v.version}`}>Restore</button></form>}</span></div>
                 <div className="mt-0.5 text-xs text-muted">{SOURCE_LABEL[v.source] ?? v.source.replace(/_/g, ' ')} · {v.author ?? 'System'} · {relTime(v.created_at)}{v.change_note ? ` · ${v.change_note}` : ''}</div>

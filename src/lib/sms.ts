@@ -3,9 +3,10 @@ import { appendFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { safeEqual } from './crypto';
 import { getEnv } from './env';
+import { usAreaCodeState } from './us-phone';
 
 export interface Sms {
-  /** E.164, e.g. +15551234567. Anything else is refused before the provider is called. */
+  /** A US number in E.164, e.g. +12125550142. Anything else is refused before the provider is called. */
   to: string;
   body: string;
 }
@@ -41,6 +42,18 @@ export function toE164(raw: string | null | undefined): string | null {
   return /^[2-9]\d{2}[2-9]\d{6}$/.test(nanp) ? `+1${nanp}` : null;
 }
 
+// ---------------------------------------------------------------- US numbers (texts go nowhere else)
+/**
+ * A number a text may be sent to, in E.164, or null: a US number with an area code of a state, DC or Puerto Rico
+ * (./us-phone.ts). Every consent to texts (the box on the public enquiry form, the portal, a consent staff record) and
+ * every send is held to it. Sign-up is open and the enquiry form is public, so without it this deployment could be
+ * made to text any number in the world at its own cost.
+ */
+export function toUsE164(raw: string | null | undefined): string | null {
+  const n = toE164(raw);
+  return n && usAreaCodeState(n) ? n : null;
+}
+
 // ---------------------------------------------------------------- configuration
 export type SmsState = 'connected' | 'needs_credentials' | 'test_only' | 'disabled';
 export interface SmsStatus { state: SmsState; missing: string[] }
@@ -67,7 +80,8 @@ export const twilioWebhookUrl = () => `${getEnv().APP_URL.replace(/\/+$/, '')}/a
 
 // ---------------------------------------------------------------- sending
 /**
- * Text messages behind one function. It never throws: the caller gets ok/failed and records it.
+ * Text messages behind one function. It never throws: the caller gets ok/failed and records it. Whatever the driver,
+ * only a US number (./us-phone.ts) is accepted: every other number is refused here, before the provider is called.
  *  - `disabled` (default): nothing is sent, nothing is written anywhere.
  *  - `twilio`: POST https://api.twilio.com/2010-04-01/Accounts/{AccountSid}/Messages.json, form-encoded, HTTP Basic
  *    auth (Account SID : Auth Token), with To, Body and either MessagingServiceSid or From, plus StatusCallback so
@@ -84,6 +98,8 @@ export async function sendSms(msg: Sms): Promise<SmsResult> {
   try {
     if (provider === 'disabled') return { ok: false, provider, error: SMS_NOT_CONNECTED };
     if (!isE164(msg.to)) return { ok: false, provider, error: 'The phone number is not a valid international (E.164) number.' };
+    // The last check before the provider, whoever the caller is: a text goes to a US number or nowhere.
+    if (!usAreaCodeState(msg.to)) return { ok: false, provider, error: 'Not sent: texts go to US mobile numbers only.' };
     const body = msg.body.trim();
     if (!body || body.length > 1600) return { ok: false, provider, error: 'The message is empty or too long.' };
 

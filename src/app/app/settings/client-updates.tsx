@@ -3,12 +3,13 @@ import { ActionForm, Select, SubmitButton } from '@/components/forms';
 import { CopyButton } from '@/components/shell-client';
 import { Badge, Section, type Tone } from '@/components/ui';
 import type { Ctx } from '@/lib/auth/context';
-import { DAILY_CAP, orgTimezone, UPDATE_EVENT_LABEL, UPDATE_EVENTS, updateSettings, US_ZONES, type UpdateChannel, type UpdateEvent } from '@/lib/client-updates/templates';
+import { DAILY_CAP, orgTimezone, TEXTS_NEED_APPROVAL, UPDATE_EVENT_LABEL, UPDATE_EVENTS, updateSettings, US_ZONES, type UpdateChannel, type UpdateEvent } from '@/lib/client-updates/templates';
 import { getEnv } from '@/lib/env';
 import { emailIsLive } from '@/lib/lead-outreach';
+import { APPROVAL_COLS, outreachApproval, type ApprovalRow } from '@/lib/outreach-approval';
 import { smsStatus, twilioWebhookUrl } from '@/lib/sms';
 import { relTime } from '@/lib/util';
-import { reviewInboundSmsAction, saveClientUpdatesAction } from './client-updates-actions';
+import { saveClientUpdatesAction } from './client-updates-actions';
 
 interface ChannelView { label: string; badge: string; tone: Tone; usable: boolean; note: string }
 
@@ -34,16 +35,17 @@ export async function ClientUpdatesSection({ ctx }: { ctx: Ctx }) {
   const env = getEnv();
   const ch = channelViews();
   const d = await ctx.tx(async (db) => ({
-    org: await db.row<{ settings: Record<string, unknown> }>('select settings from public.organizations where id = $1', [ctx.orgId]),
+    org: await db.row<ApprovalRow & { settings: Record<string, unknown> }>(`select ${APPROVAL_COLS}, settings from public.organizations where id = $1`, [ctx.orgId]),
     problems: await db.rows<{ id: string; client_id: string; full_name: string; event: string; channel: string; status: string; error: string | null; created_at: string }>(
       `select u.id, u.client_id, c.full_name, u.event, u.channel, u.status, u.error, u.created_at
          from public.client_updates u join public.clients c on c.id = u.client_id
         where (u.status in ('failed', 'skipped') or (u.status = 'sending' and u.sent_at < now() - interval '15 minutes'))
           and u.created_at > now() - interval '14 days' order by u.created_at desc limit 8`),
-    unmatched: await db.rows<{ id: string; from_phone: string; body: string; created_at: string }>(
-      "select id, from_phone, body, created_at from public.sms_inbound where client_id is null and reviewed_at is null and kind = 'message' order by created_at desc limit 8"),
   }));
   const s = updateSettings(d.org?.settings);
+  // A text service can be connected while no text leaves this workspace: the platform operator approves each one first.
+  const approval = outreachApproval(d.org);
+  const textsHeld = ch.sms.usable && approval !== 'approved' ? TEXTS_NEED_APPROVAL[approval] : null;
   const tz = orgTimezone(d.org?.settings, env.APP_TIMEZONE);
   const zones = US_ZONES.some((z) => z.value === tz) ? US_ZONES : [{ value: tz, label: tz }, ...US_ZONES];
   const box = 'h-4 w-4 rounded border-line-strong accent-[rgb(var(--brand))] disabled:cursor-not-allowed disabled:opacity-40';
@@ -55,6 +57,7 @@ export async function ClientUpdatesSection({ ctx }: { ctx: Ctx }) {
           <li key={k} className="flex flex-wrap items-center gap-x-2.5 gap-y-1"><span className="font-medium">{ch[k].label}</span><Badge tone={ch[k].tone}>{ch[k].badge}</Badge><span className="text-muted">{ch[k].note}</span></li>
         ))}
       </ul>
+      {textsHeld && <p className="mb-5 rounded-xl border border-line bg-raised px-3.5 py-3 text-sm">{textsHeld}</p>}
       <ActionForm action={saveClientUpdatesAction}>
         <div className="overflow-x-auto">
           <table className="w-full min-w-[26rem] text-sm">
@@ -79,7 +82,7 @@ export async function ClientUpdatesSection({ ctx }: { ctx: Ctx }) {
         <div className="mt-4"><SubmitButton>Save client updates</SubmitButton></div>
       </ActionForm>
       <p className="mt-4 text-[0.8125rem] text-muted">
-        A text goes only to a client who agreed to texts (in their portal, or recorded by you on their profile), to the number they agreed for, between 8 a.m. and 9 p.m. in your time zone and in the client’s state (no state on file: 11 a.m. to 9 p.m. Eastern).
+        A text goes only to a client who agreed to texts (in their portal, on your enquiry form, or recorded by you on their profile), to the US mobile number they agreed for, between 8 a.m. and 9 p.m. in your time zone and in the client’s state (no state on file: 11 a.m. to 9 p.m. Eastern).
         At most {DAILY_CAP.sms} texts and {DAILY_CAP.email} emails per client a day. A reply with a stop word (stop, cancel, end, quit, unsubscribe, revoke, opt out) switches texts off at once, and only the client can switch them back on; any other reply pauses their texts until your team has read it. Only clients with a portal sign-in are told.
       </p>
 
@@ -102,21 +105,6 @@ export async function ClientUpdatesSection({ ctx }: { ctx: Ctx }) {
                 <Link className="font-medium hover:underline" href={`/app/clients/${p.client_id}?tab=messages`}>{p.full_name}</Link>
                 <span className="text-muted">{EVENT_NAME(p.event)} · {p.channel === 'sms' ? 'text' : 'email'} · {relTime(p.created_at)}</span>
                 {(p.error || p.status === 'sending') && <span className="basis-full text-[0.8125rem] text-muted [overflow-wrap:anywhere]">{p.error ?? 'It was handed to the provider but the result was never recorded. It is not sent again automatically.'}</span>}
-              </li>
-            ))}
-          </ul>
-        </details>
-      )}
-
-      {d.unmatched.length > 0 && (
-        <details className="mt-4" open>
-          <summary className="link cursor-pointer text-sm">Texts we could not match to one client ({d.unmatched.length})</summary>
-          <p className="mt-2 text-[0.8125rem] text-muted">The number is on no client record, or on more than one. Nothing was guessed. Find the right client and log the text on their Messages tab if it matters.</p>
-          <ul className="mt-2 divide-y divide-line/70 text-sm">
-            {d.unmatched.map((m) => (
-              <li key={m.id} className="flex flex-wrap items-start justify-between gap-3 py-2">
-                <div className="min-w-0"><span className="font-medium">{m.from_phone}</span> <span className="text-muted">· {relTime(m.created_at)}</span><p className="whitespace-pre-wrap [overflow-wrap:anywhere]">{m.body}</p></div>
-                <form action={reviewInboundSmsAction}><input type="hidden" name="id" value={m.id} /><button className="btn-ghost btn-sm" type="submit">Mark as reviewed</button></form>
               </li>
             ))}
           </ul>

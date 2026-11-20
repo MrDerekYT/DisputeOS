@@ -91,6 +91,8 @@ async function signUpAgency(browser, label) {
       await staff.getByLabel('Email', { exact: true }).fill(`wf-client-${uniq}@example.test`);
       await staff.getByLabel('Street').fill('700 Sample Road'); await staff.getByLabel('City').fill('Tampa');
       await staff.getByLabel('State', { exact: true }).fill('FL'); await staff.getByLabel('ZIP').fill('33602');
+      // A letter to a credit bureau states the date of birth and the last four digits of the SSN (synthetic values).
+      await staff.getByLabel('Date of birth').fill('1985-03-03'); await staff.getByLabel('Social Security number').fill('000-00-4321');
       await staff.check('input[name=consentDisclosure]'); await staff.check('input[name=consentContract]'); await staff.check('input[name=consentAuthorization]');
       await staff.getByLabel('Name the client signed with').fill('Workflow Client');
       await staff.getByRole('button', { name: 'Create client' }).click();
@@ -145,10 +147,12 @@ async function signUpAgency(browser, label) {
       await staff.getByRole('button', { name: 'Send for review' }).click(); await see(staff, 'Ready for review');
       await staff.getByRole('button', { name: 'Approve dispute' }).click(); await see(staff, 'Approve a letter for this dispute first');
       if (await staff.getByRole('button', { name: 'Record submission' }).count()) throw new Error('submission offered before a letter was approved');
-      await staff.locator('aside').getByRole('link', { name: /Bureau dispute/ }).click();
+      await staff.locator('aside').getByRole('link', { name: /Inaccurate balance/ }).click();
       await staff.waitForURL(/\/app\/letters\//); letterUrl = staff.url();
       const body = await staff.locator('textarea[name=body]').inputValue();
       if (!/SYNTHETIC BANK NA/.test(body) || !/\$2,450\.00/.test(body)) throw new Error('letter does not carry the disputed account and amount');
+      if (!/Date of birth: March 3, 1985\nSSN \(last 4\): 4321\n/.test(body)) throw new Error('the bureau letter does not identify the client by date of birth and SSN digits: ' + body.slice(0, 300));
+      if (/NEEDED\]/.test(body)) throw new Error('the letter has a line left to complete: ' + body.match(/\[[A-Z ]+NEEDED\]/)[0]);
       await see(staff, 'AI wording help'); // the suggest step exists; no provider is configured in this environment
       await staff.getByRole('button', { name: 'Suggest better wording' }).click();
       await see(staff, 'AI wording is off: no AI provider connected. The letter is unchanged.');

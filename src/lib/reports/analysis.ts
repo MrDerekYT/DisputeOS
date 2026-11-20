@@ -40,6 +40,9 @@ export const FINDING_CATEGORIES = {
   old_inquiry: 'Older inquiry',
   client_statement: 'Client statement conflicts with report',
   possible_reinsertion: 'Possible reinsertion',
+  medical_collection: 'Medical collection and bureau policy',
+  bankruptcy_reporting: 'Reporting after a bankruptcy discharge',
+  collector_notice: 'Collector notice: validation period',
 } as const;
 export type FindingCategory = keyof typeof FINDING_CATEGORIES;
 
@@ -149,10 +152,15 @@ export function analyze(input: {
         const off = tradelineFallOff(t);
         const age = t.date_of_first_delinquency ? yearsSince(t.date_of_first_delinquency, now) : null;
         if (off?.kind === 'date' && age != null && off.date < today) {
+          // A collection or a charge-off ages off as a whole. An account that is only late does not: what has aged is
+          // the late payment information from that date, and the account keeps being reported (§ 1681c(a)(5)).
+          const pastWhat = off.rule === 'seven_years'
+            ? 'the late payment information from that date may be past its reporting period, while the account itself keeps being reported'
+            : 'the item may be past the reporting period';
           add({
             dedupe_key: `obsolete:${t.id}`, category: 'obsolete_item', severity: 'strong',
             title: `${name} on ${BUREAU_LABEL[b]} has a first-delinquency date over 7 years ago`,
-            explanation: `${BUREAU_LABEL[b]} reports a date of first delinquency of ${t.date_of_first_delinquency} (${age.toFixed(1)} years ago). The reporting period for negative information of this kind is generally ${FALL_OFF_RULE_TEXT[off.rule]} (15 U.S.C. § 1681c), which works out to ${off.date}. Confirm the date is correct before disputing — if it is accurate, the item may be past the reporting period; if it was re-aged, the date itself may be the issue.`,
+            explanation: `${BUREAU_LABEL[b]} reports a date of first delinquency of ${t.date_of_first_delinquency} (${age.toFixed(1)} years ago). The reporting period for negative information of this kind is generally ${FALL_OFF_RULE_TEXT[off.rule]} (15 U.S.C. § 1681c), which works out to ${off.date}. Confirm the date is correct before disputing — if it is accurate, ${pastWhat}; if it was re-aged, the date itself may be the issue.`,
             evidence: [rep(t, 'Date of first delinquency', t.date_of_first_delinquency!), { field: 'Age at report review', value: `${age.toFixed(1)} years`, source: 'derived' }, { field: 'Reporting period generally ends', value: off.date, source: 'derived' }],
             basis: 'potential_discrepancy', tradeline_ids: [t.id],
           });
@@ -172,7 +180,8 @@ export function analyze(input: {
           evidence: [rep(t, 'Account type', 'Collection'), ...(t.balance_cents != null ? [rep(t, 'Balance', money(t.balance_cents))] : [])], basis: 'verified_fact', tradeline_ids: [t.id],
         });
       }
-      // Client assertions are kept distinct from reported facts.
+      // Client assertions are kept distinct from reported facts. The two share a category; the start of the key says
+      // which statement it is, and the dispute each one starts is chosen by it (disputes/workflow.ts categoryForFinding).
       const up = t.user_provided ?? {};
       if (up.not_mine === true) {
         add({

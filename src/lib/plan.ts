@@ -9,8 +9,9 @@ import type { Db } from './db';
 import { consentStatus, CONSENT_DOCS } from './compliance/disclosures';
 import { loadIntake } from './intake-load';
 import { intakeSummary } from './intake';
-import { BUREAU_LABEL, money, type Bureau } from './util';
+import { BUREAU_LABEL, fmtDate, money, type Bureau } from './util';
 import { agencyByKey, CONCERN_AGENCIES, specialtyReportStates } from './credit/agencies';
+import { openValidationWindows } from './credit/case-tools';
 
 export interface PlanStep { key: string; title: string; detail: string; href?: string; tone: 'ok' | 'warn' | 'info' | 'neutral' }
 
@@ -38,6 +39,8 @@ export interface PlanInput {
   lettersToSend: number;
   /** Short names of the specialty reports (ChexSystems, LexisNexis) still to request. Filled only when staff marked a banking or background concern. */
   specialtyToRequest?: string[];
+  /** Collector notices whose 30-day validation period (12 CFR 1006.34(b)(5)) is still open, soonest end first. */
+  validationWindows?: { collector: string; endsOn: string; daysLeft: number }[];
 }
 
 export const MAX_PLAN_STEPS = 6;
@@ -68,6 +71,13 @@ export function buildPlan(x: PlanInput): PlanStep[] {
   if (x.missingConsents.length > 0) {
     steps.push({ key: 'consents', tone: 'warn', href: `${tab('overview')}#compliance`, title: `Collect ${n(x.missingConsents.length, 'required consent')}`,
       detail: `Not on file: ${x.missingConsents.join('; ')}. A dispute cannot be submitted until these are signed.` });
+  }
+
+  // A dated window under the FDCPA, separate from any credit-report dispute. Shown early because the date does not move.
+  const win = x.validationWindows?.[0];
+  if (win) {
+    steps.push({ key: 'validation-period', tone: 'warn', href: `${tab('reports')}#case-tools`, title: `Collector notice from ${win.collector}: validation period ends ${fmtDate(win.endsOn)}`,
+      detail: `${win.daysLeft === 0 ? 'Today is the last day' : `${n(win.daysLeft, 'day')} left`} to send a written validation request within the period. This applies only if ${who} ${x.self ? 'question' : 'questions'} the debt; it is a different deadline from a dispute with a credit bureau.` });
   }
 
   const idDocs = x.missingIdentityDocs ?? [];
@@ -154,6 +164,7 @@ export async function loadPlanInput(db: Db, clientId: string): Promise<Omit<Plan
     accounts: rows.map((r) => ({ creditor: r.creditor_name, type: r.account_type, status: r.account_status, balanceCents: r.balance_cents == null ? null : Number(r.balance_cents), limitCents: r.credit_limit_cents == null ? null : Number(r.credit_limit_cents), opened: r.date_opened })),
     accountsBureau: latest[0]?.bureau ?? null,
     specialtyToRequest: await specialtyToRequest(db, clientId),
+    validationWindows: await openValidationWindows(db, clientId),
   };
 }
 

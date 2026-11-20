@@ -56,12 +56,28 @@ const STOCK = [
   /\bno\s+es\s+m[ií][ao]\b/gi,
 ];
 
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/**
+ * The account's own name and number, taken out of a reason before it is judged. They say WHICH account, not what is
+ * wrong with it: "please verify Acme Bank (account ending 1234)" is still a stock sentence.
+ */
+function withoutAccount(text: string, account?: { name?: string | null; reference?: string | null } | null): string {
+  let out = text;
+  const name = account?.name?.trim();
+  const ref = account?.reference?.trim();
+  for (const part of [name, ref]) {
+    if (part) out = out.replace(new RegExp(`(?<![\\p{L}\\p{N}])${escapeRe(part)}(?![\\p{L}\\p{N}])`, 'giu'), ' ');
+  }
+  return out.replace(/\b(?:account|acct\.?)\s+(?:ending(?:\s+in)?|number|no\.?|#)\s*[xX*•-]*\d+/gi, ' ');
+}
+
 /**
  * A concrete reason says what is reported and what the client's records or recollection show instead. A figure or a
  * date counts on its own; otherwise at least four content words must remain once the stock sentences are taken out.
+ * The account's own name and number (`account`) never count: they identify the account, they are not a reason.
  */
-export function isConcreteReason(reason: string): boolean {
-  const text = reason.replace(/\[[A-Z ]+NEEDED\]/g, ' ');
+export function isConcreteReason(reason: string, account?: { name?: string | null; reference?: string | null } | null): boolean {
+  const text = withoutAccount(reason.replace(/\[[A-Z ]+NEEDED\]/g, ' '), account);
   if (/\d/.test(text) && text.trim().split(/\s+/).length >= 4) return true;
   let rest = text;
   for (const re of STOCK) rest = rest.replace(re, ' ');
@@ -69,8 +85,8 @@ export function isConcreteReason(reason: string): boolean {
 }
 
 /** Where the reason ends in the built-in templates: the request paragraph, the enclosures or the closing. */
-const AFTER_REASON = /^\s*(please conduct|les pido|enclosures?\b|encl\.|anexos?\b|adjuntos?\b|sincerely|atentamente)/i;
-const REASON_HEADING = /^\s*(reason for my request|what i believe is inaccurate[^\n]*|motivo de mi solicitud|lo que considero inexacto[^\n]*)\s*:?\s*$/i;
+const AFTER_REASON = /^\s*(please conduct|please send me a written response|my (?:correct )?current details|les pido|enclosures?\b|encl\.|anexos?\b|adjuntos?\b|sincerely|atentamente)/i;
+const REASON_HEADING = /^\s*(reason for my request|details of the payment|(?:reported )?entries i am asking you to (?:review|correct)|what i believe is inaccurate[^\n]*|motivo de mi solicitud|lo que considero inexacto[^\n]*)\s*:?\s*$/i;
 
 /**
  * The reason as the letter states it. The dispute's own reason cannot be edited once it is created, but the letter
@@ -125,14 +141,17 @@ export function specificityIssues(i: SpecificityInput): SpecificityIssue[] {
     }
   }
 
-  // 2. The specific information disputed: a ticked field, a category that names it, or the letter naming it.
+  // 2. The specific information disputed: a ticked field, a category that names it, or the letter naming it. A concrete
+  // reason names it in its own words ("the judgment was vacated on May 12, 2021"), so it is not asked for again.
   const reason = reasonInLetter(i.body, i.reason);
   const ticked = i.fields.filter((f) => f.toLowerCase() !== 'other');
-  const named = ticked.length > 0 || !VAGUE_CATEGORY.has(i.category) || INFORMATION_WORD.test(reason);
+  const named = ticked.length > 0 || !VAGUE_CATEGORY.has(i.category) || INFORMATION_WORD.test(reason) || isConcreteReason(reason, i.account);
   if (!named) out.push({ key: 'information', message: 'State the specific information disputed (for example the balance, the status, a date or the payment history).' });
 
-  // 3. A concrete reason, as the letter states it.
-  if (!isConcreteReason(reason)) {
+  // 3. A concrete reason, as the letter states it. Naming the account again is not one. For an account the client does
+  // not recognize, the client's statement that they do not recognize it is the reason: it is what the dispute type records.
+  const disowned = i.category === 'not_mine' && /\b(?:do|did) not recogni[sz]e\b/i.test(reason);
+  if (!disowned && !isConcreteReason(reason, i.account)) {
     out.push({ key: 'reason', message: 'Give a concrete reason in the letter: what is reported, and what the client’s own records or recollection show instead. Use only what the client has told you.' });
   }
 
@@ -141,4 +160,20 @@ export function specificityIssues(i: SpecificityInput): SpecificityIssue[] {
     out.push({ key: 'enclosures', message: 'List what is enclosed (at least the identity documents: a copy of a photo ID and a proof of address), or write “Enclosures: none”.' });
   }
   return out;
+}
+
+/**
+ * Two letters outside the specificity check that still rest on one section a person fills in: the request to update a
+ * paid account ("Details of the payment") and the personal information correction (the entries). The letter is held
+ * until that section says something of the client's own. It lists what is missing and never writes it.
+ */
+export const CONTENT_KINDS = ['payment_update', 'personal_info_correction'];
+export function contentIssues(i: { kind: string; body: string; reason: string; account?: { name?: string | null; reference?: string | null } | null }): SpecificityIssue[] {
+  if (!CONTENT_KINDS.includes(i.kind)) return [];
+  const stated = withoutAccount(reasonInLetter(i.body, i.reason), i.account);
+  if (i.kind === 'payment_update') {
+    // When it was paid or how much: a date or a figure. "Please update this account" says neither.
+    return /\d/.test(stated) ? [] : [{ key: 'reason', message: 'State the payment in the letter: when it was made and how much, as the client’s own records show it.' }];
+  }
+  return isConcreteReason(stated) ? [] : [{ key: 'reason', message: 'List the entries in the letter: each one as the report shows it, and whether it is not the client’s or is not correct.' }];
 }

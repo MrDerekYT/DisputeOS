@@ -1,35 +1,45 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { POST as twilioWebhook } from '@/app/api/webhooks/twilio/route';
 import { runScheduledJobs } from '@/lib/automation/jobs';
 import {
-  deliverClientUpdates, grantSmsConsent, pendingSmsReplies, queueClientUpdate, recordInboundSms, recordSmsStatus, reviewSmsReplies, revokeSmsConsent, runClientUpdateJobs, unmatchedInboundCount,
+  deliverClientUpdates, grantSmsConsent, pendingSmsReplies, queueClientUpdate, recordInboundSms, recordSmsStatus, reviewSmsReplies, revokeSmsConsent, runClientUpdateJobs, SHARED_REPLY_NOTE, unmatchedInboundCount,
 } from '@/lib/client-updates/service';
-import { DAILY_CAP, UPDATE_EVENTS, type UpdateEvent } from '@/lib/client-updates/templates';
+import { DAILY_CAP, TEXT_NOT_APPROVED, TEXT_NOT_US_NUMBER, TEXTS_NEED_APPROVAL, UPDATE_EVENTS, type UpdateEvent } from '@/lib/client-updates/templates';
 import { addDays, noResponseAfter } from '@/lib/disputes/clock';
 import { recordResponse } from '@/lib/disputes/service';
 import { businessToday } from '@/lib/letters/service';
 import type { Db } from '@/lib/db';
 import { resetEnvCache } from '@/lib/env';
-import { smsLog, twilioSignature, twilioWebhookUrl, type Sms, type SmsResult } from '@/lib/sms';
-import { addClient, addDispute, addMember, asUser, closePool, makeOrg, uniq, withSystem, type TestOrg } from './helpers';
+import type { Email, SendResult } from '@/lib/mailer';
+import { sendSms, smsLog, toUsE164, twilioSignature, twilioWebhookUrl, type Sms, type SmsResult } from '@/lib/sms';
+import { addClient, addDispute, addMember, approveOutreach, asUser, closePool, makeOrg, uniq, withSystem, type TestOrg } from './helpers';
 
 const saved = { ...process.env };
 // The development stand-in: texts are written to a log, nothing leaves the machine.
 beforeAll(() => { process.env.SMS_DRIVER = 'log'; resetEnvCache(); });
 afterAll(async () => { process.env = { ...saved }; resetEnvCache(); await closePool(); });
 
-/** A US mobile number nobody else in the (never truncated) test database has. */
-const phone = () => `+1${2 + Math.floor(Math.random() * 8)}${String(Math.floor(Math.random() * 100)).padStart(2, '0')}555${String(Math.floor(Math.random() * 10_000)).padStart(4, '0')}`;
+const AREA_CODES = ['212', '216', '303', '305', '312', '314', '404', '412', '415', '503', '512', '602', '615', '617', '702', '704', '713', '801', '816', '919'];
+/** A US mobile number nobody else in the (never truncated) test database has: a real area code, any exchange, any line. */
+const phone = (): string => {
+  const n = `+1${AREA_CODES[Math.floor(Math.random() * AREA_CODES.length)]}${2 + Math.floor(Math.random() * 8)}${String(Math.floor(Math.random() * 100)).padStart(2, '0')}${String(Math.floor(Math.random() * 10_000)).padStart(4, '0')}`;
+  return toUsE164(n) ? n : phone();
+};
 /** Midday and the middle of the night in the agency timezone (America/New_York), on today's date. */
 const at = (utcHour: number) => new Date(`${new Date().toISOString().slice(0, 10)}T${String(utcHour).padStart(2, '0')}:00:00Z`);
 const NOON = at(17);
 const NIGHT = at(8);
 
 type Channels = { sms?: boolean; email?: boolean };
-async function agency(label: string, on: Partial<Record<UpdateEvent, Channels>> = {}, windowSince: string | null = null): Promise<TestOrg> {
+/**
+ * A workspace with its client-update switches set, approved for text messages by the platform operator as
+ * `npm run outreach:approve` does it. Pass `approved: false` for one nobody has looked at, which is what sign-up gives.
+ */
+async function agency(label: string, on: Partial<Record<UpdateEvent, Channels>> = {}, windowSince: string | null = null, approved = true): Promise<TestOrg> {
   const o = await makeOrg(label);
   const switches = Object.fromEntries(UPDATE_EVENTS.map((e) => [e, { sms: !!on[e]?.sms, email: !!on[e]?.email }]));
   await withSystem((db) => db.run("update public.organizations set settings = settings || jsonb_build_object('client_updates', $2::jsonb) where id = $1", [o.orgId, JSON.stringify({ switches, window_since: windowSince })]));
+  if (approved) await approveOutreach(o.orgId);
   return o;
 }
 const ALL_SMS = Object.fromEntries(UPDATE_EVENTS.map((e) => [e, { sms: true }])) as Record<UpdateEvent, Channels>;
@@ -138,11 +148,11 @@ describe('client updates by text', () => {
     const o = await agency('RealTrigger', { response_recorded: { sms: true } });
     const c = await portalClient(o, { consent: true });
     const disputeId = await addDispute(o.orgId, c.clientId, 'submitted');
-    await asUser(o.ownerId, (db) => recordResponse(db, { orgId: o.orgId, userId: o.ownerId, role: 'owner' }, disputeId, { outcome: 'verified' }));
+    await asUser(o.ownerId, (db) => recordResponse(db, { orgId: o.orgId, userId: o.ownerId, role: 'owner' }, disputeId, { outcome: 'verified', receivedOn: businessToday() }));
     expect(await updates(c.clientId)).toMatchObject([{ event: 'response_recorded', channel: 'sms', status: 'queued' }]);
     // A rolled-back transaction leaves nothing behind to send.
     const second = await addDispute(o.orgId, c.clientId, 'submitted');
-    await expect(asUser(o.ownerId, async (db) => { await recordResponse(db, { orgId: o.orgId, userId: o.ownerId, role: 'owner' }, second, { outcome: 'verified' }); throw new Error('rolled back'); })).rejects.toThrow('rolled back');
+    await expect(asUser(o.ownerId, async (db) => { await recordResponse(db, { orgId: o.orgId, userId: o.ownerId, role: 'owner' }, second, { outcome: 'verified', receivedOn: businessToday() }); throw new Error('rolled back'); })).rejects.toThrow('rolled back');
     expect(await updates(c.clientId)).toHaveLength(1);
     await deliverClientUpdates(o.orgId, { now: NOON });
     expect(textsTo(c.number)).toHaveLength(1);
@@ -203,6 +213,21 @@ describe('client updates by text', () => {
     expect(await updates(c2.clientId)).toMatchObject([{ status: 'failed', error: 'The carrier did not deliver it (Twilio error 30034)' }]);
   });
 
+  it('an email update the email service never answered for is kept as failed, saying it may or may not have arrived', async () => {
+    const o = await agency('EmailNoAnswer', { team_message: { email: true } });
+    const c = await portalClient(o);
+    expect(await queue(o, c.clientId, 'team_message')).toBe(1);
+    const silent = async (_: Email): Promise<SendResult> => ({ ok: false, provider: 'resend', error: 'The operation was aborted due to timeout', unconfirmed: true });
+    expect(await deliverClientUpdates(o.orgId, { now: NOON, email: silent })).toEqual({ sent: 0, failed: 1, skipped: 0, waiting: 0 });
+    expect(await updates(c.clientId)).toMatchObject([{ channel: 'email', status: 'failed', provider: 'resend', error: 'The email service did not answer; it may or may not have arrived.' }]);
+    expect(await comms(c.clientId)).toMatchObject([{ direction: 'outbound', channel: 'email', status: 'failed' }]);
+    // A refusal the service did answer with keeps its own reason.
+    expect(await queue(o, c.clientId, 'team_message')).toBe(1);
+    const refused = async (_: Email): Promise<SendResult> => ({ ok: false, provider: 'resend', error: 'The agency.test domain is not verified.' });
+    expect(await deliverClientUpdates(o.orgId, { now: NOON, email: refused })).toEqual({ sent: 0, failed: 1, skipped: 0, waiting: 0 });
+    expect((await updates(c.clientId)).at(-1)).toMatchObject({ status: 'failed', error: 'The agency.test domain is not verified.' });
+  });
+
   it('a changed phone number or a missing portal sign-in stops the text', async () => {
     const o = await agency('Changed', ALL_SMS);
     const c = await portalClient(o, { consent: true });
@@ -217,6 +242,88 @@ describe('client updates by text', () => {
     await withSystem((db) => db.run('update public.clients set phone = $2 where id = $1', [noPortal, phone()]));
     await asUser(o.ownerId, (db) => grantSmsConsent(db, { orgId: o.orgId, clientId: noPortal, userId: o.ownerId, source: 'staff', note: 'Agreed in the office on Monday morning.' }));
     expect(await queue(o, noPortal, 'dispute_sent')).toBe(0);
+  });
+
+  it('a workspace the platform operator has not approved texts nobody: nothing is queued or sent, the email still goes, and the approval is read again when a text is about to leave', async () => {
+    // As sign-up leaves it: the switches on, a client with a portal sign-in and a consent, a text service connected.
+    const o = await agency('NotApproved', { team_message: { sms: true, email: true } }, null, false);
+    const c = await portalClient(o, { consent: true });
+    expect(await queue(o, c.clientId, 'team_message', 'm-1')).toBe(1); // the email only
+    expect((await updates(c.clientId)).map((u) => [u.channel, u.status])).toEqual([['email', 'queued']]);
+    expect(await deliverClientUpdates(o.orgId, { now: NOON })).toEqual({ sent: 1, failed: 0, skipped: 0, waiting: 0 });
+    expect(textsTo(c.number)).toEqual([]);
+    // The owner cannot approve the workspace: those columns are not granted to any tenant request.
+    await expect(asUser(o.ownerId, (db) => db.run('update public.organizations set outreach_approved_at = now(), outreach_approved_name = name where id = $1', [o.orgId]))).rejects.toThrow(/permission denied/);
+    // A text that reached the queue some other way (queued before this rule, or written straight to the table) is not sent either.
+    await withSystem((db) => db.run("insert into public.client_updates (org_id, client_id, event, subject_id, channel) values ($1, $2, 'team_message', 'in-the-queue', 'sms')", [o.orgId, c.clientId]));
+    expect(await deliverClientUpdates(o.orgId, { now: NOON })).toEqual({ sent: 0, failed: 0, skipped: 1, waiting: 0 });
+    expect((await updates(c.clientId)).filter((u) => u.status === 'skipped')).toMatchObject([{ channel: 'sms', error: TEXT_NOT_APPROVED }]);
+    expect(textsTo(c.number)).toEqual([]);
+
+    // Approved by the operator: the next event is texted as well as emailed.
+    await approveOutreach(o.orgId);
+    expect(await queue(o, c.clientId, 'team_message', 'm-2')).toBe(2);
+    expect(await deliverClientUpdates(o.orgId, { now: NOON })).toEqual({ sent: 2, failed: 0, skipped: 0, waiting: 0 });
+    expect(textsTo(c.number)).toHaveLength(1);
+    // The approval is withdrawn while a text waits in the queue: the email goes, the text does not.
+    expect(await queue(o, c.clientId, 'team_message', 'm-3')).toBe(2);
+    await withSystem((db) => db.run('update public.organizations set outreach_approved_at = null, outreach_approved_name = null where id = $1', [o.orgId]));
+    expect(await deliverClientUpdates(o.orgId, { now: NOON })).toEqual({ sent: 1, failed: 0, skipped: 1, waiting: 0 });
+    expect(textsTo(c.number)).toHaveLength(1);
+    // What staff are told names the reason and says that the emails still go.
+    expect(TEXTS_NEED_APPROVAL.not_approved).toBe('No text is being sent from this workspace: the platform operator has not approved it for text messages yet. Client updates by email are not affected.');
+    expect(TEXTS_NEED_APPROVAL.renamed).toMatch(/your business name changed .* approve it again\. Client updates by email are not affected\.$/);
+  });
+
+  it('the approval is for the business name: after a rename no text is queued or sent, and a text always carries the name that was approved', async () => {
+    const o = await agency('Renamed', { dispute_sent: { email: true }, response_recorded: { sms: true }, team_message: { sms: true } });
+    const approvedName = (await withSystem((db) => db.row<{ name: string }>('select name from public.organizations where id = $1', [o.orgId])))!.name;
+    const rename = (name: string) => asUser(o.ownerId, (db) => db.run('update public.organizations set name = $2 where id = $1', [o.orgId, name]));
+    const c = await portalClient(o, { consent: true });
+    // The owner renames the workspace: the name starts every text, and nobody approved this one.
+    await rename('Chase Bank Fraud Dept');
+    expect(await queue(o, c.clientId, 'team_message')).toBe(0);
+    expect(await deliverClientUpdates(o.orgId, { now: NOON })).toEqual({ sent: 0, failed: 0, skipped: 0, waiting: 0 });
+    // Back under the approved name: an email is queued first and a text after it.
+    await rename(approvedName);
+    expect(await queue(o, c.clientId, 'dispute_sent')).toBe(1);
+    await withSystem((db) => db.run("update public.client_updates set created_at = created_at - interval '1 minute' where client_id = $1", [c.clientId]));
+    expect(await queue(o, c.clientId, 'response_recorded')).toBe(1);
+    // A run starts while the workspace carries the other name; it is renamed back while the email is with the email
+    // service. The text that follows is approved again, and it carries the approved name, not the one the run started with.
+    await rename('Chase Bank Fraud Dept');
+    const mails: Email[] = [];
+    const email = async (m: Email): Promise<SendResult> => { mails.push(m); await rename(approvedName); return { ok: true, provider: 'resend', providerRef: `re_${uniq()}` }; };
+    expect(await deliverClientUpdates(o.orgId, { now: NOON, email })).toEqual({ sent: 2, failed: 0, skipped: 0, waiting: 0 });
+    expect(mails).toHaveLength(1);
+    expect(textsTo(c.number).map((m) => m.body.split(':')[0])).toEqual([approvedName]);
+    expect(smsLog.some((m) => m.body.includes('Chase Bank'))).toBe(false);
+  });
+
+  it('texts go to US numbers only: a consent cannot be recorded for any other number, and one already on file sends nothing', async () => {
+    const o = await agency('UsOnly', ALL_SMS);
+    const note = 'Agreed on a call with me on Monday morning.';
+    // Cameroon, the UK, Jamaica, a premium line, Canada, toll-free, and a number that cannot exist.
+    for (const typed of ['+237 6 77 12 34 56', '+44 7911 123456', '+1 876 555 1234', '(900) 555-1234', '+1 416 555 0134', '(800) 555-0134', '(212) 911-0134']) {
+      const c = await portalClient(o, { number: typed });
+      expect(await asUser(c.userId, (db) => grantSmsConsent(db, { orgId: o.orgId, clientId: c.clientId, userId: c.userId, source: 'portal' })), typed).toEqual({ ok: false, reason: 'no_phone' });
+      expect(await asUser(o.ownerId, (db) => grantSmsConsent(db, { orgId: o.orgId, clientId: c.clientId, userId: o.ownerId, source: 'staff', note })), typed).toEqual({ ok: false, reason: 'no_phone' });
+      expect(await consent(c.clientId), typed).toBeNull();
+      expect(await queue(o, c.clientId, 'dispute_sent'), typed).toBe(0);
+    }
+    // A consent that is on file for a number abroad (recorded before this rule) queues nothing...
+    const abroad = '+447911123456';
+    const old = await portalClient(o, { number: abroad });
+    await withSystem((db) => db.run("insert into public.sms_consents (org_id, client_id, phone, consent_text, source, recorded_by) values ($1, $2, $3, repeat('y', 30), 'portal', $4)", [o.orgId, old.clientId, abroad, old.userId]));
+    expect(await queue(o, old.clientId, 'dispute_sent')).toBe(0);
+    // ...and a text already waiting for it is dropped with the reason, not sent.
+    await withSystem((db) => db.run("insert into public.client_updates (org_id, client_id, event, subject_id, channel) values ($1, $2, 'dispute_sent', 'in-the-queue', 'sms')", [o.orgId, old.clientId]));
+    expect(await deliverClientUpdates(o.orgId, { now: NOON })).toEqual({ sent: 0, failed: 0, skipped: 1, waiting: 0 });
+    expect(await updates(old.clientId)).toMatchObject([{ status: 'skipped', error: TEXT_NOT_US_NUMBER }]);
+    expect(textsTo(abroad)).toEqual([]);
+    // The sender itself hands no other number to the provider, whoever calls it.
+    for (const to of [abroad, '+237677123456', '+18765551234', '+19005551234', '+14165550134']) expect(await sendSms({ to, body: 'hello' }), to).toEqual({ ok: false, provider: 'log', error: 'Not sent: texts go to US mobile numbers only.' });
+    expect(smsLog.some((m) => [abroad, '+237677123456', '+18765551234', '+19005551234', '+14165550134'].includes(m.to))).toBe(false);
   });
 
   it('“no response recorded” is announced once by the scheduled job: only after 5 business days and a week for the mail, and only if the period ended after the switch went on', async () => {
@@ -311,18 +418,26 @@ describe('inbound texts (the Twilio webhook)', () => {
     expect(await comms(c.clientId)).toEqual([{ direction: 'inbound', channel: 'sms', status: 'received', body: 'I uploaded my ID, thanks', provider_ref: sid }]);
   });
 
-  it('a number on two client records is never guessed: the text is kept unmatched for staff, and STOP still stops both', async () => {
+  it('a number on two client records of one workspace, both with consent: the reply is filed on both, for the same staff; a number nobody has belongs to no one', async () => {
     const o = await agency('Ambiguous', ALL_SMS);
     const shared = phone();
     const a = await portalClient(o, { number: shared, consent: true });
     const b = await portalClient(o, { number: shared, consent: true });
+    // A third record carries the number with no consent: it is not told anything.
+    const c = await portalClient(o, { number: shared });
     const sid = `SM${uniq()}${uniq()}`;
-    expect(await recordInboundSms({ sid, from: shared, to: '+14155550100', body: 'Which letter was this about?' })).toEqual({ kind: 'message', matched: 0 });
-    expect(await comms(a.clientId)).toEqual([]);
-    expect(await comms(b.clientId)).toEqual([]);
-    const seen = await asUser(o.ownerId, (db) => db.rows<{ client_id: string | null; body: string }>('select client_id, body from public.sms_inbound where provider_ref = $1', [sid]));
-    expect(seen).toEqual([{ client_id: null, body: 'Which letter was this about?' }]);
-    // A number nobody has is unmatched too, and belongs to no organization: no tenant can read it.
+    // Neither has been texted, so nothing says which record the reply is for. A reply nobody can see would leave texts
+    // going out, so both records get it; texts to both pause until someone has read it.
+    expect(await recordInboundSms({ sid, from: shared, to: '+14155550100', body: 'Which letter was this about?' })).toEqual({ kind: 'message', matched: 2 });
+    for (const x of [a, b]) expect(await comms(x.clientId)).toEqual([{ direction: 'inbound', channel: 'sms', status: 'received', body: 'Which letter was this about?', provider_ref: sid }]);
+    expect(await comms(c.clientId)).toEqual([]);
+    const seen = await asUser(o.ownerId, (db) => db.rows<{ client_id: string | null; body: string; reviewed: boolean }>('select client_id, body, (reviewed_at is not null) as reviewed from public.sms_inbound where provider_ref like $1 order by provider_ref', [`${sid}%`]));
+    expect(seen.map((r) => r.client_id).sort()).toEqual([a.clientId, b.clientId].sort());
+    expect(seen.every((r) => r.body === 'Which letter was this about?' && !r.reviewed)).toBe(true);
+    // The webhook retried: nothing is filed twice.
+    expect(await recordInboundSms({ sid, from: shared, to: '+14155550100', body: 'Which letter was this about?' })).toEqual({ kind: 'duplicate', matched: 0 });
+    expect(await comms(a.clientId)).toHaveLength(1);
+    // A number nobody has is unmatched, and belongs to no organization: no tenant can read it.
     const orphan = `SM${uniq()}${uniq()}`;
     expect(await recordInboundSms({ sid: orphan, from: phone(), body: 'hello?' })).toEqual({ kind: 'message', matched: 0 });
     expect(await asUser(o.ownerId, (db) => db.rows('select 1 from public.sms_inbound where provider_ref = $1', [orphan]))).toEqual([]);
@@ -450,27 +565,134 @@ describe('another workspace cannot pull a client’s replies away', () => {
     expect(await asUser(b.ownerId, (db) => db.rows('select 1 from public.sms_inbound where provider_ref = $1', [sid]))).toEqual([]);
   });
 
-  it('with consent in force in two workspaces, it goes to the one texted most recently; with no way to tell, it is kept and counted, not lost', async () => {
+  it('with consent in force in two workspaces, it goes to the one texted most recently; with no way to tell, each is told a reply arrived and neither is shown its wording', async () => {
     const a = await agency('RecentA', ALL_SMS);
     const b = await agency('RecentB', ALL_SMS);
     const ca = await portalClient(a, { consent: true });
     const cb = await portalClient(b, { number: ca.number });
     await asUser(b.ownerId, (db) => grantSmsConsent(db, { orgId: b.orgId, clientId: cb.clientId, userId: b.ownerId, source: 'staff', note: 'Agreed in the office on Monday morning.' }));
-    // Nobody has been texted yet: ambiguous. Kept with no workspace, and the count the scheduled job reports goes up.
+    // Nobody has been texted yet: it cannot be told which business the reply was for. Each record is told that a reply
+    // arrived, so texts to the number pause in both workspaces, and neither is shown what the person wrote to the other.
     const before = await unmatchedInboundCount();
-    expect(await recordInboundSms({ sid: `SM${uniq()}${uniq()}`, from: ca.number, body: 'Hello, who is this?' })).toEqual({ kind: 'message', matched: 0 });
+    const first = `SM${uniq()}${uniq()}`;
+    expect(await recordInboundSms({ sid: first, from: ca.number, body: 'Hello, who is this? My card ends 4421.' })).toEqual({ kind: 'message', matched: 2 });
+    for (const x of [ca, cb]) {
+      expect(await comms(x.clientId)).toEqual([{ direction: 'inbound', channel: 'sms', status: 'received', body: SHARED_REPLY_NOTE, provider_ref: first }]);
+      expect((await asUser(x === ca ? a.ownerId : b.ownerId, (db) => pendingSmsReplies(db, x.clientId))).map((r) => r.body)).toEqual([SHARED_REPLY_NOTE]);
+    }
+    expect(SHARED_REPLY_NOTE).toMatch(/its wording is not shown here\. Texts to this number are paused\./);
+    // No tenant can read the message itself: it is kept with no workspace, and the count the scheduled job reports goes up.
+    for (const owner of [a.ownerId, b.ownerId]) expect(await asUser(owner, (db) => db.rows<{ body: string }>('select body from public.sms_inbound where provider_ref like $1', [`${first}%`]))).toEqual([{ body: SHARED_REPLY_NOTE }]);
+    expect(await withSystem((db) => db.row('select org_id, client_id, body from public.sms_inbound where provider_ref = $1', [first]))).toEqual({ org_id: null, client_id: null, body: 'Hello, who is this? My card ends 4421.' });
     expect(await unmatchedInboundCount()).toBe(before + 1);
     expect((await runScheduledJobs({ onlyOrgIds: [a.orgId] })).unmatchedInboundTexts).toBeGreaterThanOrEqual(1);
-    // A texted its client; the reply that follows is A's.
+    // Staff of each workspace read the note, and texts resume.
+    await asUser(a.ownerId, (db) => reviewSmsReplies(db, { orgId: a.orgId, clientId: ca.clientId, userId: a.ownerId, asksToStop: false }));
+    await asUser(b.ownerId, (db) => reviewSmsReplies(db, { orgId: b.orgId, clientId: cb.clientId, userId: b.ownerId, asksToStop: false }));
+    // A texted its client; the reply that follows is A's, wording and all.
     await queue(a, ca.clientId, 'dispute_sent');
     expect(await deliverClientUpdates(a.orgId, { now: NOON })).toMatchObject({ sent: 1 });
     expect(await recordInboundSms({ sid: `SM${uniq()}${uniq()}`, from: ca.number, body: 'Thanks, I will look tonight' })).toEqual({ kind: 'message', matched: 1 });
-    expect(await comms(cb.clientId)).toEqual([]);
-    expect((await comms(ca.clientId)).filter((m) => m.direction === 'inbound')).toMatchObject([{ body: 'Thanks, I will look tonight' }]);
+    expect((await comms(cb.clientId)).map((m) => m.body)).toEqual([SHARED_REPLY_NOTE]);
+    expect((await comms(ca.clientId)).filter((m) => m.direction === 'inbound').map((m) => m.body)).toEqual([SHARED_REPLY_NOTE, 'Thanks, I will look tonight']);
     // STOP still ends consent for the number in both workspaces.
     await recordInboundSms({ sid: `SM${uniq()}${uniq()}`, from: ca.number, body: 'STOP' });
     expect((await consent(ca.clientId))!.revoked_via).toBe('sms_stop');
     expect((await consent(cb.clientId))!.revoked_via).toBe('sms_stop');
+  });
+});
+
+describe('a number typed onto many records of another workspace', () => {
+  /** A workspace nobody approved, which never texts anyone: it only types one number onto `records` client records of its own. */
+  async function crowd(label: string, number: string, records: number, withConsents: boolean) {
+    const o = await agency(label, {}, null, false);
+    await withSystem(async (db) => {
+      await db.run("insert into public.clients (org_id, full_name, phone, status) select $1, 'Record ' || g, $2, 'active' from generate_series(1, $3::int) g", [o.orgId, number, records]);
+      // "Record consent given outside the portal" on each: any signed-up owner can, with a note of ten characters.
+      if (withConsents) await db.run("insert into public.sms_consents (org_id, client_id, phone, consent_text, source, note, recorded_by) select org_id, id, $2, repeat('y', 30), 'staff', 'agreed on the phone', $3 from public.clients where org_id = $1", [o.orgId, number, o.ownerId]);
+    });
+    return o;
+  }
+  const inForce = (number: string) => withSystem((db) => db.row<{ n: number }>('select count(*)::int as n from public.sms_consents where phone = $1 and revoked_at is null', [number])).then((r) => r!.n);
+
+  it('does not crowd a STOP out: every consent for the number ends, the agency’s own included, and nothing more is texted', async () => {
+    const number = phone();
+    await crowd('CrowdStop', number, 60, true);
+    // Later the owner of the number becomes a client of an agency, agrees to its texts and gets one.
+    const o = await agency('CrowdStopAgency', ALL_SMS);
+    const c = await portalClient(o, { number, consent: true });
+    await queue(o, c.clientId, 'dispute_sent');
+    expect(await deliverClientUpdates(o.orgId, { now: NOON })).toMatchObject({ sent: 1 });
+    expect(await inForce(number)).toBe(61);
+    // The STOP is filed on the record that was texted, and it ends all 61 consents.
+    expect(await recordInboundSms({ sid: `SM${uniq()}${uniq()}`, from: number, body: 'STOP' })).toEqual({ kind: 'stop', matched: 1 });
+    expect(await consent(c.clientId)).toMatchObject({ revoked_via: 'sms_stop' });
+    expect(await inForce(number)).toBe(0);
+    expect(await queue(o, c.clientId, 'response_recorded')).toBe(0);
+    expect(await deliverClientUpdates(o.orgId, { now: NOON })).toEqual({ sent: 0, failed: 0, skipped: 0, waiting: 0 });
+    expect(textsTo(number)).toHaveLength(1);
+    // One audit entry for each consent that ended.
+    expect(await withSystem((db) => db.row<{ n: number }>("select count(*)::int as n from public.audit_logs where org_id = $1 and action = 'sms_consent.revoked' and actor_label = 'Text message reply' and entity_id = $2 and metadata = '{\"via\": \"sms_stop\"}'::jsonb", [o.orgId, c.clientId]))).toEqual({ n: 1 });
+  });
+
+  it('does not pull a reply away: it is filed on the client who was texted, and the other workspace is not shown it', async () => {
+    const number = phone();
+    const other = await crowd('CrowdReply', number, 60, false);
+    const o = await agency('CrowdReplyAgency', ALL_SMS);
+    const c = await portalClient(o, { number, consent: true });
+    await queue(o, c.clientId, 'dispute_sent');
+    expect(await deliverClientUpdates(o.orgId, { now: NOON })).toMatchObject({ sent: 1 });
+    const sid = `SM${uniq()}${uniq()}`;
+    const body = `Call me after 5, my date of birth is 03/03/1985 (${uniq()})`;
+    expect(await recordInboundSms({ sid, from: number, body })).toEqual({ kind: 'message', matched: 1 });
+    expect((await comms(c.clientId)).filter((m) => m.direction === 'inbound').map((m) => m.body)).toEqual([body]);
+    expect(await withSystem((db) => db.row('select org_id, client_id from public.sms_inbound where provider_ref = $1', [sid]))).toEqual({ org_id: o.orgId, client_id: c.clientId });
+    // The reply pauses the agency's texts until staff have read it; the other workspace sees nothing of it.
+    expect((await asUser(o.ownerId, (db) => pendingSmsReplies(db, c.clientId))).map((r) => r.body)).toEqual([body]);
+    expect(await asUser(other.ownerId, (db) => db.rows('select 1 from public.sms_inbound where provider_ref like $1', [`${sid}%`]))).toEqual([]);
+    expect(await asUser(other.ownerId, (db) => db.rows('select 1 from public.communications where body = $1', [body]))).toEqual([]);
+  });
+
+  it('a reply no record can claim belongs to no workspace, also when every record with the number is in one workspace', async () => {
+    // One workspace typed a number onto two records. Neither holds a consent and neither was texted: nothing says the
+    // person wrote to this business, so its staff are not shown what they wrote.
+    const o = await agency('TwoRecords', ALL_SMS);
+    const number = phone();
+    const [a, b] = [await portalClient(o, { number }), await portalClient(o, { number })];
+    const before = await unmatchedInboundCount();
+    const sid = `SM${uniq()}${uniq()}`;
+    expect(await recordInboundSms({ sid, from: number, body: 'Who is this? My card ends 4421.' })).toEqual({ kind: 'message', matched: 0 });
+    expect(await withSystem((db) => db.row('select org_id, client_id, body from public.sms_inbound where provider_ref = $1', [sid]))).toEqual({ org_id: null, client_id: null, body: 'Who is this? My card ends 4421.' });
+    expect(await asUser(o.ownerId, (db) => db.rows('select 1 from public.sms_inbound where provider_ref = $1', [sid]))).toEqual([]);
+    for (const x of [a, b]) expect(await comms(x.clientId)).toEqual([]);
+    // It is not lost: the scheduled job counts it for the operator.
+    expect(await unmatchedInboundCount()).toBe(before + 1);
+  });
+});
+
+describe('the scheduled job’s deadline', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('nothing is claimed once it has passed: the message in flight is finished and recorded, the rest stays queued for the next run', async () => {
+    const o = await agency('Deadline', { dispute_sent: { email: true } });
+    const clients = [await portalClient(o), await portalClient(o), await portalClient(o)];
+    for (const c of clients) expect(await queue(o, c.clientId, 'dispute_sent')).toBe(1);
+    const statuses = async () => (await withSystem((db) => db.rows<{ status: string }>('select status from public.client_updates where org_id = $1 order by status', [o.orgId]))).map((r) => r.status);
+    // A deadline that has already passed: nothing is claimed at all.
+    expect(await deliverClientUpdates(o.orgId, { now: NOON, stopAt: Date.now() - 1 })).toEqual({ sent: 0, failed: 0, skipped: 0, waiting: 0, held: 'time' });
+    expect(await statuses()).toEqual(['queued', 'queued', 'queued']);
+    // The clock moves only when the test moves it: the deadline passes while the first email is with the email service.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const stopAt = Date.now() + 5_000;
+    const mails: Email[] = [];
+    const email = async (m: Email): Promise<SendResult> => { mails.push(m); vi.setSystemTime(stopAt + 1); return { ok: true, provider: 'resend', providerRef: `re_${uniq()}` }; };
+    expect(await deliverClientUpdates(o.orgId, { stopAt, email })).toEqual({ sent: 1, failed: 0, skipped: 0, waiting: 0, held: 'time' });
+    vi.useRealTimers();
+    expect(mails).toHaveLength(1);
+    expect(await statuses()).toEqual(['queued', 'queued', 'sent']);
+    // The next run, with time, sends the two that were left; with no deadline at all nothing is held.
+    expect(await deliverClientUpdates(o.orgId, { now: NOON })).toEqual({ sent: 2, failed: 0, skipped: 0, waiting: 0 });
+    expect(await statuses()).toEqual(['sent', 'sent', 'sent']);
   });
 });
 

@@ -83,6 +83,9 @@ Production environment only** (see [Preview deployments](#preview-deployments)).
 | `EMAIL_DRIVER` | `resend` or `disabled` | Type it. See [Email](#email-read-this-before-launch). The default (`log`) is refused in production. | No |
 | `RESEND_API_KEY` | `re_…` | Only with `EMAIL_DRIVER=resend`: your Resend account | **Yes** |
 | `EMAIL_FROM` | `Your Business <no-reply@your-domain.com>` | Only with `EMAIL_DRIVER=resend`: an address on a domain you verified in Resend | No |
+| `OUTREACH_EMAIL_FROM`, `OUTREACH_RESEND_API_KEY` | `Your Business <partners@outreach.your-domain.com>`, `re_…` | Optional, recommended if agencies use the partner email sequence: a separate sending address (own subdomain) and key for it, so cold business email cannot hurt the address that carries password resets | Key: **Yes** |
+| `RESEND_WEBHOOK_SECRET` | `whsec_…` | Optional: the signing secret of a Resend webhook for `email.bounced` and `email.complained` pointing at `/api/webhooks/resend` (docs/INTEGRATIONS.md) | **Yes** |
+| `OUTREACH_PLATFORM_DAILY_EMAILS`, `OUTREACH_PLATFORM_DAILY_TEXTS` | `500`, `300` (the defaults) | Most partner emails and lead follow-up texts the whole deployment sends in 24 hours, across all workspaces. `0` sends none | No |
 
 `REQUIRE_STAFF_MFA` defaults to `false`: two-step verification is optional, and each user can turn it on for their own account. Set it to `true` to make it mandatory for staff, which is recommended once real client data is stored.
 
@@ -110,6 +113,9 @@ checks.
 | `TWILIO_AUTH_TOKEN` | unset | With `SMS_DRIVER=twilio`: the primary Auth Token. Also verifies Twilio's webhooks | **Yes** |
 | `TWILIO_MESSAGING_SERVICE_SID` | unset | With `SMS_DRIVER=twilio`: `MG…` of the Messaging Service (recommended) | No |
 | `TWILIO_FROM_NUMBER` | unset | Only without a Messaging Service: the sending number as `+15551234567` | No |
+| `VERCEL_API_TOKEN` | unset | Lets agencies connect their own domain without you. See [Custom domains for agencies](#custom-domains-for-agencies) | **Yes** |
+| `VERCEL_PROJECT_ID` | unset | With `VERCEL_API_TOKEN`: this project's ID (Project Settings → General) | No |
+| `VERCEL_TEAM_ID` | unset | With `VERCEL_API_TOKEN`, when the project belongs to a team: the team's ID (Team Settings → General) | No |
 
 ### What production refuses to start with
 
@@ -144,7 +150,7 @@ The app checks its configuration when a server instance starts and on first use 
      cause and redeploy.
 5. Open `https://<your-app>/api/health`. `{"ok":true}` means the app reached the database and the row-level-security
    role exists. `{"ok":false}` (HTTP 503) means it could not: read the function log.
-6. In Vercel → Settings → Cron Jobs, confirm `/api/jobs/run` is listed (twice: 09:00 and 17:00 UTC).
+6. In Vercel → Settings → Cron Jobs, confirm `/api/jobs/run` is listed (twice: 09:00 and 20:00 UTC).
 
 ### Preview deployments
 
@@ -157,7 +163,7 @@ Still do not give Preview deployments the production database: a preview runs un
 requests fail, which is the safe outcome), switch preview deployments off, or give Preview
 its own Supabase project and its own complete set of variables. A Preview with its own database is not migrated by
 the build: migrate it by hand from your computer with that database's `DATABASE_URL` and `DATABASE_CA_CERT`, the same
-way as the command in step 7 but ending in `npm run db:migrate`.
+way as the command in step 8 but ending in `npm run db:migrate`.
 
 ## 6. Create the first owner account
 
@@ -172,7 +178,61 @@ Sign-up is open: anyone who knows the address can create their own, separate wor
 other's data (PostgreSQL row-level security), but if you do not want strangers creating workspaces on your deployment,
 that needs a code change; there is no switch for it today.
 
-## 7. Grant AI credits
+## 7. Approve a workspace for outreach (before it emails leads or partners, or sends any text)
+
+A workspace can switch on its follow-up emails and texts to leads, the email sequence to referral partners and client
+updates by text, but nothing of that is sent until you, the operator, have approved it. Sign-up is open, the enquiry
+form takes any email address and any number, and every workspace sends through your one email service and your one
+text number. So look at the workspace first: a real business, a name that is its own, a partner list it compiled
+itself. Then, from your own computer:
+
+```bash
+DATABASE_URL='postgresql://postgres.<ref>:<password>@aws-0-<region>.pooler.supabase.com:6543/postgres' \
+DATABASE_CA_CERT="$(cat prod-ca-2021.crt)" \
+npm run outreach:approve -- <workspace-slug>            # or: ... -- <workspace-slug> --revoke
+```
+
+Before it approves, the command prints the mailing address and the reply address the workspace has saved: they are
+what its automatic emails carry besides the name. If they are not what you expect of that business, withdraw the
+approval with `--revoke`.
+
+The same thing without a terminal, in the Supabase dashboard (SQL Editor). The slug is the last part of the workspace's
+enquiry form address (`/start/<workspace-slug>`):
+
+```sql
+-- 1. Look first: the name, and the two addresses its emails will carry.
+select name, slug, settings->>'lead_mailing_address' as mailing_address, settings->>'lead_reply_email' as reply_address
+  from public.organizations where slug = '<workspace-slug>';
+
+-- 2. Approve it under the name it has now, and leave the same audit entry the command leaves.
+with approved as (
+  update public.organizations set outreach_approved_at = now(), outreach_approved_name = name
+   where slug = '<workspace-slug>' and mode = 'agency' and status = 'active'
+  returning id, name
+)
+insert into public.audit_logs (org_id, actor_label, action, entity_type, entity_id, metadata)
+select id, 'platform operator (SQL editor)', 'outreach.approved', 'organization', id, jsonb_build_object('name', name) from approved
+returning org_id;   -- one row back means it is approved; none means the slug is wrong or the workspace is not an active agency
+
+-- To withdraw the approval: nothing more is sent. It leaves the same audit entry the command's --revoke leaves.
+with withdrawn as (
+  update public.organizations set outreach_approved_at = null, outreach_approved_name = null
+   where slug = '<workspace-slug>' and outreach_approved_at is not null
+  returning id
+)
+insert into public.audit_logs (org_id, actor_label, action, entity_type, entity_id, metadata)
+select id, 'platform operator (SQL editor)', 'outreach.approval_withdrawn', 'organization', id, '{}'::jsonb from withdrawn
+returning org_id;   -- one row back means it is withdrawn; none means it was not approved, or the slug is wrong
+```
+
+The approval is for the business name shown; if the workspace is renamed, nothing is sent until you approve it again.
+A newly approved workspace sends at most 10 partner emails a day for its first 14 days. What needs the approval: the
+follow-up emails and texts to leads, the partner emails, client updates by text and the test text on the Get set up
+page. A workspace you have not approved emails no lead and no partner and texts no one. What does not need it: emails
+to the workspace's own team and clients (invitations, sign-in emails, client updates by email). Details:
+docs/INTEGRATIONS.md.
+
+## 8. Grant AI credits
 
 AI wording is optional and metered. With `AI_PROVIDER=rules` (the default) nothing needs credits. If you connect an AI
 provider, add credits to a workspace from your own computer, with the repository checked out and `npm install` done:
@@ -188,7 +248,7 @@ The workspace slug is the `org=` part of the client-portal sign-in link shown in
 adds one row to the credit ledger and one to the audit log and prints the new balance. It takes no payment; no payment
 processor is connected.
 
-## 8. Known limits on Vercel
+## 9. Known limits on Vercel
 
 ### Upload size: 4 MB
 Vercel refuses any request body over about 4.5 MB before the app sees it, and the browser shows a generic failure. So
@@ -217,7 +277,10 @@ honest choices:
 
 - `EMAIL_DRIVER=resend` with `RESEND_API_KEY` and `EMAIL_FROM` on a domain verified in Resend. Note: the Resend
   integration is written to Resend's documented API but has **not** been exercised against the live service from this
-  codebase. Send yourself an invitation and a password reset before you rely on it.
+  codebase. Send yourself an invitation and a password reset before you rely on it. When Resend gives no answer (a
+  timeout, a dropped connection, or an HTTP 5xx from a gateway in front of it) the app does not know whether the email
+  went out: an automatic email to a lead or a partner is then never sent again, and the screens say "may or may not
+  have arrived" rather than "failed".
 - `EMAIL_DRIVER=disabled` to launch without an email provider. Nothing is ever sent and the app says so:
   invitations (team and client) show a one-time link for you to pass on; an email to a client is recorded as not
   delivered; automatic lead follow-up stays off; Settings → Integrations shows email as not connected.
@@ -246,14 +309,20 @@ The webhook only works on the production domain; preview deployments have a diff
 not match there and the request is refused.
 
 ### Scheduled jobs: twice a day
-`vercel.json` asks Vercel to call `GET /api/jobs/run` every day at 09:00 and at 17:00 UTC. The second run exists for
-text messages: 09:00 UTC is night-time across the US, when texts are held, so they need a daytime run to go out. Vercel sends
+`vercel.json` asks Vercel to call `GET /api/jobs/run` every day at 09:00 and at 20:00 UTC. The second run exists for
+text messages: 09:00 UTC is night-time across the US, when texts are held, so they need a daytime run to go out, and
+20:00 UTC is the one hour that is daytime from Puerto Rico to Hawaii (3 or 4 p.m. Eastern, 10 a.m. in Honolulu). It was
+17:00 UTC before, which is 7 a.m. in Hawaii and 8 a.m. in Alaska. A run stops starting new work after 40 seconds, so it
+always finishes inside the route's 60; organizations it did not reach come first in the next run. Vercel sends
 `Authorization: Bearer <CRON_SECRET>` using the project's `CRON_SECRET` variable, and the route refuses anything else
 (404 when no secret is configured, 401 when it does not match). Each schedule is daily because Vercel's Hobby plan only
 accepts cron jobs that run once a day, and may run them at any point within the hour. Consequences: automations that
 react to deadlines, reminders and lead follow-ups act up to a day later than on a host that runs the jobs every 15
 minutes. On a paid plan, replace both entries in `vercel.json` with one on `*/15 * * * *` and redeploy. Running the jobs more
-than once is safe. Cron jobs only run for the production deployment.
+than once is safe. Cron jobs only run for the production deployment. The run's result counts what it could not
+finish: `notReached` (organizations it did not get to), `unfinished` (lead emails or client updates left for the next
+run) and `unanswered` (lead or partner email runs that stopped because the email service did not answer). A run that
+keeps reporting `unanswered` points at the email service, not at the app.
 
 To run the jobs by hand: `curl -H "Authorization: Bearer $CRON_SECRET" https://<your-app>/api/jobs/run`.
 
@@ -263,6 +332,124 @@ jobs route. A very large workspace count could outgrow one 60-second jobs run; t
 
 ### Connections
 Each function instance holds at most 3 database connections (`DB_POOL_MAX`) and releases idle ones after 5 seconds.
+
+## The platform's own domain
+
+To serve the app from your own domain (for example `disputeos.com`) instead of `<project>.vercel.app`:
+
+1. Vercel → the project → Settings → Domains → add the domain, and create the DNS records Vercel shows at your
+   registrar. Add both `disputeos.com` and `www.disputeos.com` and let Vercel redirect one to the other.
+2. Set `APP_URL` to the address people should use (`https://disputeos.com`, no trailing slash), for Production.
+3. Redeploy. Environment variables only reach a new deployment.
+
+Do the three steps together. `APP_URL` is what tells the app which host is the platform: its host (with or without
+`www.`), `*.vercel.app` deployment addresses and `localhost` are the platform, and **any other host is treated as an
+agency's domain**. So a new domain that is in Vercel but not yet in `APP_URL` shows "page not found" at `/` and sends
+`/login` to the old address until you finish step 2 and 3. The `<project>.vercel.app` address keeps working.
+
+What else follows `APP_URL`, and must be updated when it changes:
+
+- **Twilio webhook.** The inbound-message and status address is `APP_URL` + `/api/webhooks/twilio`, and Twilio's
+  signature is checked against exactly that address. Change it in the Twilio Console (Messaging Service → Integration,
+  or the number's Messaging settings) to the new domain, or text replies (including STOP) are refused.
+- **Links in email and text messages**: invitations, password resets, unsubscribe links and the portal link in client
+  updates are written with `APP_URL`. Links already sent keep the old host, which still works as long as the old
+  address stays on the project.
+- **Canonical addresses, the sitemap and robots.txt** of the product's own pages and of agency sites without their
+  own domain.
+- **Sessions are per host.** Nobody is signed out on the old address, but signing in on the new one is a new session.
+- Email sending is separate: the sending domain is whatever you verified in Resend (`EMAIL_FROM`), not `APP_URL`.
+
+## Custom domains for agencies
+
+An agency can use a domain it already owns for its public website (`https://www.youragency.com/`), its enquiry form
+(`/start`) and its clients' sign-in (`/portal/login`). Its address on the platform (`/a/<workspace>`) keeps working.
+Staff tools stay on the platform: `/app`, `/login`, `/signup` and every other path on an agency's domain redirect to
+`APP_URL`. Buying a domain is not built in, and email is not sent from the agency's domain.
+
+A domain serves an agency only when its row in `agency_domains` is `verified`. Two things have to be true before a
+row becomes verified, whichever of the two ways below connects it:
+
+- **The DNS points at this deployment.** Vercel says so, or your own check does. Every workspace is given the same
+  DNS target, so this alone says nothing about which workspace the domain belongs to.
+- **The workspace's ownership record is in the domain's DNS.** It is a `TXT` record named `_disputeos` in front of
+  the domain without a leading `www.`: `_disputeos.youragency.com` for both `youragency.com` and
+  `www.youragency.com`, `_disputeos.clients.youragency.com` for `clients.youragency.com`. Its value is different for
+  every workspace and every domain (a keyed hash of the two, made with `PII_ENCRYPTION_KEY`), and the agency's
+  Website page shows it with the other records. Only someone who manages the domain's DNS can create it, so it is
+  what ties the domain to that workspace. Another workspace that enters the same name is shown a different value, and
+  the records the first one created never verify it.
+
+The record is asked for when a domain becomes verified, not again afterwards: a verified domain stays verified until
+the agency removes it or **Check now** finds that its DNS no longer points here. If you rotate `PII_ENCRYPTION_KEY`
+the values change. Records made with the previous key still count while `PII_ENCRYPTION_KEY_PREVIOUS` is set; after
+that, a domain that is not verified yet needs the new value from its Website page. Verified domains are not affected.
+
+### Automatic (recommended)
+
+Set `VERCEL_API_TOKEN` (Account Settings → Tokens; scope it to the team that owns the project) and
+`VERCEL_PROJECT_ID`, plus `VERCEL_TEAM_ID` when the project belongs to a team, then redeploy. Settings → Integrations
+then lists custom domains as connected. From then on, on the agency's **Website** page:
+
+1. The agency types its domain and presses **Connect domain**. The app adds it to this Vercel project
+   (`POST /v10/projects/{id}/domains`).
+2. The page shows the DNS records to create at the registrar. The pointing record uses the values Vercel recommends
+   for this project: an `A` record on `@` for a root domain (Vercel's general value is `76.76.21.21`), or a `CNAME`
+   for a subdomain such as `www` (general value `cname.vercel-dns.com`). Next to it is the workspace's `TXT` record
+   on `_disputeos`. If the domain is already in use on another Vercel account, Vercel also asks for a `TXT` record on
+   `_vercel`, and the page shows that too.
+3. **Check now** asks Vercel again and looks up the `_disputeos` record. The domain is marked connected only when
+   Vercel reports it verified (ownership) and not misconfigured (DNS points at Vercel and a certificate can be
+   issued), and the `TXT` record holds this workspace's value. Vercel issues the certificate itself. If the lookup
+   itself fails, nothing is marked and the page says the domain's DNS could not be read.
+4. **Remove domain** removes it from the Vercel project too. The DNS records stay at the agency's registrar until the
+   agency deletes them; left in place, they verify the domain for nobody else.
+
+Who may hold a name:
+
+- A verified domain, and its `www` twin, cannot be connected by another workspace until the workspace that has it
+  removes it.
+- A domain that is saved but not verified is held for its workspace for 24 hours. After that the next workspace that
+  enters the name takes it over. Before it is handed over it is checked with Vercel one last time, and if its DNS has
+  become good with its holder's own `TXT` record in place, it is verified for its holder instead.
+- A workspace whose `TXT` record is already in the domain's DNS does not have to wait out another workspace's 24
+  hours. The refusal it gets names the record to create; with that record in place, **Connect domain** gives it the
+  name at once.
+- Taking a name over never verifies it. The new holder needs its own `TXT` record like anyone else.
+
+A domain that is already on the project but was not added by the app (for example your own) is refused. Only the
+exact name is connected; the page tells the agency to forward the other form (`youragency.com` →
+`www.youragency.com`) at its registrar.
+
+### By hand (no API token)
+
+Without the token the agency can still save its domain; the page says plainly that it is not live until you add it.
+Who may hold a name is decided as above, except that there is no last check with Vercel before a name changes hands.
+
+1. The agency saves the domain on its Website page (it shows as "Not connected yet") and creates the `TXT` record on
+   `_disputeos` that the page shows.
+2. You add the domain in Vercel → the project → Settings → Domains, and send the agency the pointing record Vercel
+   shows (the page shows Vercel's general value for it).
+3. When Vercel shows the domain as valid, run, with the production `DATABASE_URL` and the app's
+   `PII_ENCRYPTION_KEY` in your environment (and `PII_ENCRYPTION_KEY_PREVIOUS`, if the app has one):
+
+   ```
+   npm run domain:verify -- www.youragency.com
+   ```
+
+   It first prints the workspace that holds the domain. Check that it is the agency you are doing this for: a name
+   that was saved more than a day ago and never verified may have been taken over by another workspace since. It
+   then requests `https://www.youragency.com/api/domain-check` and looks up the `TXT` record, and marks the domain
+   verified only if this deployment answers there for that domain over a valid certificate and the record holds
+   that workspace's value. Otherwise it says what it found and changes nothing. Without `PII_ENCRYPTION_KEY` it
+   stops before checking anything: it cannot work out the value the record has to hold.
+4. To disconnect: the agency presses **Remove domain**, and you remove the domain in Vercel.
+
+Running servers pick up a newly verified or removed domain within a minute.
+
+Not verified here: the number of domains a project may hold on your Vercel plan (see Vercel's limits page);
+wildcard domains, which this feature does not use; and the `TXT` lookup against live DNS from Vercel's runtime (it
+is tested against a stand-in for DNS only).
 
 ## What has not been verified
 
@@ -283,5 +470,8 @@ Not verified, because it needs the real services:
   the cron frequency allowed on your plan, and that multi-line `DATABASE_CA_CERT` survives the dashboard unchanged
   (a single line with `\n` in place of line breaks is also accepted).
 - Resend delivery.
+- Custom domains: the Vercel domains API (adding, verifying, removing) is implemented to its documentation and tested
+  against a mocked API only; routing by `Host` is tested as a pure function and against the database, not behind
+  Vercel's edge with a real domain. Check the first agency domain by hand after connecting it.
 - Twilio: sending, delivery reports and the inbound webhook. Tested against a mocked API and Twilio's documented
   signature example only. Also not verified: that your Vercel plan accepts two cron entries for the same path.

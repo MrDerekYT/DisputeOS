@@ -20,6 +20,8 @@
     "env:setup": "bash scripts/setup-local-db.sh",
     "jobs:run": "node scripts/run-jobs.mjs",
     "credits:grant": "node scripts/grant-credits.mjs",
+    "outreach:approve": "node scripts/approve-outreach.mjs",
+    "domain:verify": "node scripts/verify-domain.mjs",
     "secrets:gen": "node scripts/gen-secrets.mjs",
     "check": "npm run typecheck && npm run lint && npm test && npm run build"
   },
