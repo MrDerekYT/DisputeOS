@@ -57,7 +57,7 @@ export async function leadAskedToStopAction(fd: FormData) {
     const changed = await db.run('update public.clients set outreach_opt_out_at = now() where id = $1 and outreach_opt_out_at is null', [d.id]);
     const revoked = await revokeSmsConsent(db, { orgId: ctx.orgId, clientId: d.id, userId: ctx.userId, via: 'asked_to_stop', ip: ctx.meta.ip });
     if (!changed && !revoked) return;
-    await logEvent(db, ctx, d.id, 'lead_opt_out', `Asked not to be contacted automatically (recorded by the team). No automatic email or text follows${revoked ? '; their agreement to text messages was withdrawn' : ''}.`);
+    await logEvent(db, ctx, d.id, 'lead_opt_out', `Asked not to be contacted automatically (recorded by the team). No automatic follow-up email or text follows${revoked ? '; their agreement to text messages was withdrawn' : ''}.`);
     await audit(db, { orgId: ctx.orgId, actorId: ctx.userId, action: 'lead.opted_out', entityType: 'client', entityId: d.id, ip: ctx.meta.ip, meta: { sms_consent_withdrawn: revoked } });
   });
   revalidatePath('/app/leads');

@@ -306,7 +306,8 @@ describe('partner emails: wording', () => {
     expect(partnerBlocker(on(ADDRESS), true, approved)).toBeNull();
     expect(partnerBlocker(on(ADDRESS), true, approved, 'https://app.example.com/a/hill-credit-a1b')).toBeNull();
     expect(partnerBlocker(on(ADDRESS), true, approved, 'https://app.example.com/a/free-credit-help-a1b')).toBe('site_claim');
-    expect(partnerBlocker(on('100 Guarantee Blvd, Tampa, FL 33606'), true, approved)).toBe('address_claim');
+    // A promise in the address is refused by the address rule itself (src/lib/mailing-address.ts), so it reads as no address.
+    expect(partnerBlocker(on('100 Guarantee Blvd, Tampa, FL 33606'), true, approved)).toBe('no_address');
     expect(partnerBlocker(on(ADDRESS), true, { ...approved, name: 'Guaranteed Credit Fix', outreach_approved_name: 'Guaranteed Credit Fix' }, 'https://live-debt-free.com')).toBe('name_claim');
     // Whatever is in the way first is still reported first.
     expect(partnerBlocker(on(ADDRESS), false, approved, 'https://live-debt-free.com')).toBe('email_not_connected');

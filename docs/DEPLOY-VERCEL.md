@@ -214,8 +214,15 @@ insert into public.audit_logs (org_id, actor_label, action, entity_type, entity_
 select id, 'platform operator (SQL editor)', 'outreach.approved', 'organization', id, jsonb_build_object('name', name) from approved
 returning org_id;   -- one row back means it is approved; none means the slug is wrong or the workspace is not an active agency
 
--- To withdraw the approval: nothing more is sent.
-update public.organizations set outreach_approved_at = null, outreach_approved_name = null where slug = '<workspace-slug>';
+-- To withdraw the approval: nothing more is sent. It leaves the same audit entry the command's --revoke leaves.
+with withdrawn as (
+  update public.organizations set outreach_approved_at = null, outreach_approved_name = null
+   where slug = '<workspace-slug>' and outreach_approved_at is not null
+  returning id
+)
+insert into public.audit_logs (org_id, actor_label, action, entity_type, entity_id, metadata)
+select id, 'platform operator (SQL editor)', 'outreach.approval_withdrawn', 'organization', id, '{}'::jsonb from withdrawn
+returning org_id;   -- one row back means it is withdrawn; none means it was not approved, or the slug is wrong
 ```
 
 The approval is for the business name shown; if the workspace is renamed, nothing is sent until you approve it again.

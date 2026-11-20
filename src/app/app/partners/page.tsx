@@ -8,7 +8,7 @@ import { Badge, EmptyState, Notice, PageHeader, Pagination, Section, Stat } from
 import { publicSiteBySlug, siteHome } from '@/lib/agency-site';
 import { requireStaff } from '@/lib/auth/context';
 import { emailIsLive } from '@/lib/lead-outreach';
-import { MAILING_ADDRESS_MAX } from '@/lib/mailing-address';
+import { mailingAddressIssue, MAILING_ADDRESS_MAX } from '@/lib/mailing-address';
 import { APPROVAL_COLS, APPROVAL_NEEDED, isNewlyApproved, NEW_WORKSPACE_DAILY_EMAILS, NEW_WORKSPACE_DAYS, outreachApproval, type ApprovalRow } from '@/lib/outreach-approval';
 import {
   decidePartnerStep, PARTNER_CATEGORIES, PARTNER_CATEGORY_LABEL, PARTNER_DAILY_CAP, PARTNER_FAILURE_HOLD_HOURS, PARTNER_PER_RUN_CAP, PARTNER_RUN_FAILURE_LIMIT, PARTNER_STATUSES, PARTNER_STATUS_LABEL, partnerWordingIssue,
@@ -66,6 +66,9 @@ export default async function PartnersPage({ searchParams }: { searchParams: Pro
   const n = (s: PartnerStatus) => byStatus.find((b) => b.status === s)?.n ?? 0;
   const all = byStatus.reduce((sum, b) => sum + b.n, 0);
   const settings = partnerSettings(org.settings);
+  // A saved address that does not have the shape of a postal address reads as none; it is shown with what is wrong.
+  const savedAddress = typeof org.settings.lead_mailing_address === 'string' ? org.settings.lead_mailing_address.trim() : '';
+  const addressProblem = !settings.address && savedAddress ? mailingAddressIssue(savedAddress) : null;
   const live = emailIsLive();
   // The introduction and the follow-up link to the agency's published website, so its address is checked with the rest.
   const site = settings.enabled ? await publicSiteBySlug(org.slug) : null;
@@ -95,7 +98,7 @@ export default async function PartnersPage({ searchParams }: { searchParams: Pro
   // Why the sequence is not sending, in a few words (null when it is, or when it is simply off).
   const why = !settings.enabled ? null
     : approval !== 'approved' ? APPROVAL_NEEDED[approval]
-    : blocker === 'no_address' ? 'A postal address is required: nothing is sent until you save one below.'
+    : blocker === 'no_address' ? (addressProblem ? `The saved mailing address cannot be used, so nothing is sent. ${addressProblem}` : 'A postal address is required: nothing is sent until you save one below.')
     : blocker === 'no_reply' ? 'A reply address is required: nothing is sent until you save one below.'
     : !live ? 'Email is not connected, so nothing is being sent.'
     : blocker === 'name_claim' ? `Your business name cannot be used in these emails. ${claim} Change the name in Settings.`
@@ -142,7 +145,7 @@ export default async function PartnersPage({ searchParams }: { searchParams: Pro
           {ctx.can('settings:manage') ? (
             <ActionForm action={savePartnerOutreachAction} className="mt-4 space-y-4 border-t border-line pt-4">
               <Check name="enabled" defaultChecked={settings.enabled}>Send the email sequence to partners automatically</Check>
-              <Field label="Mailing address shown in every email" name="address" maxLength={MAILING_ADDRESS_MAX} defaultValue={settings.address} placeholder="Street, city, state, ZIP" hint="Commercial email has to show a physical postal address (CAN-SPAM). Enter yours on one line, from the street number or PO Box to the state and ZIP code. It is the same address your lead follow-up uses." />
+              <Field label="Mailing address shown in every email" name="address" maxLength={MAILING_ADDRESS_MAX} defaultValue={settings.address || savedAddress} placeholder="Street, city, state, ZIP" hint="Commercial email has to show a physical postal address (CAN-SPAM). Enter yours on one line, from the street number or PO Box to the state and ZIP code. It is the same address your lead follow-up uses." />
               <Field label="Reply email address" name="replyTo" type="email" maxLength={254} defaultValue={settings.replyTo} placeholder="you@yourbusiness.com" hint="When a partner answers, the reply goes here." />
               <SubmitButton>Save</SubmitButton>
             </ActionForm>

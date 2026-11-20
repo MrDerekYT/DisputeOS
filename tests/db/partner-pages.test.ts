@@ -8,6 +8,7 @@ import { resetEnvCache } from '@/lib/env';
 import { leadTextsOfferedBySlug, runLeadTexts } from '@/lib/lead-outreach';
 import { submitLead } from '@/lib/leads';
 import type { Email, SendResult } from '@/lib/mailer';
+import { MAILING_ADDRESS_HELP } from '@/lib/mailing-address';
 import { PARTNER_ATTESTATION, type PartnerInput } from '@/lib/partner-import';
 import { addPartners, optOutPartner, partnerOptOutToken, runPartnerOutreach } from '@/lib/partner-outreach';
 import { markPartner, setReferredBy } from '@/lib/partners';
@@ -209,18 +210,17 @@ describe('Partners pages render from real data', () => {
       expect(await page()).toContain('On and sending');
       expect(read(await PartnerPage({ params: Promise.resolve({ id: waiting }) }))).toContain('Goes out with the next scheduled run');
 
-      // A mailing address the claims guard would refuse under every email is named too.
-      const b = await agency('PagesAddressClaim', { ...ON, lead_mailing_address: '100 Guarantee Blvd, Tampa, FL 33606' });
-      signIn(b);
-      expect(await page()).toContain('Your mailing address cannot be printed in these emails as it is written. Results cannot be guaranteed. (“Guarantee”)');
-      // Saved text that is not a postal address (from before the forms refused it) reads as none: the page asks for
-      // one, and the form does not offer the old text back.
+      // Saved text that is not a postal address (from before the forms refused it) reads as none. The page says why,
+      // and the form shows the saved text so it can be corrected.
       const c = await agency('PagesAddressJunk', { ...ON, lead_mailing_address: 'URGENT: sign in at https://secure-escrow-verify.example/login today' });
       signIn(c);
-      expect(await page()).toContain('A postal address is required: nothing is sent until you save one below.');
+      expect(await page()).toContain('The saved mailing address cannot be used, so nothing is sent. A mailing address cannot contain a web address.');
       const formHtml = markup(await PartnersPage({ searchParams: Promise.resolve({}) }));
-      expect(formHtml).not.toContain('secure-escrow-verify');
-      expect(formHtml).toMatch(/<input[^>]*maxLength="160"[^>]*name="address" value=""\/>/);
+      expect(formHtml).toMatch(/<input[^>]*maxLength="160"[^>]*name="address" value="URGENT: sign in at https:\/\/secure-escrow-verify\.example\/login today"\/>/);
+      // A promise is refused by the address rule itself, with the reason.
+      const g = await agency('PagesAddressPromise', { ...ON, lead_mailing_address: '100 Guarantee Blvd, Tampa, FL 33606' });
+      signIn(g);
+      expect(await page()).toContain('The saved mailing address cannot be used, so nothing is sent. A mailing address cannot carry a promise or an offer: Results cannot be guaranteed.');
 
       // Too many bounces: counted since the approval, and the page says it does not start again by itself.
       const d = await agency('PagesBounces', ON);
@@ -425,7 +425,7 @@ describe('Leads page with text follow-up', () => {
     expect(await withSystem((db) => db.row('select (outreach_opt_out_at is not null) as stopped from public.clients where id = $1', [lead]))).toEqual({ stopped: true });
     expect(await withSystem((db) => db.rows('select source, revoked_via, (revoked_at is not null) as revoked from public.sms_consents where client_id = $1', [lead]))).toEqual([{ source: 'enquiry_form', revoked_via: 'asked_to_stop', revoked: true }]);
     expect((await withSystem((db) => db.rows<{ summary: string }>("select summary from public.client_events where client_id = $1 and kind = 'lead_opt_out'", [lead]))).map((e) => e.summary))
-      .toEqual(['Asked not to be contacted automatically (recorded by the team). No automatic email or text follows; their agreement to text messages was withdrawn.']);
+      .toEqual(['Asked not to be contacted automatically (recorded by the team). No automatic follow-up email or text follows; their agreement to text messages was withdrawn.']);
     await withSystem((db) => db.run("update public.lead_outreach set created_at = created_at - interval '4 days', sent_at = sent_at - interval '4 days' where client_id = $1", [lead]));
     expect((await runLeadTexts(a.orgId, { now: new Date(`${tomorrow}T20:00:00Z`) })).sent).toBe(0);
     // Pressed again, it records nothing twice.
@@ -545,7 +545,7 @@ describe('partner actions, as the forms call them', () => {
   });
 
   it('the mailing address has to be shaped like a postal address, on the Partners form and on the Leads form', async () => {
-    const HELP = 'Enter the postal address your business receives mail at, starting with the street number or PO Box and ending with the state and ZIP code, for example "500 Bayshore Blvd, Suite 210, Tampa, FL 33606". It is printed in every automatic email.';
+    const HELP = MAILING_ADDRESS_HELP;
     const URGENT = 'URGENT: your escrow account is on hold. Sign in at https://secure-escrow-verify.example/login today or the closing is cancelled.';
     const NOT_ADDRESSES: [string, string][] = [
       ['x', HELP], ['n/a', HELP], ['12 Main St, Austin, TX', HELP], [URGENT, `A mailing address cannot contain a web address. ${HELP}`],

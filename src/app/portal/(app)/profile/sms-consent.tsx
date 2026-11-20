@@ -20,11 +20,24 @@ export async function SmsConsentCard({ ctx, clientId, phone, lang, t }: { ctx: C
     org: await db.row<ApprovalRow>(`select ${APPROVAL_COLS} from public.organizations where id = $1`, [ctx.orgId]),
   }));
   const active = history.find((h) => !h.revoked_at);
-  if (!active && !(smsUsable() && outreachApproved(org))) return null;
+  // Whether a text can leave at all. When it cannot, a consent on file is shown as paused, never as "On".
+  const canSend = smsUsable() && outreachApproved(org);
+  if (!active && !canSend) return null;
   // A consent on file for a number that is not a US one sends nothing, so it reads as off here.
   const e164 = toUsE164(phone);
   const changed = !!active && e164 !== active.phone;
   const last = history[0];
+  if (!canSend) {
+    // Only reached with a consent on file: nothing to offer, only the withdrawal.
+    return (
+      <Section title={t('sms_title')} id="sms">
+        <div className="flex flex-wrap items-center gap-2"><Badge tone="neutral">{t('sms_paused')}</Badge></div>
+        <p className="mt-2 text-sm text-muted">{t('sms_intro')}</p>
+        <p className="mt-3 text-sm">{t('sms_pausedNote')}</p>
+        <ActionForm action={portalSmsOptOutAction} className="mt-3"><SubmitButton variant="secondary">{t('sms_turnOff')}</SubmitButton></ActionForm>
+      </Section>
+    );
+  }
   return (
     <Section title={t('sms_title')} id="sms">
       <div className="flex flex-wrap items-center gap-2"><Badge tone={active && !changed ? 'ok' : 'neutral'}>{active && !changed ? t('sms_on') : t('sms_off')}</Badge></div>

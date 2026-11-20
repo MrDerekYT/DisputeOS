@@ -1,6 +1,6 @@
 # Changelog
 
-## Referral partners, text follow-up, and the operator's approval for outreach (unreleased, uncommitted)
+## Referral partners, text follow-up, and the operator's approval for outreach (unreleased)
 
 Migration `0028_partner_outreach.sql`: additive and safe to run again. Four new tables (`partners`, `partner_outreach`,
 `partner_events`, `partner_referrals`), two columns on `organizations` for the operator's approval, one more source for
@@ -49,9 +49,10 @@ docs/INTEGRATIONS.md, "Referral partners and lead text follow-up".
   claimed, and the Partners page names what is in the way. A city whose name reads as a claim is refused when the
   partner is added.
 - **The mailing address** printed in automatic emails (`src/lib/mailing-address.ts`) has to be shaped like a US postal
-  address, from the street number or PO Box to the state and ZIP code: no web address, no sentence, no message in
-  front of it. It is checked when it is saved and again
-  when it is read, so a value saved earlier that does not pass counts as no address and the emails wait for a real one.
+  address: from the street number or a box (PO Box, PMB, rural route, suite, the Puerto Rico forms) to the state and the
+  ZIP code, with no web address, no phone number, nothing the claims check refuses, and only a few words between
+  commas. It is checked when it is saved and again when it is read: a value saved earlier that does not pass counts as
+  no address, and the Leads and Partners pages show it with what is wrong so it can be corrected.
 - **Replies and referrals.** Replies go to the agency's own mailbox, so staff record them: "They replied",
   "Interested", "Not interested", "Bounced". A client can be marked as referred by a partner (client page), and each
   partner shows how many.
@@ -79,7 +80,7 @@ docs/INTEGRATIONS.md, "Referral partners and lead text follow-up".
 - **Not verified**: nothing here has been sent through the live Resend or Twilio services, and the Resend webhook has
   not received a real event; tests use stand-ins for both.
 
-## Letters tailored to each client's file (unreleased, uncommitted)
+## Letters tailored to each client's file (unreleased)
 
 No migration. The setting lives in `organizations.settings.letter_auto_tailor`; everything else reads existing tables.
 
@@ -141,7 +142,7 @@ No migration. The setting lives in `organizations.settings.letter_auto_tailor`; 
   often a real model's result passes the word list is not known. The new screens were type-checked, linted, rendered
   in tests and opened in a browser against demo data; the AI screens were opened with no provider connected.
 
-## English letter library, personal information corrections, bank-account guide (unreleased, uncommitted)
+## English letter library, personal information corrections, bank-account guide (unreleased)
 
 - **Letters are English only.** The Spanish letter templates and the language switch on letters are gone: a client's
   preferred language no longer selects a letter language. The portal, texts and emails keep their languages. Letters
@@ -191,7 +192,7 @@ No migration. The setting lives in `organizations.settings.letter_auto_tailor`; 
   Warning because none has been confirmed at its source (`Agency.recordRetention` is there for when one is).
   Migration 0026 (`bank_collection_cases`, additive, staff only). Nothing is drafted or sent automatically.
 
-## Review fixes for setup, custom domains and case tools (unreleased, uncommitted)
+## Review fixes for setup, custom domains and case tools (unreleased)
 
 - **Test text**: sent to US mobile numbers only, only for a workspace the operator has approved, never to a number
   that replied STOP, and without the workspace name in it. Capped per workspace (3 a day) and for the whole deployment
@@ -224,7 +225,7 @@ No migration. The setting lives in `organizations.settings.letter_auto_tailor`; 
 - **Dashboard setup reminder** counts only what the workspace can do itself (its mailing address, reply address,
   time zone, and its own test once the provider is connected), not the host's environment settings.
 
-## Case tools: collector validation clock, medical collection screen, bankruptcy audit (unreleased, uncommitted)
+## Case tools: collector validation clock, medical collection screen, bankruptcy audit (unreleased)
 
 - **Collector validation period** (client record, Reports tab, "Collections and bankruptcy"): staff record a debt
   collector's notice (received date, or sent date with receipt presumed 5 days later, not counting Saturdays, Sundays
@@ -244,7 +245,7 @@ No migration. The setting lives in `organizations.settings.letter_auto_tailor`; 
   they stop applying, never recreated after a person dismisses them); an open validation period is a step in the
   client plan. Credit guide: new "medical collections" entry, and the debt validation and bankruptcy entries updated.
 
-## Agency custom domains (unreleased, uncommitted)
+## Agency custom domains (unreleased)
 
 - **An agency can use its own domain** for its website (`/`), enquiry form (`/start`) and client sign-in
   (`/portal/login`). The `/a/<workspace>` address keeps working. Staff routes on an agency's domain redirect to the
@@ -258,7 +259,7 @@ No migration. The setting lives in `organizations.settings.letter_auto_tailor`; 
 - **Not built:** buying a domain, sending email from the agency's domain, automatic handling of the www/apex twin.
   The Vercel API calls are tested against a mocked API only. Docs: docs/DEPLOY-VERCEL.md.
 
-## Get set up page (unreleased, uncommitted)
+## Get set up page (unreleased)
 
 - **`/app/setup`** (owners and admins): an ordered checklist for email, text messages and agency basics, built from the
   real configuration by a pure function (`src/lib/setup/checklist.ts`). It shows environment variable names and
@@ -271,7 +272,7 @@ No migration. The setting lives in `organizations.settings.letter_auto_tailor`; 
   communication, queue row or consent. An accepted test stores a timestamp in `organizations.settings`; a refused one removes it.
 - Linked from the dashboard (one line, only while a step is left) and from Settings → Integrations. No migration.
 
-## Review fixes to the five new features (unreleased, uncommitted)
+## Review fixes to the five new features (unreleased)
 
 Twelve reviewer findings on client updates, the dispute clock, the charge check and fall-off dates; all twelve were
 real. Migrations 0018, 0019 and 0020 (none of them deployed yet) were edited in place and stay additive and safe to
@@ -309,7 +310,7 @@ run again.
 - **Not done:** no automatic text confirming an opt-out worded in free text (Twilio only confirms its own keywords).
   Nothing was sent through live Twilio or Resend.
 
-## Protect your file: freezes, fraud alerts and opt-outs the client places personally (unreleased, uncommitted)
+## Protect your file: freezes, fraud alerts and opt-outs the client places personally (unreleased)
 
 Migration 0022 (additive, safe to run again, no superuser): `clients.file_protections` (jsonb, default `{}`) and a
 trigger that lets only the client write it, and only as option -> day. No table, no policy change.
@@ -328,7 +329,7 @@ trigger that lets only the client write it, and only as option -> day. No table,
 - **Credit guide**: the freeze and fraud alert entries now say what they do not do and link to the page; new entries
   for the prescreen opt-out (15 U.S.C. 1681b(e)) and for freeze vs fraud alert vs opt-out vs dispute.
 
-## Work statement, charge check and evidence pack (unreleased, uncommitted)
+## Work statement, charge check and evidence pack (unreleased)
 
 Migration 0020 (additive, safe to run again, no superuser): `clients.sold_by_phone` (nullable = not answered, staff-only by
 trigger) and two narrow read functions, `app.client_document_reviews` and `app.client_portal_signins`. No table, no
@@ -356,7 +357,7 @@ policy change. The statement is never stored; it is built on request from existi
 - **Changed**: the new-plan form on Billing no longer preselects "Monthly"; the person chooses. Billing states that
   pricing and billing practices are the agency's responsibility. No fee model is built or recommended.
 
-## Reinsertion watch, date-of-first-delinquency check and fall-off dates (unreleased, uncommitted)
+## Reinsertion watch, date-of-first-delinquency check and fall-off dates (unreleased)
 
 No migration: the existing `findings`, `tradelines` and `public_records` columns hold everything (0021 is unused).
 
@@ -377,7 +378,7 @@ No migration: the existing `findings`, `tradelines` and `public_records` columns
 - **Changed**: the "older than 7 years" finding now uses the same arithmetic, so a collection or charge-off is flagged
   only after 7 years plus 180 days. "Charged off" (with a d) is now recognised as negative.
 
-## Legal clock, optional next steps and letter specificity check (unreleased, uncommitted)
+## Legal clock, optional next steps and letter specificity check (unreleased)
 
 Every deadline on a dispute with a credit bureau or specialty agency is now computed in one pure module with its
 section of 15 U.S.C. § 1681i beside it. Migration 0019 (additive, safe to run again, no superuser): outcome
@@ -402,7 +403,7 @@ section of 15 U.S.C. § 1681i beside it. Migration 0019 (additive, safe to run a
 - **Frivolous or irrelevant notice**: staff type what the agency said was missing; that becomes a task and a document
   request the client sees. Portal outcome text added in English and Spanish.
 
-## Client updates by text message and email (unreleased, uncommitted)
+## Client updates by text message and email (unreleased)
 
 Clients can be told by text and by email that there is something new in their portal. Off everywhere until switched on.
 Migration 0018 (additive, safe to run again, no superuser): `sms_consents`, `client_updates`, `sms_inbound`, an index
@@ -428,7 +429,7 @@ on client phone digits, and the inbound-message trigger now says "text message" 
   keywords follow its documentation (signature checked against the documented example). Delivery right after a request
   (Next.js `after`) was not exercised in a running server; the scheduled job path is covered by tests.
 
-## Review fixes for agency websites, intake documents and specialty agencies (unreleased, uncommitted)
+## Review fixes for agency websites, intake documents and specialty agencies (unreleased)
 
 - **Website claims check rewritten.** It no longer deletes text before checking. A guarantee word (English, Spanish,
   and the "guarentee" misspelling) passes only when a negation directly governs it ("no result is guaranteed", "we
@@ -452,7 +453,7 @@ on client phone digits, and the inbound-message trigger now says "text message" 
   as such in `src/lib/intake.ts`. The agency pages could not be opened from the build environment at all, so the
   ChexSystems, Early Warning and NCTUE addresses and quotations rest on the review, not on a second reading.
 
-## Specialty reporting agencies (unreleased, uncommitted)
+## Specialty reporting agencies (unreleased)
 
 Disputes are no longer limited to the three credit bureaus. Migration 0017 (additive): `disputes.agency`, `agency_item`
 and `recipient_address`; `agency` added to the dispute target types and `specialty` to the workflows;
@@ -474,7 +475,7 @@ three-bureau check are unchanged, so every existing dispute, report, comparison 
   client plan suggests requesting the ChexSystems and LexisNexis reports only when the concern box is ticked.
 - No data feed from any of these agencies exists; see docs/INTEGRATIONS.md.
 
-## Identity document intake (unreleased, uncommitted)
+## Identity document intake (unreleased)
 
 The identity documents a credit bureau normally asks for with a mailed dispute are collected from day one. Migration
 0015 (additive): `documents.review_note`, `doc_date`, `expires_on`, and three more document kinds (`previous_address`,
@@ -496,7 +497,7 @@ The identity documents a credit bureau normally asks for with a mailed dispute a
   attached to the PDF.
 - e2e: `journey.cjs` and `dispute-workflow.cjs` tick the new confirmation before "Record submission".
 
-## Agency websites (unreleased, uncommitted)
+## Agency websites (unreleased)
 
 Every agency workspace can publish its own public website, hosted by the app at `/a/<workspace-slug>`. No migration:
 the content is one key (`website`) in `organizations.settings`, so the existing tenant policies decide who may edit it.
@@ -517,7 +518,7 @@ the content is one key (`website`) in `organizations.settings`, so the existing 
 - **Not built:** custom domains (listed as manual under Settings → Integrations) and a per-agency link-preview image
   (previews use the app's default image).
 
-## Vercel + Supabase readiness (unreleased, uncommitted)
+## Vercel + Supabase readiness (unreleased)
 
 Everything needed to run on Vercel (serverless, no persistent disk) against a Supabase database through its connection
 pooler. Step-by-step guide and the full variable table: `docs/DEPLOY-VERCEL.md`. Not yet exercised against the real services.
@@ -542,7 +543,7 @@ pooler. Step-by-step guide and the full variable table: `docs/DEPLOY-VERCEL.md`.
 - **Production on Vercel refuses** disk storage, a missing `CRON_SECRET` and an upload limit above 4 MB.
 - `npm run secrets:gen` prints fresh values for the generated secrets (writes no file).
 
-## Night Desk redesign: review fixes (unreleased, uncommitted)
+## Night Desk redesign: review fixes (unreleased)
 
 Fixes from the design, accessibility and accuracy review of the redesign. Presentation only, except where noted.
 
@@ -574,7 +575,7 @@ Fixes from the design, accessibility and accuracy review of the redesign. Presen
 - **Portal colour:** the picker starts from the product colour (#3b49d1) and submits nothing until a colour is actually chosen, so
   saving another setting cannot quietly store a brand colour. "Use the standard colour" clears a chosen one.
 
-## 0.2.0 — Product takeover (unreleased, uncommitted)
+## 0.2.0 — Product takeover (unreleased)
 
 Consolidates the two diverged Copilot branches (`copilot/disputeos-phase-1-scaffold-auth`, `mrderekyt-disputeos-preview`)
 into one codebase. Both branches are untouched. See `docs/ENGINEERING_ASSESSMENT.md` for the audit.

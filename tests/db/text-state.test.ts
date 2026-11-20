@@ -6,6 +6,7 @@ import type { SessionInfo } from '@/lib/auth/service';
 import { grantSmsConsent } from '@/lib/client-updates/service';
 import { TEXTS_NEED_APPROVAL } from '@/lib/client-updates/templates';
 import { resetEnvCache } from '@/lib/env';
+import { tr } from '@/lib/portal-i18n';
 import { can, type Role } from '@/lib/rbac';
 import { toUsE164 } from '@/lib/sms';
 import { addClient, addMember, approveOutreach, asUser, closePool, makeOrg, withSystem, type TestOrg } from './helpers';
@@ -27,6 +28,7 @@ vi.stubGlobal('React', React);
 
 import { SmsConsentBlock } from '@/app/app/clients/[id]/sms-consent-block';
 import SetupPage from '@/app/app/setup/page';
+import { SmsConsentCard } from '@/app/portal/(app)/profile/sms-consent';
 
 const saved = { ...process.env };
 function useEnv(env: Record<string, string>) { process.env = { ...saved, ...env }; resetEnvCache(); }
@@ -141,5 +143,55 @@ describe('the “Get set up” page, next to the test text', () => {
     page = read(await SetupPage());
     expect(page).toContain('Text messaging is not connected yet, so this will say so.');
     expect(page).not.toContain('No text is being sent from this workspace');
+  });
+});
+
+describe('the text-message card in the client’s own portal', () => {
+  /** The client's own view: the same tenant connection, signed in as the portal user. */
+  const card = async (o: TestOrg, c: { clientId: string; userId: string }, number: string, lang: 'en' | 'es' = 'en') => {
+    const ctx = { ...(await signIn(o)), userId: c.userId, role: 'client' as Role, tx: <T,>(fn: Parameters<Ctx['tx']>[0]) => asUser(c.userId, fn) as Promise<T> } as unknown as Ctx;
+    const el = await SmsConsentCard({ ctx, clientId: c.clientId, phone: number, lang, t: tr(lang) });
+    return el ? read(el) : '';
+  };
+
+  it('never says "On" while no text can leave: not approved, renamed since, or no text service', async () => {
+    const o = await makeOrg('TextStatePortal');
+    const number = phone();
+    const c = await client(o, number, true);
+    const paused = (page: string, label: string) => {
+      expect(page, label).toContain('Paused');
+      expect(page).toContain('Text updates are paused at the moment, so no text is sent. Your agreement stays on file, and you can withdraw it here.');
+      expect(page).toContain('Turn off text updates');
+      expect(page).not.toMatch(/\bOn since\b/);
+      expect(page).not.toContain('Turn on text updates');
+    };
+    useEnv(TWILIO); // connected, not approved
+    paused(await card(o, c, number), 'twilio');
+    useEnv({ SMS_DRIVER: 'disabled' }); // no text service
+    paused(await card(o, c, number), 'disabled');
+    // In Spanish too.
+    useEnv(TWILIO);
+    expect(await card(o, c, number, 'es')).toContain('Los avisos por texto están en pausa por ahora');
+    // Approved under its current name, with a text service: "On", with the date and the number.
+    await approveOutreach(o.orgId);
+    const on = await card(o, c, number);
+    expect(on).toContain('Text message updates On ');
+    expect(on).toMatch(/On since .+ for \+1\d{10}\./);
+    expect(on).not.toContain('Paused');
+    // Renamed since the approval: paused again.
+    await withSystem((db) => db.run("update public.organizations set name = name || ' Renamed' where id = $1", [o.orgId]));
+    expect(await card(o, c, number)).toContain('Paused');
+  });
+
+  it('offers nothing when there is no consent and no text could follow', async () => {
+    useEnv(TWILIO);
+    const o = await makeOrg('TextStatePortalNone');
+    const number = phone();
+    const c = await client(o, number, false);
+    expect(await card(o, c, number)).toBe('');
+    await approveOutreach(o.orgId);
+    const page = await card(o, c, number);
+    expect(page).toContain('Off');
+    expect(page).toContain('Turn on text updates');
   });
 });

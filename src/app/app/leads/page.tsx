@@ -10,7 +10,7 @@ import { requireStaff } from '@/lib/auth/context';
 import { getEnv } from '@/lib/env';
 import { decideLeadStep, DEFAULT_LEAD_SOURCE, LEAD_SOURCE_TAGS, LEAD_STEPS, LEAD_WINDOW_DAYS, type LeadDecision } from '@/lib/lead-emails';
 import { DELIVERED_BY_TEAM_SQL, emailIsLive, EMAIL_STEPS_SQL, LEAD_TEXT_STATE_SQL, leadState, leadTextBlocker, leadTextState, outreachBlocker, outreachSettings, TEXT_STEPS_SQL, type LeadTextStateRow } from '@/lib/lead-outreach';
-import { MAILING_ADDRESS_MAX } from '@/lib/mailing-address';
+import { mailingAddressIssue, MAILING_ADDRESS_MAX } from '@/lib/mailing-address';
 import { APPROVAL_COLS, APPROVAL_NEEDED, outreachApproval, type ApprovalRow } from '@/lib/outreach-approval';
 import { decideLeadText, LEAD_TEXT_STEPS } from '@/lib/lead-texts';
 import { smsUsable } from '@/lib/sms';
@@ -85,7 +85,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
     const emails = (await db.row<{ sent: number; failed: number; unconfirmed: number; opted_out: number; texts: number }>(
       `select (select count(*) from public.lead_outreach where status = 'sent' and step in (${EMAIL_STEPS_SQL}))::int as sent,
               (select count(*) from public.lead_outreach where status = 'failed' and step in (${EMAIL_STEPS_SQL}))::int as failed,
-              (select count(*) from public.lead_outreach where status = 'sending' and step in (${EMAIL_STEPS_SQL}) and created_at < now() - interval '10 minutes')::int as unconfirmed,
+              (select count(*) from public.lead_outreach where status = 'sending' and step in (${EMAIL_STEPS_SQL}) and (error is not null or created_at < now() - interval '10 minutes'))::int as unconfirmed,
               (select count(*) from public.clients where outreach_opt_out_at is not null)::int as opted_out,
               (select count(*) from public.lead_outreach where status = 'sent' and step in (${TEXT_STEPS_SQL}))::int as texts`))!;
     const lastRun = await db.row<{ at: string | null }>('select max(started_at) as at from public.job_runs');
@@ -93,6 +93,10 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
   });
 
   const settings = outreachSettings(org.settings);
+  // A saved address that does not have the shape of a postal address reads as none (src/lib/mailing-address.ts). It is
+  // still shown in the field, with what is wrong with it, so it can be corrected rather than typed again from nothing.
+  const savedAddress = typeof org.settings.lead_mailing_address === 'string' ? org.settings.lead_mailing_address.trim() : '';
+  const addressProblem = !settings.address && savedAddress ? mailingAddressIssue(savedAddress) : null;
   const live = emailIsLive();
   const blocker = outreachBlocker(settings, live, org);
   // Text follow-up: its own switch, and only ever for a lead who ticked the text-message box on the form.
@@ -111,7 +115,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
   const notApproved = blocker === 'not_approved' && approval !== 'approved';
   const why = notApproved ? APPROVAL_NEEDED[approval]
     : !live ? 'Email is not connected, so nothing is being sent.'
-    : blocker === 'no_address' ? 'A postal address is required: nothing is sent until you save one below.'
+    : blocker === 'no_address' ? (addressProblem ? `The saved mailing address cannot be used, so no email is sent. ${addressProblem}` : 'A postal address is required: no email is sent until you save one below.')
     : blocker === 'no_reply' ? 'A reply address is required: nothing is sent until you save one below.'
     : null;
   const now = new Date();
@@ -201,7 +205,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
             <ActionForm action={saveLeadFollowUpAction} className="mt-4 space-y-4 border-t border-line pt-4">
               <Check name="enabled" defaultChecked={settings.enabled}>Send automatic follow-up email to new enquiries</Check>
               <Check name="texts" defaultChecked={settings.texts}>Also text people who separately agree to text messages on the form{textsUsable ? '' : ' (text messaging is not connected yet, so nothing is texted and the box is not shown)'}</Check>
-              <Field label="Mailing address shown in every email" name="address" maxLength={MAILING_ADDRESS_MAX} defaultValue={settings.address} placeholder="Street, city, state, ZIP" hint="A physical postal address is required in marketing email (CAN-SPAM). Enter yours on one line, from the street number or PO Box to the state and ZIP code." />
+              <Field label="Mailing address shown in every email" name="address" maxLength={MAILING_ADDRESS_MAX} defaultValue={settings.address || savedAddress} placeholder="Street, city, state, ZIP" hint="A physical postal address is required in marketing email (CAN-SPAM). Enter yours on one line, from the street number or PO Box to the state and ZIP code." />
               <Field label="Reply email address" name="replyTo" type="email" maxLength={254} defaultValue={settings.replyTo} placeholder="you@yourbusiness.com" hint="When someone answers an automatic email, the reply goes here." />
               <SubmitButton>Save</SubmitButton>
             </ActionForm>
@@ -257,7 +261,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
                           {canWrite && (
                             <>
                               {!l.replied && <form action={leadRepliedAction}><input type="hidden" name="id" value={l.id} /><button type="submit" className="btn-secondary btn-sm" title="Records that they answered, and stops automatic email to them">They replied</button></form>}
-                              {!l.opted_out && l.has_email && <form action={leadAskedToStopAction}><input type="hidden" name="id" value={l.id} /><ConfirmButton className="btn-ghost btn-sm" message={`Record that ${l.full_name} asked not to be contacted automatically? They get no more automatic email or text, now or as a client: their agreement to text messages is withdrawn, and only they can give it again, in the portal. This cannot be switched back on from here.`}>Asked to stop</ConfirmButton></form>}
+                              {!l.opted_out && l.has_email && <form action={leadAskedToStopAction}><input type="hidden" name="id" value={l.id} /><ConfirmButton className="btn-ghost btn-sm" message={`Record that ${l.full_name} asked not to be contacted automatically? They get no more automatic follow-up email, and no text now or as a client: their agreement to text messages is withdrawn, and only they can give it again, in the portal. This cannot be switched back on from here.`}>Asked to stop</ConfirmButton></form>}
                               <form action={setLeadStatusAction}><input type="hidden" name="id" value={l.id} /><input type="hidden" name="status" value="onboarding" /><button type="submit" className="btn-secondary btn-sm">Convert to client</button></form>
                               <form action={setLeadStatusAction}><input type="hidden" name="id" value={l.id} /><input type="hidden" name="status" value="cancelled" /><ConfirmButton className="btn-ghost btn-sm" message={`Mark ${l.full_name} as not interested? They leave this list and get no more automatic email. You can still find them in Clients.`}>Mark not interested</ConfirmButton></form>
                             </>

@@ -82,7 +82,7 @@ export async function ClientUpdatesSection({ ctx }: { ctx: Ctx }) {
         <div className="mt-4"><SubmitButton>Save client updates</SubmitButton></div>
       </ActionForm>
       <p className="mt-4 text-[0.8125rem] text-muted">
-        A text goes only to a client who agreed to texts (in their portal, or recorded by you on their profile), to the US mobile number they agreed for, between 8 a.m. and 9 p.m. in your time zone and in the client’s state (no state on file: 11 a.m. to 9 p.m. Eastern).
+        A text goes only to a client who agreed to texts (in their portal, on your enquiry form, or recorded by you on their profile), to the US mobile number they agreed for, between 8 a.m. and 9 p.m. in your time zone and in the client’s state (no state on file: 11 a.m. to 9 p.m. Eastern).
         At most {DAILY_CAP.sms} texts and {DAILY_CAP.email} emails per client a day. A reply with a stop word (stop, cancel, end, quit, unsubscribe, revoke, opt out) switches texts off at once, and only the client can switch them back on; any other reply pauses their texts until your team has read it. Only clients with a portal sign-in are told.
       </p>
 
