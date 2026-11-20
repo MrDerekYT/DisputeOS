@@ -131,10 +131,10 @@ const EN = {
   sms_consent: 'By turning this on, I agree to receive text messages from {org} about my file at {phone}. Message frequency varies. Message and data rates may apply. Reply STOP to stop, HELP for help. Consent is not a condition of service.',
   sms_agree: 'I agree to receive text messages', sms_turnOn: 'Turn on text updates', sms_turnOff: 'Turn off text updates', sms_on: 'On', sms_off: 'Off',
   sms_onSince: 'On since {date} for {phone}.', sms_staffRecorded: 'Your team recorded your agreement on {date} for {phone}.',
-  sms_needPhone: 'Save a mobile number in your contact details first, for example (555) 123-4567. Then you can turn this on.',
+  sms_needPhone: 'Save a US mobile number with its area code in your contact details first, for example (212) 555-0142. Then you can turn this on.',
   sms_phoneChanged: 'Your phone number changed, so texts are paused. Turn this on again to get them at {phone}.',
   sms_stopped: 'You stopped texts by replying STOP on {date}. You can turn them on again here. If they still do not arrive, reply START to our last text.',
-  a_smsOn: 'Text updates are on.', a_smsOff: 'Text updates are off. You will not get any more texts from us.', a_smsNeedPhone: 'Save a valid mobile number in your contact details first.',
+  a_smsOn: 'Text updates are on.', a_smsOff: 'Text updates are off. You will not get any more texts from us.', a_smsNeedPhone: 'Save a US mobile number with its area code in your contact details first, for example (212) 555-0142.',
   ws_title: 'What we did for you', ws_sub: 'The work recorded on your file, month by month. Every line comes from our records.', ws_link: 'See what we did for you, month by month',
   ws_month: 'Month', ws_show: 'Show', ws_print: 'Print', ws_empty: 'No work is recorded for this month.', ws_none: 'None recorded.',
   ws_sent: 'Letters sent', ws_approved: 'Letters approved', ws_responses: 'Responses recorded', ws_documents: 'Documents reviewed', ws_messages: 'Messages',
@@ -173,6 +173,7 @@ const EN = {
   pi_saidNotMine: 'not mine', pi_saidIncorrect: 'not correct', pi_shouldBe: 'should be',
   pi_k_name: 'Name', pi_k_address: 'Address', pi_k_employer: 'Employer', pi_k_phone: 'Phone number', pi_k_date_of_birth: 'Date of birth',
   pi_bad: 'Please choose the report and type the entry as it appears.',
+  pi_teamListed: 'Your team already listed this entry. Send them a message if it should say something else.',
 } as const;
 
 export type PortalKey = keyof typeof EN;
@@ -292,10 +293,10 @@ const ES: Record<PortalKey, string> = {
   sms_consent: 'Al activar esta opción, acepto recibir mensajes de texto de {org} sobre mi expediente en el {phone}. La frecuencia de los mensajes varía. Pueden aplicarse tarifas de mensajes y datos. Responda STOP para dejar de recibirlos, HELP para ayuda. Dar mi consentimiento no es una condición para recibir el servicio.',
   sms_agree: 'Acepto recibir mensajes de texto', sms_turnOn: 'Activar avisos por texto', sms_turnOff: 'Desactivar avisos por texto', sms_on: 'Activados', sms_off: 'Desactivados',
   sms_onSince: 'Activados desde el {date} para el {phone}.', sms_staffRecorded: 'Su equipo registró su consentimiento el {date} para el {phone}.',
-  sms_needPhone: 'Primero guarde un número de celular en sus datos de contacto, por ejemplo (555) 123-4567. Después podrá activar esta opción.',
+  sms_needPhone: 'Primero guarde un número de celular de EE. UU. con su código de área en sus datos de contacto, por ejemplo (212) 555-0142. Después podrá activar esta opción.',
   sms_phoneChanged: 'Su número de teléfono cambió, por eso los mensajes están en pausa. Active esta opción de nuevo para recibirlos en el {phone}.',
   sms_stopped: 'Usted detuvo los mensajes al responder STOP el {date}. Puede activarlos de nuevo aquí. Si aun así no llegan, responda START a nuestro último mensaje.',
-  a_smsOn: 'Los avisos por texto están activados.', a_smsOff: 'Los avisos por texto están desactivados. No recibirá más mensajes de texto de nuestra parte.', a_smsNeedPhone: 'Primero guarde un número de celular válido en sus datos de contacto.',
+  a_smsOn: 'Los avisos por texto están activados.', a_smsOff: 'Los avisos por texto están desactivados. No recibirá más mensajes de texto de nuestra parte.', a_smsNeedPhone: 'Primero guarde un número de celular de EE. UU. con su código de área en sus datos de contacto, por ejemplo (212) 555-0142.',
   ws_title: 'Lo que hicimos por usted', ws_sub: 'El trabajo registrado en su expediente, mes por mes. Cada línea proviene de nuestros registros.', ws_link: 'Vea lo que hicimos por usted, mes por mes',
   ws_month: 'Mes', ws_show: 'Ver', ws_print: 'Imprimir', ws_empty: 'No hay trabajo registrado en este mes.', ws_none: 'Sin registros.',
   ws_sent: 'Cartas enviadas', ws_approved: 'Cartas aprobadas', ws_responses: 'Respuestas registradas', ws_documents: 'Documentos revisados', ws_messages: 'Mensajes',
@@ -334,6 +335,7 @@ const ES: Record<PortalKey, string> = {
   pi_saidNotMine: 'no me pertenece', pi_saidIncorrect: 'tiene un error', pi_shouldBe: 'debería decir',
   pi_k_name: 'Nombre', pi_k_address: 'Dirección', pi_k_employer: 'Empleador', pi_k_phone: 'Teléfono', pi_k_date_of_birth: 'Fecha de nacimiento',
   pi_bad: 'Elija el informe y escriba el dato tal como aparece.',
+  pi_teamListed: 'Su equipo ya anotó este dato. Envíele un mensaje si debería decir otra cosa.',
 };
 
 export const tr = (lang: Lang) => (k: PortalKey): string => (lang === 'es' ? ES[k] : EN[k]);

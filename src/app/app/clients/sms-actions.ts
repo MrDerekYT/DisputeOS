@@ -18,7 +18,7 @@ export async function recordSmsConsentAction(_: ActionState, fd: FormData): Prom
     if (!d.confirmed) throw new UserError('Confirm that you read the wording to the client and they agreed.');
     const r = await ctx.tx((db) => grantSmsConsent(db, { orgId: ctx.orgId, clientId: d.clientId, userId: ctx.userId, source: 'staff', note: d.note, ip: ctx.meta.ip }));
     if (!r.ok && r.reason === 'stopped') throw new UserError(SMS_STOPPED_MESSAGE);
-    if (!r.ok) throw new UserError(r.reason === 'no_phone' ? 'Save a valid mobile number on the client’s record first, for example (555) 123-4567.' : 'Client not found.');
+    if (!r.ok) throw new UserError(r.reason === 'no_phone' ? 'Save a US mobile number with its area code on the client’s record first, for example (212) 555-0142. Texts are sent to US numbers only.' : 'Client not found.');
     revalidatePath(`/app/clients/${d.clientId}`);
     return { ok: `Recorded for ${r.phone}, labelled as recorded by staff.` };
   });

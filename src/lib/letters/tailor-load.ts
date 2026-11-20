@@ -28,7 +28,7 @@ export interface TailorSubject extends Required<Pick<TailorInput, 'protectedTerm
  * reason (as the letter states it now) are taken out; the standard paragraphs stay.
  */
 function comparable(r: { body: string; full_name: string; address: Address; names: (string | null | undefined)[]; reason: string | null; templateBody?: string | null }): string {
-  const lines = r.body.split('\n');
+  const lines = r.body.replace(/\r\n?/g, '\n').split('\n'); // line ends as comparableWording reads them
   let reasonLines = r.templateBody ? reasonLinesFrom(r.templateBody, r.body) : [];
   if (!reasonLines.length) {
     const stated = reasonInLetter(r.body, r.reason ?? '').replace(/\s+/g, ' ').trim();

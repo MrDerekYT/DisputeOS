@@ -92,7 +92,7 @@ export default async function NewLetterPage({ searchParams }: { searchParams: Pr
             <TextArea label="Reason / message" name="reason" rows={4} />
           </div>
         </details>
-        <Check name="includeSsn" defaultChecked>State the last four digits of the client’s SSN. A letter to a credit bureau also states the date of birth: the bureaus ask for both to find the file.</Check>
+        <Check name="includeSsn" defaultChecked>State the last four digits of the client’s SSN. A letter to a credit bureau also states the date of birth: the bureaus ask for both to find the file. The letters written for a debt collector (the debt validation request and the request to stop communication) and a letter to a specialty agency never carry these digits, ticked or not.</Check>
         <p className="text-xs text-muted">The letter is created as a draft. You will review and edit it, then a manager approves it before it can be downloaded as final.</p>
         <div className="flex justify-end"><SubmitButton pendingText="Creating…">Create draft</SubmitButton></div>
       </ActionForm>

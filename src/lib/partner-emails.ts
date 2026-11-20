@@ -5,18 +5,18 @@
  * The rules this file holds every message to (the unit tests check each one):
  *  - It says what the agency does (helps consumers review their credit reports and dispute inaccurate information) and
  *    never promises a result, a score, an approval or a time frame. Subject and body pass the marketing claims guard.
- *  - It states only what is on the partner record (the category and city the agency entered) and what the agency
- *    said about itself. Nothing is claimed about the partner, their work or any earlier contact.
+ *  - It greets the contact by first name and states only what is on the partner record (the category and city the
+ *    agency entered) and what the agency said about itself. Nothing is claimed about the partner, their work or any
+ *    earlier contact.
  *  - The subject says what the email is. No "Re:", no pretend reply, no urgency.
  *  - The footer identifies the message as a business solicitation, names the agency with its postal address and
  *    carries the opt-out link (CAN-SPAM, 15 U.S.C. § 7704).
  *  - The wording is fixed. Nothing a model writes is emailed to a partner: these emails go out with nobody reading each
- *    one, and no check on free text is good enough for that. (The checks at the foot of this file are what a rewording
- *    would have to pass before a PERSON approved it; the sender does not use them.)
+ *    one, and no check on free text is good enough for that.
  * Partners are emailed only. Nothing in this product texts or calls a partner.
  */
 import { addBusinessDays, isBusinessDay, type Day } from './business-days';
-import { findMarketingClaims } from './compliance/claims';
+import { findBlockedClaims, findMarketingClaims, type ClaimIssue } from './compliance/claims';
 import { greetingName } from './lead-emails';
 import { linkInName } from './lead-texts';
 
@@ -54,15 +54,16 @@ export const PARTNER_DAILY_CAP = 40;
 /** Most partner emails one scheduled run sends for one agency, so a list goes out spread over runs, not at once. */
 export const PARTNER_PER_RUN_CAP = 10;
 /**
- * After this many failed sends in a row the sequence holds for the whole agency: the email service is probably
- * refusing everything (a sending domain that is not verified, a revoked key), and trying partner after partner would
- * only stop each of them. It holds for PARTNER_FAILURE_HOLD_HOURS, or until a person asks for another try.
+ * After this many sends in a row that the email service refused, the sequence holds for the whole agency: the service
+ * is probably refusing everything (a sending domain that is not verified, a revoked key), and trying partner after
+ * partner would only stop each of them. It holds for PARTNER_FAILURE_HOLD_HOURS, or until a person asks for another
+ * try. An email this app's own guard refused, or one the service gave no answer for, is not counted.
  */
 export const PARTNER_RUN_FAILURE_LIMIT = 2;
 export const PARTNER_FAILURE_HOLD_HOURS = 24;
 /**
  * How long one run may keep sending for one agency. The scheduled job handles every agency in one request with a time
- * limit of its own, so a slow email or AI service must not use it all up: what is left goes out with the next run.
+ * limit of its own, so a slow email service must not use it all up: what is left goes out with the next run.
  */
 export const PARTNER_RUN_BUDGET_MS = 20_000;
 
@@ -190,14 +191,6 @@ const ES: Record<PartnerStep, StepCopy> = {
   },
 };
 
-/**
- * Words that would lock a sentence for a rewording (src/lib/ai/protected.ts locks any sentence that contains a
- * protected term, and rejects a rewrite that adds one). They cover what the agency does, what it cannot promise, who decides,
- * and the reader's own work, so the AI can only touch the connecting sentences between them.
- */
-const EN_LOCKED_WORDS = ['credit', 'promise', 'score', 'approval', 'lender', 'loan', 'bureau', 'consumer', 'result', 'work as', 'work at', 'work in', 'your business'];
-const ES_LOCKED_WORDS = ['crédito', 'prometer', 'puntaje', 'aprobación', 'prestamista', 'préstamo', 'agencia', 'consumidor', 'resultado', 'trabaja como', 'trabaja en', 'su negocio'];
-
 /** Fixed footer: what the message is, who sent it and from where, and how to stop it. */
 const FOOTER: Record<PartnerLang, [string, string, string]> = {
   en: [
@@ -244,14 +237,12 @@ export interface PartnerEmailVars {
 }
 export interface PartnerEmail {
   subject: string;
-  /** Greeting, paragraphs and signature: the only part the optional AI step may reword. */
+  /** Greeting, paragraphs and signature. */
   body: string;
   /** The fixed lines under the body. */
   footer: string;
   /** body + footer: what is sent. */
   text: string;
-  /** Names and places that must never be reworded or added by the AI step. */
-  protectedTerms: string[];
 }
 
 export const partnerEmailText = (body: string, footer: string) => `${body.trim()}\n\n${footer}`;
@@ -275,183 +266,76 @@ export function partnerEmail(step: PartnerStep, lang: PartnerLang, v: PartnerEma
   const body = [...copy.body, `— ${org}`].map(fill).join('\n\n');
   const foot = FOOTER[es ? 'es' : 'en'];
   const footer = ['--', fill(foot[0]), `${org} · ${oneLine(v.address)}`, fill(foot[1]), foot[2]].join('\n\n');
-  // Anything that names the sender, the reader or a place, plus the words every statement about the service and its
-  // limits uses: a sentence that contains one is locked, and the AI step cannot write a new sentence that does.
-  // (The two-letter state is left out: as a protected term "IN" or "OR" would match inside ordinary words.)
-  const protectedTerms = [org, name, place.split(', ')[0] ?? '', v.siteUrl ?? '', ...(es ? ES_LOCKED_WORDS : EN_LOCKED_WORDS)].filter((t) => t.length >= 2);
-  return { subject: fill(copy.subject).slice(0, 200), body, footer, text: partnerEmailText(body, footer), protectedTerms };
+  return { subject: fill(copy.subject).slice(0, 200), body, footer, text: partnerEmailText(body, footer) };
 }
 
-/** Longest business name the sequence will put in a subject and a From line. Real business names are far shorter. */
-export const PARTNER_NAME_MAX = 80;
+/**
+ * The claims guard every partner email is held to, exactly as the sender applies it before an email leaves: the
+ * marketing rules on the subject and body, and the base rules on the whole text (the footer carries the agency's name
+ * and mailing address). Returns the first issue, or undefined when the email may go.
+ */
+export const partnerEmailIssue = (m: Pick<PartnerEmail, 'subject' | 'body' | 'text'>): ClaimIssue | undefined =>
+  findMarketingClaims(`${m.subject}\n${m.body}`)[0] ?? findBlockedClaims(m.text)[0];
 
 /**
- * Why an agency with this name cannot run the sequence, or null. The name is part of every subject, From line, body
- * and signature, so it is refused when it carries a web address (every email would then lead with a link), when it is
- * long enough to be a message of its own, or when it makes a promise (or reads as one next to the standard words):
- * the sequence does not run until the name is changed. Every category, step and language is checked for claims.
+ * Why a city cannot be printed in the introduction ("because you work as a real estate agent in Free Soil, MI"), or
+ * null. A real place name can read as a claim to the guard above ("Free Soil"), and the email would then be refused
+ * when it is sent. So the partner is refused when it is added (partnerSchema) and the person is told to leave the city
+ * out. The city is checked in the sentence it would be printed in, for every category and both languages.
  */
-export function partnerWordingIssue(orgName: string): { why: string; excerpt: string } | null {
-  const name = oneLine(orgName);
-  const link = linkInName(name);
-  if (link) return { why: 'A business name with a web address in it cannot be used in the subject and From line of these emails.', excerpt: link.slice(0, 80) };
-  if (name.length > PARTNER_NAME_MAX) return { why: `A business name longer than ${PARTNER_NAME_MAX} characters cannot be used in a subject line.`, excerpt: `${name.slice(0, 40)}…` };
+export function partnerCityIssue(city: string): ClaimIssue | null {
   for (const lang of ['en', 'es'] as const) {
     for (const category of PARTNER_CATEGORIES) {
-      for (const { key } of PARTNER_STEPS) {
-        const m = partnerEmail(key, lang, { contactName: null, category, city: null, state: null, orgName, address: '', optOutUrl: '' });
-        const issue = findMarketingClaims(`${m.subject}\n${m.body}`)[0];
-        if (issue) return { why: issue.why, excerpt: issue.excerpt };
-      }
+      const issue = partnerEmailIssue(partnerEmail('intro', lang, { contactName: null, category, city, state: null, orgName: 'A', address: '', optOutUrl: '' }));
+      if (issue) return issue;
     }
   }
   return null;
 }
 
-// ---------------------------------------------------------------- nothing invented about the reader
-interface FamiliarityRule { id: string; why: string; pattern: RegExp }
-/**
- * A pattern that only matches whole words, in English and Spanish alike. JavaScript's `\b` treats an accented letter
- * as a word break ("leí" would never match `\bleí\b`), so the edges are checked against every Unicode letter and digit.
- */
-const phrase = (...alternatives: string[]) => new RegExp(String.raw`(?<![\p{L}\p{N}_])(?:${alternatives.join('|')})(?![\p{L}\p{N}_])`, 'iu');
-/**
- * Phrases that claim something the sender does not know: that they saw, read or heard something about the partner,
- * that the two have met or spoken, that someone recommended the partner, praise for the partner's reputation, or a
- * track record nobody entered. English and Spanish. Deliberately broad: a false alarm only means the standard wording
- * is used instead of the AI's.
- */
-const FAMILIARITY_RULES: FamiliarityRule[] = [
-  {
-    id: 'saw', why: 'It claims to have seen, read or heard something about the partner.',
-    pattern: phrase(
-      String.raw`(?:i|we)(?:['’]ve|\s+have|\s+had)?\s+(?:(?:just|recently|also|really)\s+)?(?:saw|seen|noticed|came\s+across|come\s+across|found|read|watched|heard|spotted|stumbled|visited|looked\s+(?:at|up|through)|checked\s+out|been\s+(?:following|watching|reading|admiring|looking))`,
-      String.raw`(?:i|we)\s+(?:was|were|am|are)\s+(?:looking|browsing|reading|scrolling|researching)`,
-      String.raw`vi|vimos|noté|notamos|encontré|encontramos|leí|leímos|escuché|escuchamos|visité|visitamos|me\s+enteré|nos\s+enteramos`,
-      String.raw`(?:he|hemos)\s+(?:visto|notado|leído|seguido|escuchado|encontrado|visitado)`,
-    ),
-  },
-  {
-    id: 'recent', why: 'It refers to something recent about the partner that is not on file.',
-    pattern: phrase(
-      String.raw`your\s+(?:recent|latest|newest|last|new|upcoming)`, 'recently', String.raw`(?:last|this)\s+(?:week|month|year|weekend|quarter)`, 'yesterday', String.raw`the\s+other\s+day`,
-      String.raw`sus?\s+(?:recientes?|últim[oa]s?|nuev[oa]s?|próxim[oa]s?)`, 'recientemente', String.raw`hace\s+poco`,
-      String.raw`(?:la\s+semana|el\s+mes|el\s+año|el\s+fin\s+de\s+semana)\s+pasad[oa]`, 'ayer', String.raw`el\s+otro\s+día`,
-    ),
-  },
-  {
-    id: 'congratulations', why: 'It congratulates the partner on something that is not on file.',
-    pattern: phrase('congrats', 'congratulations', 'congratulate', 'felicidades', 'felicitaciones', 'felicito', 'felicitamos', 'enhorabuena'),
-  },
-  {
-    id: 'met', why: 'It claims an earlier meeting or conversation.',
-    pattern: phrase(
-      String.raw`(?:we|i)\s+(?:met|spoke|talked|chatted|connected|worked\s+together)`,
-      String.raw`(?:as|like)\s+(?:we|i)\s+(?:discussed|mentioned|talked|agreed|said)`,
-      String.raw`(?:our|my)\s+(?:last|recent|previous|earlier)\s+(?:call|conversation|meeting|chat|discussion|visit)`,
-      String.raw`(?:great|nice|good|lovely|a\s+pleasure)\s+(?:to\s+)?(?:meet|meeting|talk|talking|speak|speaking|chat|chatting|see|seeing)`,
-      String.raw`per\s+(?:our|my)\s+(?:call|conversation|discussion)`, String.raw`following\s+up\s+on\s+our`,
-      String.raw`thanks?(?:\s+you)?\s+for\s+(?:taking\s+(?:my|our|the)\s+call|your\s+(?:reply|response|interest|call|message)|speaking|meeting|chatting)`,
-      String.raw`nos\s+(?:conocimos|vimos|reunimos)`, String.raw`(?:como|según)\s+(?:conversamos|hablamos|acordamos|comentamos|platicamos|quedamos)`,
-      String.raw`(?:nuestra|mi)\s+(?:última|reciente|anterior)\s+(?:llamada|conversación|reunión|plática|visita)`,
-      String.raw`(?:un\s+gusto|un\s+placer|encantad[oa])\s+(?:de\s+)?(?:conocer|hablar|conversar|saludar)\p{L}*`,
-      String.raw`gracias\s+por\s+(?:su\s+(?:llamada|respuesta|interés|mensaje)|atender\p{L}*|recibir\p{L}*)`,
-    ),
-  },
-  {
-    id: 'referred', why: 'It claims that someone recommended or mentioned the partner.',
-    pattern: phrase(
-      String.raw`(?:mutual|common|shared)\s+(?:friend|contact|connection|client|acquaintance)s?`, String.raw`(?:referred|recommended|introduced|pointed)\s+(?:me|us)`,
-      String.raw`(?:gave|passed)\s+(?:me|us)\s+your`, String.raw`told\s+(?:me|us)`, String.raw`speaks?\s+(?:so\s+)?highly`, String.raw`highly\s+recommended`, String.raw`came\s+recommended`,
-      String.raw`(?:amig[oa]|contacto|conocid[oa]|cliente)\s+en\s+común`, String.raw`(?:me|nos)\s+(?:recomend\p{L}+|refiri\p{L}+|hablaron|comentaron|dijeron|pasaron|dieron)`,
-      String.raw`hablan?\s+muy\s+bien`, String.raw`muy\s+recomendad[oa]s?`,
-    ),
-  },
-  {
-    id: 'praise', why: 'It praises the partner’s work or reputation, which is not on file.',
-    pattern: phrase(
-      String.raw`(?:impressed|inspired)\s+(?:by|with)`,
-      String.raw`i\s+(?:really\s+)?(?:love|loved|like|liked|admire|admired|enjoy|enjoyed|appreciate|appreciated)\s+(?:your|the\s+way\s+you|how\s+you|what\s+you)`,
-      String.raw`(?:big|huge|long[\s-]?time)\s+fan`,
-      String.raw`your\s+(?:reputation|track\s+record|success|great\s+work|excellent\s+work|hard\s+work|reviews|ratings|achievements?|awards?|growth|expertise)`,
-      String.raw`well[\s-]known`, 'renowned', String.raw`award[\s-]winning`, String.raw`top[\s-](?:rated|producing|producer|agent|performer|seller)`,
-      String.raw`you(?:['’]re|\s+are)\s+(?:known|one\s+of|the\s+best|a\s+leader|doing\s+(?:great|amazing))`,
-      String.raw`impresionad[oa]s?`, String.raw`me\s+impresionó`, 'admiro', 'admiramos', String.raw`me\s+encant[óa]`, String.raw`me\s+gust[óa]`,
-      String.raw`su\s+(?:reputación|trayectoria|éxito|excelente\s+trabajo|gran\s+trabajo|reseñas|premios?|crecimiento|experiencia)`,
-      String.raw`reconocid[oa]s?`, String.raw`galardonad[oa]s?`, String.raw`de\s+renombre`,
-    ),
-  },
-  {
-    id: 'knows', why: 'It claims to know something about the partner that is not on file.',
-    pattern: phrase(
-      String.raw`i\s+(?:know|understand|see|hear|gather|believe|imagine)\s+(?:that\s+)?(?:you|your)`, String.raw`(?:i|we)\s+(?:was|were|am|are)\s+told`, String.raw`according\s+to\s+your`,
-      String.raw`your\s+(?:website|site|web\s+page|profile|listings?|posts?|page|blog|videos?|ads?|open\s+house|office|team|instagram|facebook|linkedin)`,
-      String.raw`(?:sé|entiendo|veo|imagino|tengo\s+entendido)\s+que\s+(?:usted|su|sus|ustedes)`,
-      String.raw`sus?\s+(?:sitio|página|perfil|anuncios?|publicación|publicaciones|videos?|oficina|equipo|instagram|facebook|linkedin|blog)`,
-    ),
-  },
-  {
-    id: 'track-record', why: 'It states a track record or a relationship that nobody entered.',
-    pattern: phrase(
-      String.raw`(?:hundreds|thousands|dozens|countless|scores)\s+of`, String.raw`we(?:['’]ve|\s+have)\s+(?:worked|helped|served|partnered)`, String.raw`(?:fellow|neighbor|neighbour)s?`,
-      String.raw`(?:my|our)\s+(?:friend|colleague|partner|client)s?`, String.raw`many\s+(?:of\s+)?(?:your|our)`, String.raw`years?\s+(?:of\s+experience|in\s+business)`,
-      String.raw`(?:cientos|miles|decenas|innumerables)\s+de`, String.raw`hemos\s+(?:ayudado|trabajado|atendido|colaborado)`, String.raw`vecin[oa]s?`, String.raw`colegas?`,
-      String.raw`(?:mi|nuestr[oa])s?\s+(?:amig[oa]|colega|soci[oa]|cliente)s?`, String.raw`años\s+de\s+experiencia`,
-    ),
-  },
-];
+/** Longest business name the sequence will put in a subject and a From line. Real business names are far shorter. */
+export const PARTNER_NAME_MAX = 80;
 
-export interface FamiliarityIssue { id: string; why: string; excerpt: string }
-/** Every phrase in `text` that claims knowledge of, or history with, the reader. Empty means none was found. */
-export function findFamiliarityClaims(text: string): FamiliarityIssue[] {
-  const out: FamiliarityIssue[] = [];
-  for (const r of FAMILIARITY_RULES) {
-    const m = r.pattern.exec(text);
-    if (m) out.push({ id: r.id, why: r.why, excerpt: m[0].slice(0, 80) });
-  }
-  return out;
-}
-
-// ---------------------------------------------------------------- checks for a rewording (not used by the sender)
-// Nothing below is called when an email is sent: the sequence sends the fixed wording above and nothing else. These are
-// the checks a reworded body would have to pass before a person approved it. They are pattern rules, and a pattern rule
-// can be worded around ("It was great connecting with you at the mixer" names no listed phrase), which is exactly why
-// model-written text is never emailed unattended.
-/** Longest body (greeting to signature) that is ever sent. The standard wording is well under it. */
-export const PARTNER_BODY_MAX_CHARS = 1800;
-const nonEmptyLines = (s: string) => s.replace(/\r\n?/g, '\n').split('\n').filter((l) => l.trim()).length;
-const URLS = /\bhttps?:\/\/\S+|\bwww\.\S+/gi;
-
-export type Personalised = { ok: true; body: string } | { ok: false; reason: string };
-/**
- * Decides whether a body reworded by the AI may replace the standard one. It may when it is the same length of letter
- * (same paragraphs, no longer than the cap and not much longer than the original), links nowhere new, passes the
- * marketing claims guard, and claims nothing about the reader. Otherwise the caller sends the standard wording.
- * The protected-rewriting checks in src/lib/ai/protected.ts have already run by the time this is called.
- */
-export function acceptPersonalised(base: string, candidate: string): Personalised {
-  const body = candidate.replace(/\r\n?/g, '\n').trim();
-  if (!body) return { ok: false, reason: 'the AI returned nothing' };
-  if (body.length > PARTNER_BODY_MAX_CHARS || body.length > base.trim().length * 1.25 + 60) return { ok: false, reason: 'the AI wording is longer than allowed' };
-  if (nonEmptyLines(body) !== nonEmptyLines(base)) return { ok: false, reason: 'the AI added or dropped a paragraph' };
-  const known = new Set(base.match(URLS) ?? []);
-  if ((body.match(URLS) ?? []).some((u) => !known.has(u))) return { ok: false, reason: 'the AI wording links somewhere new' };
-  const claim = findMarketingClaims(body)[0];
-  if (claim) return { ok: false, reason: `the AI wording makes a claim that is not allowed (${claim.why})` };
-  const familiar = findFamiliarityClaims(body)[0];
-  if (familiar) return { ok: false, reason: `the AI wording says something about the partner that is not on file (“${familiar.excerpt}”)` };
-  return { ok: true, body };
+export interface PartnerWordingIssue {
+  /** Which of the agency's own details has to change. */
+  part: 'name' | 'website' | 'address';
+  why: string;
+  excerpt: string;
 }
 
 /**
- * What a model would be asked to do. It is told the partner's category and the language, both from fixed lists, and
- * nothing the agency or anyone else typed: no place, no website text, no name, email or phone. Text an agency controls
- * would let it steer the wording.
+ * Why an agency cannot run the sequence as its own details stand, or null. The business name is part of every subject,
+ * From line, body and signature, so it is refused when it carries a web address (every email would then lead with a
+ * link) or is long enough to be a message of its own. Then the emails are built as they would leave, for every
+ * category, step and language, with what is the same for every partner: the name, the address of the agency's website
+ * (linked from the introduction and the follow-up) and its mailing address (printed under every email). They are held
+ * to the guard the sender applies (partnerEmailIssue), so what would be refused in every email is refused here, before
+ * anything is sent and with the reason shown on the Partners page, and not partner by partner at send time.
  */
-export function personalisationGoal(a: { category: PartnerCategory; lang: PartnerLang }): string {
-  return [
-    `Reword only the connecting sentences of this short business introduction so it reads naturally to a reader in this line of work: ${PARTNER_CATEGORY_LABEL[a.category].toLowerCase()}.`,
-    `Write in ${a.lang === 'es' ? 'Spanish, addressing the reader as usted' : 'plain English'}. Keep every paragraph, keep it the same length or shorter, and keep the greeting and the sign-off.`,
-    'Do not say or imply that you know the reader, their business, their customers, their area or anything they have done, and do not mention any earlier contact, a recommendation, praise, numbers or a track record.',
-  ].join(' ');
+export function partnerWordingIssue(orgName: string, own: { siteUrl?: string | null; address?: string } = {}): PartnerWordingIssue | null {
+  const name = oneLine(orgName);
+  const link = linkInName(name);
+  if (link) return { part: 'name', why: 'A business name with a web address in it cannot be used in the subject and From line of these emails.', excerpt: link.slice(0, 80) };
+  if (name.length > PARTNER_NAME_MAX) return { part: 'name', why: `A business name longer than ${PARTNER_NAME_MAX} characters cannot be used in a subject line.`, excerpt: `${name.slice(0, 40)}…` };
+  const firstIssue = (v: { siteUrl: string | null; address: string }): ClaimIssue | null => {
+    for (const lang of ['en', 'es'] as const) {
+      for (const category of PARTNER_CATEGORIES) {
+        for (const { key } of PARTNER_STEPS) {
+          const issue = partnerEmailIssue(partnerEmail(key, lang, { contactName: null, category, city: null, state: null, orgName, optOutUrl: '', ...v }));
+          if (issue) return issue;
+        }
+      }
+    }
+    return null;
+  };
+  const siteUrl = own.siteUrl || null;
+  const address = own.address ?? '';
+  const issue = firstIssue({ siteUrl, address });
+  if (!issue) return null;
+  // Which of the three has to change: the name by itself, then the name with the website address, else the mailing address.
+  const fromName = firstIssue({ siteUrl: null, address: '' });
+  if (fromName) return { part: 'name', why: fromName.why, excerpt: fromName.excerpt };
+  const fromSite = siteUrl ? firstIssue({ siteUrl, address: '' }) : null;
+  if (fromSite) return { part: 'website', why: fromSite.why, excerpt: fromSite.excerpt };
+  return { part: 'address', why: issue.why, excerpt: issue.excerpt };
 }

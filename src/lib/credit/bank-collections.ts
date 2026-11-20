@@ -41,11 +41,11 @@ export function bankCollectionSteps(c: BankCase, x: { clientId: string; reports:
   const details = c.chargeAccurate === 'yes' ? [] : c.inaccurateDetails;
   const accurate = c.chargeAccurate === 'yes';
 
-  // 1. The specialty reports: a closed bank account is reported there, not only (or not at all) to the credit bureaus.
+  // 1. The specialty reports: an account a bank closed and reported shows up there, whether or not a credit bureau has it.
   const waiting = agencies.filter((a) => x.reports[a.key]?.status !== 'received');
   steps.push(waiting.length ? {
     key: 'reports', title: `Request the ${list(waiting.map((a) => a.shortName))} report${waiting.length > 1 ? 's' : ''}`,
-    body: `A closed or overdrawn bank account is generally reported to a bank-account reporting agency, whether or not it also appears on a credit report. The client asks for each free disclosure themselves. ${waiting.map((a) => `${a.shortName}: ${a.disclosure.how.en}`).join(' ')} Record each one under “Specialty reports” when it is requested and when it arrives.`,
+    body: `A closed or overdrawn bank account may be reported to a bank-account reporting agency, whether or not it also appears on a credit report. The client asks for each free disclosure themselves. ${waiting.map((a) => `${a.shortName}: ${a.disclosure.how.en}`).join(' ')} Record each one under “Specialty reports” when it is requested and when it arrives.`,
     links: [{ href: `${base}#specialty`, label: 'Specialty reports' }],
   } : {
     key: 'reports', title: 'The ChexSystems and Early Warning reports are on file',
@@ -125,7 +125,7 @@ export function bankCollectionSteps(c: BankCase, x: { clientId: string; reports:
       key: 'period', title: 'How long the record is reported',
       body: [
         ...sourced.map((a) => `${a.shortName}: ${a.recordRetention!.text} (read on its site on ${a.recordRetention!.verifiedOn}).`),
-        unsourced.length ? `${list(unsourced.map((a) => a.shortName))} ${unsourced.length > 1 ? 'each publish' : 'publishes'} how long a closed-account record is kept. That period is not stated here because it has not been confirmed at its source: read it on the agency’s own site, or on the disclosure itself.` : '',
+        unsourced.length ? `How long ${list(unsourced.map((a) => a.shortName))} ${unsourced.length > 1 ? 'keep' : 'keeps'} a closed-account record is not stated here because it has not been confirmed at its source. Ask the agency, or look on its own site or on the disclosure itself.` : '',
         `On a credit report, a collection account is generally reported for ${FALL_OFF_RULE_TEXT.seven_years_plus_180_days} (15 U.S.C. § 1681c). The dates worked out for this client’s accounts are under “Aging off”.`,
       ].filter(Boolean).join(' '),
       links: [...unsourced.map((a) => ({ href: a.disclosure.url, label: `${a.shortName} site` })), { href: `${base}#aging-off`, label: 'Aging off' }],

@@ -3,17 +3,17 @@ import { publicSiteBySlug, siteHome } from './agency-site';
 import { audit } from './audit';
 import { isBusinessDay, toDay } from './business-days';
 import { orgTimezone } from './client-updates/templates';
-import { findBlockedClaims, findMarketingClaims } from './compliance/claims';
 import { safeEqual } from './crypto';
 import { withSystem, type Db } from './db';
 import { getEnv } from './env';
 import { emailIsLive, outreachSettings } from './lead-outreach';
 import { sendEmail, type Email, type SendResult } from './mailer';
+import { usableMailingAddress } from './mailing-address';
 import { APPROVAL_COLS, isNewlyApproved, NEW_WORKSPACE_DAILY_EMAILS, outreachApproved, type ApprovalRow } from './outreach-approval';
 import {
   decidePartnerStep, isPartnerCategory, PARTNER_DAILY_CAP, PARTNER_FAILURE_HOLD_HOURS, PARTNER_MAX_ATTEMPTS, PARTNER_PER_RUN_CAP, PARTNER_RUN_BUDGET_MS, PARTNER_RUN_FAILURE_LIMIT,
-  partnerEmail, partnerEmailText, partnerStepLabel, partnerWordingIssue,
-  type PartnerCategory, type PartnerLang, type PartnerState,
+  partnerEmail, partnerEmailIssue, partnerStepLabel, partnerWordingIssue,
+  type PartnerCategory, type PartnerLang, type PartnerState, type PartnerWordingIssue,
 } from './partner-emails';
 import type { PartnerInput } from './partner-import';
 import { dayInZone, isUuid } from './util';
@@ -25,30 +25,35 @@ import { dayInZone, isUuid } from './util';
  *
  * Stored in organizations.settings. Everything is off until an owner or admin turns it on, and nothing is sent until
  * the platform operator has approved the workspace for outreach (./outreach-approval.ts). The postal address and the
- * reply address are the ones the lead follow-up uses (one place to keep them). The wording is fixed: an earlier
- * setting that let a model reword the emails (`partner_outreach_ai`) is no longer read, because nothing a model writes
- * is emailed with nobody reading it.
+ * reply address are the ones the lead follow-up uses (one place to keep them). The postal address is printed in every
+ * email, so a saved value that is not shaped like a postal address (./mailing-address.ts) is read as no address at
+ * all. The wording is fixed: an earlier setting that let a model reword the emails (`partner_outreach_ai`) is no
+ * longer read, because nothing a model writes is emailed with nobody reading it.
  */
-export interface PartnerSettings { enabled: boolean; address: string; replyTo: string }
+export interface PartnerSettings { enabled: boolean; /** '' when none is saved, or when the saved text is not shaped like a postal address. */ address: string; replyTo: string }
 export function partnerSettings(settings: Record<string, unknown> | null | undefined): PartnerSettings {
   const s = settings ?? {};
   const o = outreachSettings(s);
-  return { enabled: s.partner_outreach_enabled === true, address: o.address, replyTo: o.replyTo };
+  return { enabled: s.partner_outreach_enabled === true, address: usableMailingAddress(o.address), replyTo: o.replyTo };
 }
 
-export type PartnerBlocker = 'off' | 'not_approved' | 'no_address' | 'no_reply' | 'email_not_connected' | 'name_claim';
+/** The last three: the business name, the website address or the mailing address would put a claim (or a link) in the emails. */
+export type PartnerBlocker = 'off' | 'not_approved' | 'no_address' | 'no_reply' | 'email_not_connected' | 'name_claim' | 'site_claim' | 'address_claim';
+const WORDING_BLOCKER: Record<PartnerWordingIssue['part'], PartnerBlocker> = { name: 'name_claim', website: 'site_claim', address: 'address_claim' };
 /**
  * Why nothing is being sent to partners, or null when the sequence is running. `org` carries the operator's approval
  * and the business name it was given for: a workspace that was never approved, or was renamed since, sends nothing.
+ * `siteUrl` is the address of the agency's published website, which the emails link to: given it, the last check reads
+ * the emails as they would really leave (partnerWordingIssue).
  */
-export function partnerBlocker(s: PartnerSettings, live: boolean, org: ApprovalRow): PartnerBlocker | null {
+export function partnerBlocker(s: PartnerSettings, live: boolean, org: ApprovalRow, siteUrl?: string | null): PartnerBlocker | null {
   if (!s.enabled) return 'off';
   if (!outreachApproved(org)) return 'not_approved';
-  if (!s.address) return 'no_address';
+  if (!usableMailingAddress(s.address)) return 'no_address';
   if (!s.replyTo) return 'no_reply';
   if (!live) return 'email_not_connected';
-  if (partnerWordingIssue(org.name)) return 'name_claim';
-  return null;
+  const wording = partnerWordingIssue(org.name, { siteUrl, address: s.address });
+  return wording ? WORDING_BLOCKER[wording.part] : null;
 }
 
 // ---------------------------------------------------------------- opt-out link (signed, no sign-in)
@@ -122,8 +127,10 @@ export async function optOutPartner(token: string): Promise<{ orgId: string; org
 // ---------------------------------------------------------------- adding partners
 /**
  * Adds partners inside the caller's tenant transaction, so row-level security decides: staff of the organization
- * only, each row stamped with the person who attested it. An address already on file for the agency is skipped (the
- * unique key), which is also what keeps an address that opted out from coming back. Returns how many were new.
+ * only, each row stamped with the person who attested it. A mailbox already on file for the agency is skipped and
+ * counted as existing. The unique key reads an address as the opt-out list does (app.email_norm: lower case, without a
+ * "+tag", and for Gmail without dots), so dana+1@ is not a second partner next to dana@, and one mailbox gets the
+ * sequence once. It is also what keeps an address that opted out from coming back. Returns how many were new.
  */
 export async function addPartners(db: Db, a: { orgId: string; userId: string }, rows: PartnerInput[], summary: string): Promise<{ added: number; existing: number; ids: string[] }> {
   if (!rows.length) return { added: 0, existing: 0, ids: [] };
@@ -131,7 +138,7 @@ export async function addPartners(db: Db, a: { orgId: string; userId: string }, 
     `insert into public.partners (org_id, business_name, contact_name, category, email, phone, city, state, language, source_note, attested_by)
      select $1, r."businessName", r."contactName", r.category, r.email, r.phone, r.city, r.state, r.language, r."sourceNote", $2
        from jsonb_to_recordset($3::jsonb) as r("businessName" text, "contactName" text, category text, email text, phone text, city text, state text, language text, "sourceNote" text)
-     on conflict (org_id, email) do nothing returning id`, [a.orgId, a.userId, JSON.stringify(rows)]);
+     on conflict do nothing returning id`, [a.orgId, a.userId, JSON.stringify(rows)]);
   const ids = inserted.map((r) => r.id);
   if (ids.length) {
     await db.run("insert into public.partner_events (org_id, partner_id, actor_id, kind, summary) select $1, id, $2, 'added', $3 from unnest($4::uuid[]) as id", [a.orgId, a.userId, summary.slice(0, 300), ids]);
@@ -153,35 +160,45 @@ export const partnerState = (r: PartnerStateRow, tz: string): PartnerState => ({
 export const partnerTimezone = (settings: Record<string, unknown> | null | undefined) => orgTimezone(settings, getEnv().APP_TIMEZONE);
 
 /**
+ * How the error of a step begins when this app's own claims guard refused the email, which was then never handed to
+ * the email service. The step stops that partner like any failed one, but it says nothing about the email service: it
+ * is left out of the hold below and of the notification that goes with it.
+ */
+export const PARTNER_GUARD_REFUSAL = 'the message would contain a claim that is not allowed';
+
+/**
  * The reason the email service gave, when the agency's most recent attempts all failed within the hold period; null
  * otherwise. While it holds nothing new is tried, so a problem on the sending side (a domain that is not verified, a
  * revoked key) stops two partners, not the whole list. It lifts by itself after PARTNER_FAILURE_HOLD_HOURS, and at once
- * when a person asks for another try of one of them ('failed' becomes 'retry'). Works under a tenant or the system connection.
+ * when a person asks for another try of one of them ('failed' becomes 'retry'). An email this app's own guard refused
+ * is not an attempt for this purpose, and one whose outcome is unknown (still 'sending') is not a failure. Works under
+ * a tenant or the system connection.
  */
 export async function partnerFailureHold(db: Db, orgId: string, now: Date = new Date()): Promise<string | null> {
   const recent = await db.rows<{ status: string; error: string | null }>(
     `select status, error from public.partner_outreach
-      where org_id = $1 and claimed_at > $2::timestamptz - make_interval(hours => $3::int)
-      order by claimed_at desc, created_at desc limit $4`, [orgId, now, PARTNER_FAILURE_HOLD_HOURS, PARTNER_RUN_FAILURE_LIMIT]);
+      where org_id = $1 and claimed_at > $2::timestamptz - make_interval(hours => $3::int) and not starts_with(coalesce(error, ''), $5)
+      order by claimed_at desc, created_at desc limit $4`, [orgId, now, PARTNER_FAILURE_HOLD_HOURS, PARTNER_RUN_FAILURE_LIMIT, PARTNER_GUARD_REFUSAL]);
   if (recent.length < PARTNER_RUN_FAILURE_LIMIT || recent.some((r) => r.status !== 'failed')) return null;
   return recent[0]!.error ?? 'the email service refused the message';
 }
 
 // ---------------------------------------------------------------- bounces and complaints
-/** With at least this many bounces since the workspace was approved (30 days at most), and more than PARTNER_BOUNCE_RATE of what was sent, the sequence holds. */
+/** With at least this many bounces since the workspace was approved, and more than PARTNER_BOUNCE_RATE of what was sent, the sequence holds. */
 export const PARTNER_BOUNCE_MIN = 3;
 export const PARTNER_BOUNCE_RATE = 0.1;
 
 /**
- * How many partner emails of this agency were sent, and how many addresses bounced, since the later of 30 days ago and
- * the day the operator approved the workspace. `hold` is true when the list is bad enough that sending on would hurt
- * every other workspace's email: the sequence then waits until the list is cleaned and the operator approves again
- * (which restarts the count). Works under a tenant or the system connection.
+ * How many partner emails of this agency were sent, and how many addresses bounced, since the operator approved the
+ * workspace (a workspace that sends always has that date; without one, the last 30 days are counted). `hold` is true
+ * when the list is bad enough that sending on would hurt every other workspace's email. The hold does not end with
+ * time: the sequence waits until the list is cleaned and the operator approves the workspace again, which restarts the
+ * count. Works under a tenant or the system connection.
  */
 export async function partnerBounceHealth(db: Db, orgId: string, approvedAt: string | Date | null): Promise<{ sent: number; bounced: number; hold: boolean }> {
   const r = await db.row<{ sent: number; bounced: number }>(
-    `select (select count(*) from public.partner_outreach o where o.org_id = $1 and o.status = 'sent' and o.sent_at > greatest(now() - interval '30 days', coalesce($2::timestamptz, '-infinity')))::int as sent,
-            (select count(*) from public.partner_events e where e.org_id = $1 and e.kind = 'bounced' and e.created_at > greatest(now() - interval '30 days', coalesce($2::timestamptz, '-infinity')))::int as bounced`,
+    `select (select count(*) from public.partner_outreach o where o.org_id = $1 and o.status = 'sent' and o.sent_at > coalesce($2::timestamptz, now() - interval '30 days'))::int as sent,
+            (select count(*) from public.partner_events e where e.org_id = $1 and e.kind = 'bounced' and e.created_at > coalesce($2::timestamptz, now() - interval '30 days'))::int as bounced`,
     [orgId, approvedAt]);
   const sent = r?.sent ?? 0;
   const bounced = r?.bounced ?? 0;
@@ -218,8 +235,11 @@ export async function recordPartnerDeliveryEvent(providerRef: string, kind: 'bou
 // ---------------------------------------------------------------- sending
 export interface PartnerRunResult {
   sent: number; failed: number; blocked: PartnerBlocker | null;
-  /** Why a run with nothing in the way stopped before the list was done. */
-  held: 'not_business_day' | 'daily_cap' | 'platform_cap' | 'failures' | 'bounces' | 'switched_off' | 'time' | null;
+  /**
+   * Why a run with nothing in the way stopped before the list was done. 'no_answer': the email service did not answer
+   * for the email just handed to it, so nothing more was handed over in this run.
+   */
+  held: 'not_business_day' | 'daily_cap' | 'platform_cap' | 'failures' | 'bounces' | 'switched_off' | 'time' | 'no_answer' | null;
 }
 export interface PartnerRunOptions {
   now?: Date;
@@ -242,15 +262,24 @@ const CANDIDATE_COLS = 'p.id, p.contact_name, p.category, p.email, p.city, p.sta
  * sequence on, the scheduled job sends. What it sends is the fixed wording and nothing else.
  *
  * Nothing is sent, and nothing is recorded as sent, unless the workspace is approved for outreach under its current
- * name, the sequence is switched on, a postal address and a reply address are saved, and email is really connected.
+ * name, the sequence is switched on, a postal address and a reply address are saved, email is really connected, and
+ * the emails as they would leave (with the agency's name, website address and mailing address) pass the claims guard.
  * Safe to run twice or at the same moment: each (partner, step) is claimed through a unique key under one lock for the
  * whole deployment (which also makes both daily limits exact), and the claim is committed before the email is handed
  * to the email service. Every stop condition (opt-out, a recorded reply, "interested", "not interested", bounced,
  * paused, the switch and the approval themselves) is read again under a row lock at that moment, and so is the
  * deployment-wide opt-out list: an address that opted out of any workspace's partner emails, in any spelling the
- * email service treats as the same mailbox, is not emailed. A failed send stops the sequence for that partner; two
- * failures in a row hold the whole sequence (partnerFailureHold) and tell the owners and admins; and a list with too
- * many bounces holds it until the operator approves the workspace again (partnerBounceHealth).
+ * email service treats as the same mailbox, is not emailed.
+ *
+ * What happens to a step that does not go through:
+ *  - the email service refused it: the step is 'failed' and the sequence stops for that partner until a person asks
+ *    for another try. Two such refusals in a row hold the whole sequence (partnerFailureHold) and tell the owners and admins;
+ *  - the email service gave no answer (a timeout, a dropped connection): the email may have gone out, so the step stays
+ *    'sending'. It is never sent again, nobody is offered another try, it is not counted as a refusal, and the run
+ *    hands nothing more to the service;
+ *  - this app's own claims guard refused it (something on that partner's record reads as a claim): the step is
+ *    'failed' for that partner, and it is not counted as a refusal by the email service.
+ * A list with too many bounces holds the sequence until the operator approves the workspace again (partnerBounceHealth).
  */
 export async function runPartnerOutreach(orgId: string, opts: PartnerRunOptions = {}): Promise<PartnerRunResult> {
   const now = opts.now ?? new Date();
@@ -280,9 +309,12 @@ export async function runPartnerOutreach(orgId: string, opts: PartnerRunOptions 
   // Too many addresses on this list bounced: hold until it is cleaned and the operator approves the workspace again.
   if ((await withSystem((db) => partnerBounceHealth(db, orgId, org.outreach_approved_at))).hold) return { ...out, held: 'bounces' };
 
-  // The agency's own published website, when there is one, is linked from the email.
+  // The agency's own published website, when there is one, is linked from the introduction and the follow-up. Its
+  // address is then part of those emails, so the wording is checked once more with it before anything is claimed.
   const site = await publicSiteBySlug(org.slug);
   const siteUrl = site ? siteHome(site) : null;
+  const siteBlocked = siteUrl ? partnerBlocker(settings, true, org, siteUrl) : null;
+  if (siteBlocked) return { ...out, blocked: siteBlocked };
   let failuresInARow = 0;
   const started = Date.now();
 
@@ -297,7 +329,8 @@ export async function runPartnerOutreach(orgId: string, opts: PartnerRunOptions 
       await db.run('select pg_advisory_xact_lock(hashtextextended($1, 28))', ['partner-outreach']);
       const cur = await db.row<ApprovalRow & { settings: Record<string, unknown> }>(`select ${APPROVAL_COLS}, settings from public.organizations where id = $1 and status = 'active'`, [orgId]);
       const s = partnerSettings(cur?.settings);
-      if (!cur || !s.enabled || !s.address || !s.replyTo || !outreachApproved(cur) || cur.name !== org.name) return 'switched_off' as const;
+      // The name and the mailing address are the ones the wording was checked with when this run started.
+      if (!cur || !s.enabled || !s.replyTo || !outreachApproved(cur) || cur.name !== org.name || s.address !== settings.address) return 'switched_off' as const;
       const used = await db.row<{ org: number; platform: number }>(
         `select count(*) filter (where org_id = $1)::int as org, count(*)::int as platform from public.partner_outreach
           where status in ('sending', 'sent') and claimed_at > $2::timestamptz - interval '24 hours'`, [orgId, now]);
@@ -309,9 +342,19 @@ export async function runPartnerOutreach(orgId: string, opts: PartnerRunOptions 
       const again = decidePartnerStep(partnerState(fresh, tz), today);
       if (again.kind !== 'send' || again.step !== step) return null;
       // The opt-out list is one list for the deployment, read by normalised address: someone who stopped these emails
-      // once is not written to again through another workspace, or as dana+1@ after dana@ opted out.
-      if (await db.row('select 1 from public.partners x where x.opted_out_at is not null and app.email_norm(x.email) = app.email_norm($1) limit 1', [fresh.email])) {
-        await markPartnerOptedOut(db, { orgId, partnerId: p.id, actorId: null, summary: 'This address has asked not to receive partner emails sent through this service. No email is sent to it.' });
+      // once is not written to again through another workspace, or as dana+1@ after dana@ opted out. A record of
+      // another workspace counts only when the recipient made the opt-out (the link, the mail program's unsubscribe
+      // button, a spam complaint): those entries have no actor, and a signed-in person cannot write one. What staff of
+      // another workspace recorded by hand ("Asked to stop") stops that workspace's own emails and nobody else's.
+      if (await db.row(
+        `select 1 from public.partners x
+          where x.opted_out_at is not null and x.id <> $3 and app.email_norm(x.email) = app.email_norm($1)
+            and (x.org_id = $2 or exists (select 1 from public.partner_events e where e.partner_id = x.id and e.kind = 'opted_out' and e.actor_id is null))
+          limit 1`, [fresh.email, orgId, p.id])) {
+        // Paused, not stamped as opted out: that stamp can never be lifted, and this stop is on another record.
+        await db.run('update public.partners set paused_at = now() where id = $1 and org_id = $2 and paused_at is null', [p.id, orgId]);
+        await db.run("insert into public.partner_events (org_id, partner_id, kind, summary) values ($1, $2, 'paused', $3)",
+          [orgId, p.id, 'Paused automatically: this address opted out of partner emails sent through this service. No email is sent to it.']);
         return null;
       }
       const row = await db.row<{ id: string }>(
@@ -332,6 +375,10 @@ export async function runPartnerOutreach(orgId: string, opts: PartnerRunOptions 
     let text: string | null = null;
     let error = '';
     let ref: string | null = null;
+    /** This app's own claims guard refused the email: it was never handed to the email service. */
+    let guardRefused = false;
+    /** Handed to the email service, and no answer came back: it may or may not have been accepted. */
+    let unconfirmed = false;
     try {
       // The fixed wording, from the fields on the record. Nothing a model wrote is ever part of it.
       const base = partnerEmail(step, lang, {
@@ -339,18 +386,24 @@ export async function runPartnerOutreach(orgId: string, opts: PartnerRunOptions 
         orgName: org.name, address: claim.address, optOutUrl: partnerOptOutUrl(p.id), siteUrl,
       });
       subject = base.subject;
-      text = partnerEmailText(base.body, base.footer);
-      // The email that leaves is held to the claims guard one more time (the business name is part of it).
-      const issue = findMarketingClaims(`${subject}\n${base.body}`)[0] ?? findBlockedClaims(text)[0];
-      if (issue) error = `the message would contain a claim that is not allowed (${issue.why})`;
-      else {
+      text = base.text;
+      // The email that leaves is held to the claims guard one more time. What is the same for every partner passed it
+      // when the run started, so a refusal here comes from this partner's record (a city or a first name).
+      const issue = partnerEmailIssue(base);
+      if (issue) {
+        guardRefused = true;
+        error = `${PARTNER_GUARD_REFUSAL} (${issue.why})`;
+      } else {
         const res = await (opts.send ?? sendEmail)({
           to: claim.partner.email, subject, text, replyTo: claim.replyTo, fromName: org.name, stream: 'outreach',
           // A mail program's own "unsubscribe" button POSTs to this address, and that POST is the opt-out (RFC 8058).
           headers: { 'List-Unsubscribe': `<${partnerOneClickUrl(p.id)}>`, 'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click' },
         });
         if (res.provider !== 'resend') error = 'email is not connected; nothing was delivered';
-        else if (!res.ok) error = res.error ?? 'the email service refused the message';
+        else if (!res.ok) {
+          error = res.error ?? 'the email service refused the message';
+          unconfirmed = res.unconfirmed === true;
+        }
         ref = res.providerRef ?? null;
       }
     } catch (e) {
@@ -359,6 +412,18 @@ export async function runPartnerOutreach(orgId: string, opts: PartnerRunOptions 
 
     // 3. Record the outcome. If this never runs (a crash, a lost connection) the row stays 'sending', which is treated
     //    as "delivery unknown" and never sent again automatically: at worst one email is lost, never duplicated.
+    if (unconfirmed) {
+      // No answer came back, so the email may have gone out. The step stays 'sending' for the same reason: it is not
+      // 'failed', so nobody is offered "Try again" and it does not count towards the hold after refusals. The email
+      // and the reason are kept with it for the partner's page, and nothing more is handed to a service that is not answering.
+      await withSystem(async (db) => {
+        await db.run("update public.partner_outreach set error = $2, subject = $3, body = $4 where id = $1 and status = 'sending'", [claim.id, error.slice(0, 500), subject, text]);
+        await db.run("insert into public.partner_events (org_id, partner_id, kind, summary) values ($1, $2, 'email_unconfirmed', $3)",
+          [orgId, p.id, `${label} email: the email service did not answer (${error}`.slice(0, 180) + '), so it may or may not have arrived. It is not sent again. The sequence stopped for this partner.']);
+      });
+      out.held = 'no_answer';
+      break;
+    }
     if (error) {
       await withSystem(async (db) => {
         await db.run("update public.partner_outreach set status = 'failed', error = $2, subject = $3, body = $4 where id = $1 and status = 'sending'", [claim.id, error.slice(0, 500), subject, text]);
@@ -366,6 +431,8 @@ export async function runPartnerOutreach(orgId: string, opts: PartnerRunOptions 
           [orgId, p.id, `${label} email was not sent: ${error}`.slice(0, 240) + '. The sequence stopped for this partner.']);
       });
       out.failed++;
+      // A refusal by this app's own guard says nothing about the email service: no hold, no notification.
+      if (guardRefused) continue;
       if (++failuresInARow >= PARTNER_RUN_FAILURE_LIMIT) {
         out.held = 'failures';
         // Not silent: the owners and admins are told once a day while it lasts, with the reason the email service gave.

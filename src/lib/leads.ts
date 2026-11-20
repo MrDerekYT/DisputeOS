@@ -59,9 +59,11 @@ export async function submitLead(slug: string, raw: unknown, meta: {
   // Checked before anything is looked up, so the answer is the same whether or not the email address is on file. Only
   // a US number can be texted: the form is public, and it must not be a way to text any number in the world.
   if (d.smsConsent && !toUsE164(d.phone)) return { ok: false, error: LEAD_SMS_NEEDS_PHONE[meta.shownIn === 'es' ? 'es' : 'en'] };
-  const ipLimit = await rateLimit(`lead:ip:${meta.ip ?? 'unknown'}`, 5, 3600);
-  const orgLimit = await rateLimit(`lead:org:${slug}`, 60, 3600);
-  if (!ipLimit.allowed || !orgLimit.allowed) return { ok: false, error: 'Too many requests. Please try again later.' };
+  // The address's own limit first: a request it refuses is not counted against the agency, so one address posting
+  // over and over cannot use up the agency's hourly allowance and close its form for every other visitor.
+  const tooMany: LeadResult = { ok: false, error: 'Too many requests. Please try again later.' };
+  if (!(await rateLimit(`lead:ip:${meta.ip ?? 'unknown'}`, 5, 3600)).allowed) return tooMany;
+  if (!(await rateLimit(`lead:org:${slug}`, 60, 3600)).allowed) return tooMany;
 
   const created = await withSystem(async (db) => {
     const org = await db.row<ApprovalRow & { id: string; settings: Record<string, unknown> }>(`select id, ${APPROVAL_COLS}, settings from public.organizations where slug = $1 and status = 'active' and mode = 'agency'`, [slug]);

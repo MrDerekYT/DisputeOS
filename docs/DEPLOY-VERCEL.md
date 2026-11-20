@@ -178,12 +178,13 @@ Sign-up is open: anyone who knows the address can create their own, separate wor
 other's data (PostgreSQL row-level security), but if you do not want strangers creating workspaces on your deployment,
 that needs a code change; there is no switch for it today.
 
-## 7. Approve a workspace for outreach (only if it will email partners or text leads)
+## 7. Approve a workspace for outreach (before it emails leads or partners, or sends any text)
 
-A workspace can switch on the email sequence to referral partners and the follow-up texts to leads, but nothing is sent
-until you, the operator, have approved it. Sign-up is open, and every workspace sends through your one email service
-and your one text number, so look at the workspace first: a real business, a name that is its own, a partner list it
-compiled itself. Then, from your own computer:
+A workspace can switch on its follow-up emails and texts to leads, the email sequence to referral partners and client
+updates by text, but nothing of that is sent until you, the operator, have approved it. Sign-up is open, the enquiry
+form takes any email address and any number, and every workspace sends through your one email service and your one
+text number. So look at the workspace first: a real business, a name that is its own, a partner list it compiled
+itself. Then, from your own computer:
 
 ```bash
 DATABASE_URL='postgresql://postgres.<ref>:<password>@aws-0-<region>.pooler.supabase.com:6543/postgres' \
@@ -191,9 +192,38 @@ DATABASE_CA_CERT="$(cat prod-ca-2021.crt)" \
 npm run outreach:approve -- <workspace-slug>            # or: ... -- <workspace-slug> --revoke
 ```
 
+Before it approves, the command prints the mailing address and the reply address the workspace has saved: they are
+what its automatic emails carry besides the name. If they are not what you expect of that business, withdraw the
+approval with `--revoke`.
+
+The same thing without a terminal, in the Supabase dashboard (SQL Editor). The slug is the last part of the workspace's
+enquiry form address (`/start/<workspace-slug>`):
+
+```sql
+-- 1. Look first: the name, and the two addresses its emails will carry.
+select name, slug, settings->>'lead_mailing_address' as mailing_address, settings->>'lead_reply_email' as reply_address
+  from public.organizations where slug = '<workspace-slug>';
+
+-- 2. Approve it under the name it has now, and leave the same audit entry the command leaves.
+with approved as (
+  update public.organizations set outreach_approved_at = now(), outreach_approved_name = name
+   where slug = '<workspace-slug>' and mode = 'agency' and status = 'active'
+  returning id, name
+)
+insert into public.audit_logs (org_id, actor_label, action, entity_type, entity_id, metadata)
+select id, 'platform operator (SQL editor)', 'outreach.approved', 'organization', id, jsonb_build_object('name', name) from approved
+returning org_id;   -- one row back means it is approved; none means the slug is wrong or the workspace is not an active agency
+
+-- To withdraw the approval: nothing more is sent.
+update public.organizations set outreach_approved_at = null, outreach_approved_name = null where slug = '<workspace-slug>';
+```
+
 The approval is for the business name shown; if the workspace is renamed, nothing is sent until you approve it again.
-A newly approved workspace sends at most 10 partner emails a day for its first 14 days. Lead follow-up emails (a reply
-to a person's own enquiry) and client updates do not need this approval. Details: docs/INTEGRATIONS.md.
+A newly approved workspace sends at most 10 partner emails a day for its first 14 days. What needs the approval: the
+follow-up emails and texts to leads, the partner emails, client updates by text and the test text on the Get set up
+page. A workspace you have not approved emails no lead and no partner and texts no one. What does not need it: emails
+to the workspace's own team and clients (invitations, sign-in emails, client updates by email). Details:
+docs/INTEGRATIONS.md.
 
 ## 8. Grant AI credits
 
@@ -324,7 +354,23 @@ An agency can use a domain it already owns for its public website (`https://www.
 Staff tools stay on the platform: `/app`, `/login`, `/signup` and every other path on an agency's domain redirect to
 `APP_URL`. Buying a domain is not built in, and email is not sent from the agency's domain.
 
-A domain serves an agency only when its row in `agency_domains` is `verified`. That happens in two ways.
+A domain serves an agency only when its row in `agency_domains` is `verified`. Two things have to be true before a
+row becomes verified, whichever of the two ways below connects it:
+
+- **The DNS points at this deployment.** Vercel says so, or your own check does. Every workspace is given the same
+  DNS target, so this alone says nothing about which workspace the domain belongs to.
+- **The workspace's ownership record is in the domain's DNS.** It is a `TXT` record named `_disputeos` in front of
+  the domain without a leading `www.`: `_disputeos.youragency.com` for both `youragency.com` and
+  `www.youragency.com`, `_disputeos.clients.youragency.com` for `clients.youragency.com`. Its value is different for
+  every workspace and every domain (a keyed hash of the two, made with `PII_ENCRYPTION_KEY`), and the agency's
+  Website page shows it with the other records. Only someone who manages the domain's DNS can create it, so it is
+  what ties the domain to that workspace. Another workspace that enters the same name is shown a different value, and
+  the records the first one created never verify it.
+
+The record is asked for when a domain becomes verified, not again afterwards: a verified domain stays verified until
+the agency removes it or **Check now** finds that its DNS no longer points here. If you rotate `PII_ENCRYPTION_KEY`
+the values change. Records made with the previous key still count while `PII_ENCRYPTION_KEY_PREVIOUS` is set; after
+that, a domain that is not verified yet needs the new value from its Website page. Verified domains are not affected.
 
 ### Automatic (recommended)
 
@@ -334,38 +380,63 @@ then lists custom domains as connected. From then on, on the agency's **Website*
 
 1. The agency types its domain and presses **Connect domain**. The app adds it to this Vercel project
    (`POST /v10/projects/{id}/domains`).
-2. The page shows the DNS records to create at the registrar, using the values Vercel recommends for this project:
-   an `A` record on `@` for a root domain (Vercel's general value is `76.76.21.21`), or a `CNAME` for a subdomain such
-   as `www` (general value `cname.vercel-dns.com`). If the domain is already in use on another Vercel account, Vercel
-   also asks for a `TXT` record on `_vercel` to prove ownership, and the page shows it.
-3. **Check now** asks Vercel again. The domain is marked connected only when Vercel reports it verified (ownership)
-   and not misconfigured (DNS points at Vercel and a certificate can be issued). Vercel issues the certificate itself.
-4. **Remove domain** removes it from the Vercel project too.
+2. The page shows the DNS records to create at the registrar. The pointing record uses the values Vercel recommends
+   for this project: an `A` record on `@` for a root domain (Vercel's general value is `76.76.21.21`), or a `CNAME`
+   for a subdomain such as `www` (general value `cname.vercel-dns.com`). Next to it is the workspace's `TXT` record
+   on `_disputeos`. If the domain is already in use on another Vercel account, Vercel also asks for a `TXT` record on
+   `_vercel`, and the page shows that too.
+3. **Check now** asks Vercel again and looks up the `_disputeos` record. The domain is marked connected only when
+   Vercel reports it verified (ownership) and not misconfigured (DNS points at Vercel and a certificate can be
+   issued), and the `TXT` record holds this workspace's value. Vercel issues the certificate itself. If the lookup
+   itself fails, nothing is marked and the page says the domain's DNS could not be read.
+4. **Remove domain** removes it from the Vercel project too. The DNS records stay at the agency's registrar until the
+   agency deletes them; left in place, they verify the domain for nobody else.
 
-One agency cannot connect a domain, or the `www` twin of a domain, that another agency has. A domain that is already
-on the project but was not added by the app (for example your own) is refused. Only the exact name is connected; the
-page tells the agency to forward the other form (`youragency.com` → `www.youragency.com`) at its registrar.
+Who may hold a name:
+
+- A verified domain, and its `www` twin, cannot be connected by another workspace until the workspace that has it
+  removes it.
+- A domain that is saved but not verified is held for its workspace for 24 hours. After that the next workspace that
+  enters the name takes it over. Before it is handed over it is checked with Vercel one last time, and if its DNS has
+  become good with its holder's own `TXT` record in place, it is verified for its holder instead.
+- A workspace whose `TXT` record is already in the domain's DNS does not have to wait out another workspace's 24
+  hours. The refusal it gets names the record to create; with that record in place, **Connect domain** gives it the
+  name at once.
+- Taking a name over never verifies it. The new holder needs its own `TXT` record like anyone else.
+
+A domain that is already on the project but was not added by the app (for example your own) is refused. Only the
+exact name is connected; the page tells the agency to forward the other form (`youragency.com` →
+`www.youragency.com`) at its registrar.
 
 ### By hand (no API token)
 
 Without the token the agency can still save its domain; the page says plainly that it is not live until you add it.
+Who may hold a name is decided as above, except that there is no last check with Vercel before a name changes hands.
 
-1. The agency saves the domain on its Website page (it shows as "Not connected yet").
-2. You add it in Vercel → the project → Settings → Domains, and send the agency the DNS records Vercel shows.
-3. When Vercel shows the domain as valid, run, with the production `DATABASE_URL` in your environment:
+1. The agency saves the domain on its Website page (it shows as "Not connected yet") and creates the `TXT` record on
+   `_disputeos` that the page shows.
+2. You add the domain in Vercel → the project → Settings → Domains, and send the agency the pointing record Vercel
+   shows (the page shows Vercel's general value for it).
+3. When Vercel shows the domain as valid, run, with the production `DATABASE_URL` and the app's
+   `PII_ENCRYPTION_KEY` in your environment (and `PII_ENCRYPTION_KEY_PREVIOUS`, if the app has one):
 
    ```
    npm run domain:verify -- www.youragency.com
    ```
 
-   It requests `https://www.youragency.com/api/domain-check` and marks the domain verified only if this deployment
-   answers there for that domain over a valid certificate. Otherwise it says what it saw and changes nothing.
+   It first prints the workspace that holds the domain. Check that it is the agency you are doing this for: a name
+   that was saved more than a day ago and never verified may have been taken over by another workspace since. It
+   then requests `https://www.youragency.com/api/domain-check` and looks up the `TXT` record, and marks the domain
+   verified only if this deployment answers there for that domain over a valid certificate and the record holds
+   that workspace's value. Otherwise it says what it found and changes nothing. Without `PII_ENCRYPTION_KEY` it
+   stops before checking anything: it cannot work out the value the record has to hold.
 4. To disconnect: the agency presses **Remove domain**, and you remove the domain in Vercel.
 
 Running servers pick up a newly verified or removed domain within a minute.
 
-Not verified here: the number of domains a project may hold on your Vercel plan (see Vercel's limits page), and
-wildcard domains, which this feature does not use.
+Not verified here: the number of domains a project may hold on your Vercel plan (see Vercel's limits page);
+wildcard domains, which this feature does not use; and the `TXT` lookup against live DNS from Vercel's runtime (it
+is tested against a stand-in for DNS only).
 
 ## What has not been verified
 

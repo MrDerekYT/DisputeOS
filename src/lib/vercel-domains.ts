@@ -6,7 +6,9 @@
  *   POST   /v9/projects/{id}/domains/{domain}/verify   ask Vercel to re-check that challenge
  *   GET    /v6/domains/{domain}/config           DNS: `misconfigured`, and the A / CNAME values Vercel recommends
  *   DELETE /v9/projects/{id}/domains/{domain}    remove it from the project
- * `verified` only proves ownership; a domain serves the app when it is verified AND not misconfigured.
+ * `verified` is Vercel's word that this project may use the domain; a domain reaches the app when it is verified AND
+ * not misconfigured. Both answers are the same whichever workspace of this app asked, so they do not say whose domain
+ * it is: that is settled by the workspace's own TXT record (./agency-domains.ts), which is checked as well.
  * Implemented to the documented API and tested against a mocked fetch; not exercised against the live service.
  */
 import { getEnv } from './env';

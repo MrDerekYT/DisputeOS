@@ -4,15 +4,16 @@ import { findBlockedClaims } from '@/lib/compliance/claims';
 import { BANK_DETAILS, bankCollectionSteps, type BankCase } from '@/lib/credit/bank-collections';
 import { specialtyReportStates } from '@/lib/credit/agencies';
 import { personalInfoReason } from '@/lib/credit/personal-info';
-import { CATEGORIES } from '@/lib/disputes/workflow';
-import { draftReason, REASON_PROMPT, reasonIsClientsOwn } from '@/lib/disputes/reasons';
-import { LETTER_LIBRARY, LIBRARY_GROUPS, libraryEntry, missingFacts, missingFactsForOwnTemplate, newInformationIn, renderLibraryLetter, templateForEntry, templateKeyForCategory } from '@/lib/letters/library';
+import { CATEGORIES, categoryForFinding, mustNameAccount, typedItemLabel } from '@/lib/disputes/workflow';
+import { draftReason, REASON_PROMPT, reasonIsClientsOwn, reportedFor, type ReportedRow } from '@/lib/disputes/reasons';
+import { LETTER_LIBRARY, LIBRARY_GROUPS, libraryEntry, missingFacts, missingFactsForOwnTemplate, newInformationIn, OLD_CREDITOR_WORDING, OLD_OUTDATED_WORDING, OLD_VALIDATION_WORDING, renderLibraryLetter, templateForEntry, templateKeyForCategory } from '@/lib/letters/library';
 import { editableWording } from '@/lib/letters/overlap';
 import { buildValues, mergeTemplate, unresolvedPlaceholders, type LetterContext, type SituationFacts } from '@/lib/letters/render';
 import { approvalBlockers } from '@/lib/letters/service';
 import { contentIssues, isConcreteReason, SPECIFICITY_KINDS, specificityIssues } from '@/lib/letters/specificity';
 import { letterTerms, REWORDABLE } from '@/lib/letters/tailor';
 import { ALL_TEMPLATES, templateByKey, TEMPLATES } from '@/lib/letters/templates';
+import { analyze, type AnalysisTradeline } from '@/lib/reports/analysis';
 
 // The date of birth and the SSN digits are on this client's record, as they are for a client whose intake is complete.
 const client = { full_name: 'Jordan Rivera', address: { line1: '123 Main St', city: 'Tampa', state: 'FL', zip: '33602' }, ssn_last4: '4321', dob: '1985-03-03' };
@@ -39,6 +40,10 @@ function fixture(key: string): LetterContext {
       return { ...base, dispute: { ...bureauDispute, category: 'personal_info', item_label: 'Personal information (Experian)', reason: PI_REASON, fields: ['Personal information'], tradeline: null } };
     case 'identity_theft_block':
       return { ...base, dispute: { ...bureauDispute, category: 'identity_theft', reason: 'I did not open this account and did not authorize anyone to open it. I learned of it on October 30, 2026.' } };
+    // A letter that states the client's position is drafted only for a dispute entered with that position.
+    case 'not_my_account': return { ...base, dispute: { ...bureauDispute, category: 'not_mine' } };
+    case 'duplicate_account': return { ...base, dispute: { ...bureauDispute, category: 'duplicate' } };
+    case 'bankruptcy_included': return { ...base, dispute: { ...bureauDispute, category: 'bankruptcy_included' } };
     case 'redispute_new_information':
       return { ...base, dispute: { ...bureauDispute, round: 2, reason: `${REASON}\n\n${NEW}`, prior_submitted_at: '2026-01-05' } };
     case 'follow_up_no_response':
@@ -204,6 +209,64 @@ describe('letter library', () => {
     expect(body('specialty_dispute')).toContain('the public record and background information in my consumer file');
   });
 
+  it('an outdated-item letter about an account that is only late is about that late payment information, never the account', () => {
+    // 15 U.S.C. § 1681c(a)(5) ages each adverse item from its own date: an account that was late once stays reportable.
+    const late = render('outdated_item', (c) => ({ ...c, facts: { ...c.facts, fallOff: { kind: 'date', date: '2026-03-10', rule: 'seven_years', from: '2019-03-10' } } }));
+    expect(late.ok).toBe(true);
+    if (!late.ok) return;
+    expect(late.body).toContain('Re: Late payment information that appears to be past its reporting period — Acme Bank, account ending 1234\n');
+    expect(late.body).toContain('about late payment information in my credit file that appears to be past the period in which it may be reported (15 U.S.C. § 1681c).');
+    expect(late.body).toContain('so the reporting period for the late payment information from that date appears to have ended on March 10, 2026.');
+    expect(late.body).toContain('Please conduct a reasonable reinvestigation of the date of first delinquency reported for this item and, if the reporting period for that late payment information has ended, update my file accordingly.');
+    expect(late.body).not.toMatch(/Item that appears to be past|an item in my credit file|its reporting period has ended|reporting period for this item/);
+    expect(unresolvedPlaceholders(late.body)).toEqual([]);
+    // A collection or a charge-off ages off as a whole, and its letter still says so.
+    const whole = body('outdated_item');
+    expect(whole).toContain('Re: Item that appears to be past the reporting period — Acme Bank, account ending 1234\n');
+    expect(whole).toContain('about an item in my credit file that appears to be past the period in which it may be reported');
+    expect(whole).toContain('and, if its reporting period has ended, update my file accordingly.');
+    expect(whole).not.toMatch(/late payment information/i);
+  });
+
+  it('the finding that leads to that letter says what has aged: the late payment information, not the account', () => {
+    const row = (o: Partial<AnalysisTradeline> = {}): AnalysisTradeline => ({
+      id: 't-1', bureau: 'experian', item_type: 'tradeline', creditor_name: 'City Card', original_creditor: null, account_last4: '5566', account_status: 'Open', payment_status: '30 days late',
+      balance_cents: 12000, credit_limit_cents: null, date_opened: '2015-01-10', date_reported: '2026-10-01', date_of_first_delinquency: '2019-03-10', payment_history: null, user_provided: {}, ...o,
+    });
+    const old = (o: Partial<AnalysisTradeline> = {}) => analyze({ tradelines: [row(o)], inquiries: [], publicRecords: [], identity: [], now: new Date('2026-11-19T00:00:00Z') }).find((f) => f.category === 'obsolete_item')!;
+    // An open card that was late once, more than seven years ago.
+    expect(old().explanation).toMatch(/generally 7 years from the reported date of first delinquency \(15 U\.S\.C\. § 1681c\), which works out to 2026-03-10\./);
+    expect(old().explanation).toMatch(/if it is accurate, the late payment information from that date may be past its reporting period, while the account itself keeps being reported; if it was re-aged, the date itself may be the issue\.$/);
+    expect(old().explanation).not.toMatch(/the item may be past/);
+    // A collection ages off as a whole, and its finding still says so.
+    expect(old({ item_type: 'collection', account_status: 'Collection', payment_status: null, date_of_first_delinquency: '2018-06-15' }).explanation)
+      .toMatch(/if it is accurate, the item may be past the reporting period; if it was re-aged, the date itself may be the issue\.$/);
+  });
+
+  it('a follow-up to a specialty agency carries the identification that agency asks for, and asks for a copy of the file, not a credit report', () => {
+    const specialty = fixture('specialty_dispute').dispute!;
+    const sent = { ...fixture('follow_up_no_response'), dispute: { ...specialty, agency: 'chexsystems', item_label: 'First Coast Bank · xxxx4321 (ChexSystems)', recipient_name: 'Chex Systems, Inc.', submitted_at: '2026-10-01', response_at: null } };
+    expect(missingFacts('follow_up_en', sent)).toEqual([]);
+    const text = mergeTemplate(templateByKey('follow_up_en')!.body, buildValues(sent));
+    // ChexSystems says correspondence must include the date of birth and the Social Security number: the same lines as its dispute letter.
+    expect(text).toContain('Tampa, FL 33602\nDate of birth: March 3, 1985\nSocial Security number: [SOCIAL SECURITY NUMBER NEEDED]\n\nChex Systems, Inc.\n');
+    expect(approvalBlockers(text)).toEqual(['Fill in or remove: [SOCIAL SECURITY NUMBER NEEDED]']);
+    expect(text).toContain('Re: Status of my dispute dated October 1, 2026 — First Coast Bank · xxxx4321\n');
+    expect(text).toContain('along with an updated copy of my file if it changed.');
+    expect(text).not.toMatch(/credit report|\(ChexSystems\)/);
+    // To a credit bureau the heading is what it was: the date of birth and the SSN digits, and nothing added.
+    const bureau = body('follow_up_no_response');
+    expect(bureau).toContain('Tampa, FL 33602\nDate of birth: March 3, 1985\nSSN (last 4): 4321\n\nExperian\n');
+    expect(bureau).not.toMatch(/credit report/);
+  });
+
+  it('a specialty letter names the item without the agency it is addressed to', () => {
+    const text = body('specialty_dispute');
+    expect(text).toContain('Re: Dispute of information in my file — First Coast Bank · xxxx4321\n');
+    expect(text).not.toContain('(LexisNexis)');
+    expect(text).toContain('  Company or account name: First Coast Bank\n  Reference or masked number: xxxx4321\n'); // the item itself is still printed in full below
+  });
+
   it('the letter to the creditor cites no statute and asks for no investigation: a letter this office prepared carries no such duty', () => {
     // 15 U.S.C. § 1681s-2(a)(8)(G) and 12 CFR 1022.43(b)(2): the direct-dispute duty does not apply to a dispute
     // prepared by a credit repair organization, so the letter must not claim it.
@@ -259,7 +322,8 @@ describe('letter library', () => {
     // The person drafting can leave the SSN digits out; the date of birth line stays.
     const noSsn = render('inaccurate_balance', (c) => ({ ...c, includeSsnLast4: false }));
     expect(noSsn.ok && noSsn.body).toContain('\nDate of birth: March 3, 1985\n\nExperian\n');
-    // A creditor or a collector is never sent either, unless the person drafting asked for the SSN digits.
+    // A creditor or a collector is sent neither by default. A creditor gets the SSN digits when the person drafting
+    // asked for them; a collector never does (createLetter clears the line: tests/db/dispute-letter-rules.test.ts).
     for (const key of ['creditor_direct_dispute', 'goodwill', 'payment_update', 'debt_validation', 'stop_communication']) expect(body(key), key).not.toMatch(/Date of birth|SSN/);
     const asked = render('goodwill', (c) => ({ ...c, includeSsnLast4: true }));
     expect(asked.ok && asked.body).toContain('\nSSN (last 4): 4321\n');
@@ -311,6 +375,8 @@ describe('letter library', () => {
     expect(missing('follow_up_no_response', (c) => ({ ...c, dispute: { ...c.dispute!, submitted_at: null } }))).toMatch(/not been recorded as sent/);
     expect(missing('method_of_verification', facts({ outcome: 'deleted' }))).toMatch(/verified as reported/);
     expect(missing('debt_validation', facts({ isCollection: false }))).toMatch(/apply to collections only[\s\S]*record the collector’s notice/);
+    // A notice that is already recorded under another name, or for another account, is why: the refusal says so.
+    expect(missing('debt_validation', facts({ isCollection: false }))).toMatch(/A notice recorded by name counts when the name matches the company this dispute is addressed to, and a notice recorded for another account does not count\./);
     // Identity theft: also never without accepted proof of the client's identity (15 U.S.C. § 1681c-2(a)(1)).
     expect(missing('identity_theft_block', facts({ identityProof: [] }))).toMatch(/also needs proof of the client’s identity/);
     expect(missing('identity_theft_block', facts({ identityProof: ['proof_of_address'] }))).toMatch(/government-issued photo ID/);
@@ -371,6 +437,73 @@ describe('a letter is drafted only for the dispute it was written for', () => {
     expect(why('goodwill', creditorItem('furnisher_direct'))).toMatch(/A goodwill request accepts the reporting as accurate, and this dispute says it is not/);
   });
 
+  it('a letter that states the client’s position is drafted only for a dispute entered with that position', () => {
+    // "which I have paid" on a goodwill item or a creditor dispute that records no payment.
+    expect(why('payment_update', creditorItem('goodwill'))).toBe('This letter says the client has paid the account. This item is not entered that way, so the letter is not drafted for it. If that is what the client says, start a new dispute for the account and choose the type “Paid account — request to update”.');
+    expect(why('payment_update', creditorItem('furnisher_direct'))).toMatch(/says the client has paid the account\. This dispute is not entered that way/);
+    // "that I do not recognize as mine", "reported more than once" and "following my bankruptcy" on a balance dispute,
+    // even for a client who has a bankruptcy on file.
+    expect(why('not_my_account')).toMatch(/says the client does not recognize the account\. This dispute is not entered that way[\s\S]*choose the type “Client does not recognize the account”/);
+    expect(why('duplicate_account')).toMatch(/says the account is reported more than once[\s\S]*choose the type “Possible duplicate reporting”/);
+    expect(fixture('inaccurate_balance').facts!.bankruptcy).toBeTruthy();
+    expect(why('bankruptcy_included')).toMatch(/says the account was part of the client’s bankruptcy[\s\S]*choose the type “Account included in bankruptcy”/);
+    // An identity theft dispute without its report is not answered with the not-my-account letter either.
+    expect(why('not_my_account', (c) => c, 'identity_theft_block')).toMatch(/says the client does not recognize the account/);
+    // Each one still drafts for its own kind of dispute, and the letters that state no position are not affected.
+    for (const key of ['not_my_account', 'duplicate_account', 'bankruptcy_included']) expect(why(key, (c) => c, key), key).toBe('');
+    expect(why('payment_update', creditorItem('payment_update'))).toBe('');
+    for (const key of ['bureau_dispute', 'inaccurate_balance', 'inaccurate_status', 'inaccurate_history_dates']) expect(why(key), key).toBe('');
+    // What is left for an item the client accepts as reported is named by its kind.
+    expect(why('creditor_direct_dispute', creditorItem('goodwill'))).toMatch(/Use the goodwill request\.$/);
+    expect(why('creditor_direct_dispute', creditorItem('payment_update'))).toMatch(/Use the request to update a paid account or the goodwill request\.$/);
+  });
+
+  it('an agency’s own template is refused while its own text claims a right the built-in letters no longer claim', () => {
+    const own = (kind: Parameters<typeof missingFactsForOwnTemplate>[0]['kind'], baseKey: string | null, text: string) =>
+      (c: LetterContext) => missingFactsForOwnTemplate({ baseKey, fallbackKey: `${kind}_en`, kind, body: text }, c);
+    // The creditor letter as it was worded before: a creditor need not investigate a dispute this office prepared
+    // (15 U.S.C. § 1681s-2(a)(8)(G)), so a copy that still cites the direct-dispute right is not drafted from.
+    const oldCreditor = 'Re: Direct dispute — {{item_label}}\n\nUnder Section 623(a)(8) of the Fair Credit Reporting Act (15 U.S.C. § 1681s-2(a)(8)), I ask that you investigate the information below.\n\n{{reason}}\n\nSincerely,\n{{client_name}}';
+    const creditor = fixture('creditor_direct_dispute');
+    expect(own('creditor_dispute', 'creditor_dispute_en', oldCreditor)(creditor)).toEqual([OLD_CREDITOR_WORDING]);
+    expect(own('creditor_dispute', null, 'I dispute this under 15 U.S.C. § 1681s-2(a)(8).\n\n{{reason}}')(creditor)).toEqual([OLD_CREDITOR_WORDING]);
+    expect(OLD_CREDITOR_WORDING).toMatch(/not required to investigate a dispute that a credit repair company prepared[\s\S]*take the citation out, or customize the current letter to the creditor again/);
+    expect(own('creditor_dispute', 'creditor_dispute_en', templateByKey('creditor_dispute_en')!.body)(creditor)).toEqual([]);
+    // The validation letter as it was worded before states the 30-day right whatever is on file. It is drafted only
+    // while a notice with an open validation period is on file for the debt (15 U.S.C. § 1692g(b)).
+    const oldValidation = 'Re: Request for validation of debt — {{item_label}}\n\nUnder Section 809(b) of the Fair Debt Collection Practices Act (15 U.S.C. § 1692g(b)), I dispute this debt and request validation.\n\n{{reason}}\n\nUntil you provide validation, I ask that you cease collection of it, as the statute provides.\n\nSincerely,\n{{client_name}}';
+    const collector = fixture('debt_validation');
+    expect(own('validation_request', 'validation_request_en', oldValidation)(collector)).toEqual([]); // notice received 17 days ago: open
+    expect(own('validation_request', 'validation_request_en', oldValidation)({ ...collector, facts: { ...collector.facts, notice: { kind: 'received', date: '2026-08-02', open: false } } })).toEqual([OLD_VALIDATION_WORDING]);
+    expect(own('validation_request', 'validation_request_en', oldValidation)({ ...collector, facts: { ...collector.facts, notice: null } })).toEqual([OLD_VALIDATION_WORDING]);
+    expect(OLD_VALIDATION_WORDING).toMatch(/no notice with an open validation period is on file for this debt/);
+    // The current built-in letter states the right through a merge field, so a copy of it is never caught by this.
+    expect(templateByKey('validation_request_en')!.body).not.toMatch(/809|1692g/);
+    expect(own('validation_request', 'validation_request_en', templateByKey('validation_request_en')!.body)({ ...collector, facts: { ...collector.facts, notice: null } })).toEqual([]);
+    // "as the statute provides" alone is not the claim: the identity theft block says it about its own statute.
+    const theft = fixture('identity_theft_block');
+    expect(own('bureau_dispute', 'identity_theft_block_en', templateByKey('identity_theft_block_en')!.body)(theft)).toEqual([]);
+  });
+
+  it('an agency’s own copy of the earlier outdated-item letter is not drafted for an account that is only late', () => {
+    // The letter as it was worded before: the subject and the opening call the account an item past its reporting period.
+    const oldOutdated = 'Re: Item that appears to be past the reporting period — {{item_label}}\n\nTo whom it may concern:\n\nI am writing about an item in my credit file that appears to be past the period in which it may be reported (15 U.S.C. § 1681c).\n\n{{obsolete_text}}\n\n{{reason}}\n\nSincerely,\n{{client_name}}';
+    const own = (text: string) => (c: LetterContext) => missingFactsForOwnTemplate({ baseKey: 'outdated_item_en', fallbackKey: 'bureau_dispute_en', kind: 'bureau_dispute', body: text }, c);
+    const whole = fixture('outdated_item');
+    const lateOnly: LetterContext = { ...whole, facts: { ...whole.facts, fallOff: { kind: 'date', date: '2026-03-10', rule: 'seven_years', from: '2019-03-10' } } };
+    // A collection or a charge-off ages off as a whole, so the earlier wording is true of it.
+    expect(whole.facts?.fallOff).toMatchObject({ kind: 'date' });
+    expect(whole.facts?.fallOff).not.toMatchObject({ rule: 'seven_years' });
+    expect(own(oldOutdated)(whole)).toEqual([]);
+    // An account that is only late stays reportable (15 U.S.C. § 1681c(a)(5)): the copy is refused, with what to do.
+    expect(own(oldOutdated)(lateOnly)).toEqual([OLD_OUTDATED_WORDING]);
+    expect(OLD_OUTDATED_WORDING).toMatch(/This account is only late[\s\S]*the account itself stays reportable\. Use the built-in outdated item letter, or customize it again/);
+    // A copy of the current letter names what it is about through merge fields, so it is drafted for both.
+    expect(templateByKey('outdated_item_en')!.body).not.toMatch(/item (in my credit file )?that appears to be past/i);
+    expect(own(templateByKey('outdated_item_en')!.body)(lateOnly)).toEqual([]);
+    expect(own(templateByKey('outdated_item_en')!.body)(whole)).toEqual([]);
+  });
+
   it('keeps personal information and account letters apart', () => {
     expect(why('personal_information')).toMatch(/lists personal information entries, and this dispute is about an account/);
     expect(why('inaccurate_balance', (c) => c, 'personal_information')).toMatch(/about personal information, not an account\. Use the personal information correction/);
@@ -393,7 +526,12 @@ describe('a letter is drafted only for the dispute it was written for', () => {
     expect(own('redispute_new_information_en', 'bureau_dispute')(again)).toBe('');
     // A copy of the outdated-item letter: not while the reporting period still runs.
     expect(own('outdated_item_en', 'bureau_dispute')({ ...balance, facts: { ...balance.facts, fallOff: { kind: 'date', date: '2030-01-10', rule: 'seven_years_plus_180_days', from: '2022-07-14' } } })).toMatch(/runs until January 10, 2030\. It is not past the reporting period/);
-    expect(own('bankruptcy_included_en', 'bureau_dispute')({ ...balance, facts: { ...balance.facts, bankruptcy: null } })).toMatch(/No bankruptcy is recorded/);
+    const bk = fixture('bankruptcy_included');
+    expect(own('bankruptcy_included_en', 'bureau_dispute')({ ...bk, facts: { ...bk.facts, bankruptcy: null } })).toMatch(/No bankruptcy is recorded/);
+    expect(own('bankruptcy_included_en', 'bureau_dispute')(bk)).toBe('');
+    // And to the kind of dispute it was written for: a copy of a letter that states a position is not drafted on a balance dispute.
+    expect(own('bankruptcy_included_en', 'bureau_dispute')(balance)).toMatch(/says the account was part of the client’s bankruptcy\. This dispute is not entered that way/);
+    expect(own('not_my_account_en', 'bureau_dispute')(balance)).toMatch(/says the client does not recognize the account/);
     // A template written from scratch that prints a situation field is held to that field's facts: no marked line, no future date.
     const scratch = (field: string) => own(null, 'bureau_dispute', `Dear {{recipient_name}}:\n\n{{ ${field} }}\n\n{{reason}}\n\nSincerely,`);
     expect(scratch('identity_theft_text')({ ...theft, facts: { ...theft.facts, identityTheftReports: [] } })).toMatch(/needs an identity theft report/);
@@ -411,7 +549,7 @@ describe('the reason is the client’s own facts', () => {
   const tl = { creditor: 'Acme Bank', last4: '1234', bureau: 'experian' as const };
 
   it('drafts no reason where only the client can supply one, and gives a prompt that is not letter text', () => {
-    for (const category of ['identity_theft', 'bankruptcy_included', 'payment_update', 'goodwill', 'personal_info', 'unverifiable_collection']) {
+    for (const category of ['identity_theft', 'bankruptcy_included', 'payment_update', 'goodwill', 'personal_info', 'unverifiable_collection', 'incorrect_payment_history', 'unauthorized_inquiry']) {
       expect(draftReason({ category, ...tl }), category).toBe('');
       expect(reasonIsClientsOwn(category), category).toBe(true);
       expect(REASON_PROMPT[category]!.length, category).toBeGreaterThan(40);
@@ -438,18 +576,18 @@ describe('the reason is the client’s own facts', () => {
     const rep = (bureau: 'experian' | 'equifax' | 'transunion', field: string, value: string) => ({ bureau, field, value, source: 'reported' as const });
     // Two bureaus report different balances: the reason says so, with both figures.
     expect(draftReason({ category: 'incorrect_balance', ...tl, evidence: [rep('experian', 'Balance', '$1,200.00'), rep('equifax', 'Balance', '$900.00'), rep('transunion', 'Balance', '$1,200.00')] }))
-      .toBe('The balance reported for Acme Bank (account ending 1234) differs between the credit reporting agencies (Experian reports $1,200.00; Equifax reports $900.00; TransUnion reports $1,200.00). I am asking that the balance be verified with the furnisher and corrected if it is not accurate.');
-    // One bureau, or several that agree: the reported figure is stated, and no difference is claimed.
-    expect(draftReason({ category: 'incorrect_balance', ...tl, evidence: [rep('experian', 'Balance', '$980.00')] }))
-      .toBe('My Experian credit report shows a balance of $980.00 for Acme Bank (account ending 1234). I am asking that the balance be verified with the furnisher and corrected if it is not accurate.');
-    expect(draftReason({ category: 'incorrect_balance', ...tl, evidence: [rep('experian', 'Balance', '$450.00'), rep('equifax', 'Balance', '$450.00'), rep('transunion', 'Balance', '$450.00')] }))
-      .toMatch(/^My Experian, Equifax and TransUnion credit reports show a balance of \$450\.00 for Acme Bank/);
-    expect(draftReason({ category: 'incorrect_balance', ...tl, evidence: [rep('experian', 'Balance', '$450.00'), rep('equifax', 'Balance', '$450.00')] })).toMatch(/^My Experian and Equifax credit reports show a balance of/);
+      .toBe('The balance reported for Acme Bank (account ending 1234) differs between the credit reporting agencies (Experian reports $1,200.00; Equifax reports $900.00; TransUnion reports $1,200.00). Please verify the balance with the furnisher and correct it if it is not accurate or cannot be verified.');
+    // One bureau, or several that agree: there is nothing to set side by side, so no difference is claimed and the one
+    // figure is not restated (the letter prints the balance as the report shows it). The reason is a request to verify.
+    const bareBalance = 'Please verify the balance reported for Acme Bank (account ending 1234) with the furnisher and correct it if it is not accurate or cannot be verified.';
+    expect(draftReason({ category: 'incorrect_balance', ...tl, evidence: [rep('experian', 'Balance', '$980.00')] })).toBe(bareBalance);
+    expect(draftReason({ category: 'incorrect_balance', ...tl, evidence: [rep('experian', 'Balance', '$450.00'), rep('equifax', 'Balance', '$450.00'), rep('transunion', 'Balance', '$450.00')] })).toBe(bareBalance);
+    expect(draftReason({ category: 'incorrect_balance', ...tl })).toBe(bareBalance);
     // The reported date of first delinquency is stated as it is; whether the period has ended is the letter's to work out.
     expect(draftReason({ category: 'obsolete', ...tl, evidence: [rep('experian', 'Date of first delinquency', 'February 14, 2016')] }))
-      .toBe('My Experian credit report shows a date of first delinquency of February 14, 2016 for Acme Bank (account ending 1234), and the item is still in my file. Please verify that date with the furnisher.');
+      .toBe('My Experian credit report shows a date of first delinquency of February 14, 2016 for Acme Bank (account ending 1234). Please verify that date with the furnisher.');
     // With nothing from a report, no sentence has an empty bracket, a "see enclosed" or a claim that the bureaus differ.
-    for (const category of ['incorrect_balance', 'incorrect_status', 'incorrect_dates', 'duplicate', 'obsolete', 'incorrect_payment_history', 'other']) {
+    for (const category of ['incorrect_balance', 'incorrect_status', 'incorrect_dates', 'duplicate', 'obsolete', 'other']) {
       const bare = draftReason({ category, ...tl });
       expect(bare, category).not.toMatch(/\(\)|see enclosed|differs between|do not match across|not consistent across|more than seven years/);
       expect(bare, category).toContain('Acme Bank (account ending 1234)');
@@ -458,7 +596,133 @@ describe('the reason is the client’s own facts', () => {
     expect(draftReason({ category: 'incorrect_dates', ...tl, evidence: [rep('experian', 'Date opened', 'July 15, 2020'), rep('transunion', 'Date opened', 'August 1, 2020')] }))
       .toMatch(/^The dates reported for Acme Bank \(account ending 1234\) \(Experian reports July 15, 2020; TransUnion reports August 1, 2020\) do not match across the credit reporting agencies\./);
     expect(draftReason({ category: 'incorrect_dates', ...tl, evidence: [rep('experian', 'Date opened', 'July 15, 2020'), rep('equifax', 'Date opened', 'July 15, 2020')] }))
-      .toMatch(/^Please verify the dates reported for Acme Bank \(account ending 1234\) \(Experian reports July 15, 2020; Equifax reports July 15, 2020\), including the date of first delinquency/);
+      .toBe('Please verify the dates reported for Acme Bank (account ending 1234), including the date of first delinquency, with the furnisher and correct them if needed.');
+  });
+
+  it('says the agencies differ only when two different bureaus report different values', () => {
+    const rep = (bureau: 'experian' | 'equifax' | 'transunion', field: string, value: string) => ({ bureau, field, value, source: 'reported' as const });
+    // Two values from ONE bureau (an older and a newer report, or two entries) are not a difference between agencies.
+    const sameBureau = draftReason({ category: 'incorrect_balance', ...tl, evidence: [rep('experian', 'Balance', '$700.00'), rep('experian', 'Balance', '$640.00')] });
+    expect(sameBureau).toBe('Please verify the balance reported for Acme Bank (account ending 1234) with the furnisher and correct it if it is not accurate or cannot be verified.');
+    expect(draftReason({ category: 'incorrect_dates', ...tl, evidence: [rep('experian', 'Date opened', 'March 5, 2019'), rep('experian', 'Date opened', 'April 9, 2019')] })).not.toMatch(/do not match across/);
+    // The same value from the same bureau twice is one value: nothing to list.
+    expect(draftReason({ category: 'incorrect_dates', ...tl, evidence: [rep('experian', 'Date opened', 'March 5, 2019'), rep('experian', 'Date opened', 'March 5, 2019')] }))
+      .toBe('Please verify the dates reported for Acme Bank (account ending 1234), including the date of first delinquency, with the furnisher and correct them if needed.');
+    // A report that carries no date at all gives the reason nothing to restate (it used to read “Experian reports not reported”).
+    expect(draftReason({ category: 'incorrect_dates', ...tl, evidence: [rep('experian', 'Date of first delinquency', 'not reported')] }))
+      .toBe('Please verify the dates reported for Acme Bank (account ending 1234), including the date of first delinquency, with the furnisher and correct them if needed.');
+    expect(draftReason({ category: 'incorrect_status', ...tl, evidence: [rep('equifax', 'Account status', 'Open'), rep('equifax', 'Account status', 'Closed')] })).not.toMatch(/not consistent across/);
+    expect(draftReason({ category: 'incorrect_dates', ...tl, evidence: [rep('experian', 'Date opened', 'March 5, 2019'), rep('equifax', 'Date of first delinquency', 'April 9, 2021')] })).not.toMatch(/do not match across/); // two kinds of date
+    // With a second bureau that does differ, the difference is real and is stated.
+    expect(draftReason({ category: 'incorrect_balance', ...tl, evidence: [rep('experian', 'Balance', '$700.00'), rep('experian', 'Balance', '$640.00'), rep('equifax', 'Balance', '$700.00')] })).toMatch(/differs between the credit reporting agencies/);
+    // A finding within one bureau's report that carries several kinds of value: each is named, so the creditor's name
+    // is never listed as if it were a date, and no difference between agencies is claimed.
+    const reAged = draftReason({ category: 'incorrect_dates', ...tl, evidence: [rep('experian', 'Date of first delinquency (collection)', '2021-06-01'), rep('experian', 'Date of first delinquency (original creditor)', '2020-01-15'), rep('experian', 'Original creditor named', 'ACME BANK')] });
+    expect(reAged).toBe('Please verify the dates reported for Acme Bank (account ending 1234) (Experian reports date of first delinquency (collection) 2021-06-01; Experian reports date of first delinquency (original creditor) 2020-01-15; Experian reports original creditor named ACME BANK), including the date of first delinquency, with the furnisher and correct them if needed.');
+    expect(draftReason({ category: 'duplicate', ...tl, evidence: [rep('experian', 'Account ending', '1234'), rep('experian', 'Account ending', '5678')] }))
+      .toBe('Acme Bank (account ending 1234) appears to be reported more than once or by more than one company for the same debt (Experian reports account ending 1234; Experian reports account ending 5678). Please verify whether these are separate obligations and, if they are the same one, report it once.');
+  });
+
+  it('for an account picked on the form, states one value per bureau, from that bureau’s newest approved report', () => {
+    const row = (id: string, bureau: ReportedRow['bureau'], balance: number, newest: boolean, o: Partial<ReportedRow> = {}): ReportedRow =>
+      ({ id, bureau, creditor_name: 'ACME BANK', account_last4: '1234', balance_cents: balance, date_opened: '2019-03-05', date_of_first_delinquency: null, newest, ...o });
+    // A monthly refresh: two approved Experian reports (September and October), and one Equifax report.
+    const older = row('exp-sep', 'experian', 70000, false);
+    const newer = row('exp-oct', 'experian', 64000, true);
+    const equifax = row('eqf-oct', 'equifax', 65000, true);
+    const all = [older, newer, equifax, row('other', 'equifax', 100, true, { creditor_name: 'OTHER LENDER', account_last4: '9999' })];
+    const values = (category: string, picked: ReportedRow, rows = all) => reportedFor(category, picked, rows).map((e) => `${e.bureau} ${e.value}`);
+    // The newest row is compared with the other bureau's newest row, and never with its own bureau's older report.
+    expect(values('incorrect_balance', newer)).toEqual(['experian $640.00', 'equifax $650.00']);
+    expect(draftReason({ category: 'incorrect_balance', creditor: 'ACME BANK', last4: '1234', evidence: reportedFor('incorrect_balance', newer, all) }))
+      .toMatch(/differs between the credit reporting agencies \(Experian reports \$640\.00; Equifax reports \$650\.00\)/);
+    // With only the two Experian reports on file nothing differs "between the agencies": the one value is stated.
+    expect(values('incorrect_balance', newer, [older, newer])).toEqual(['experian $640.00']);
+    const one = draftReason({ category: 'incorrect_balance', creditor: 'ACME BANK', last4: '1234', evidence: reportedFor('incorrect_balance', newer, [older, newer]) });
+    expect(one).toBe('Please verify the balance reported for ACME BANK (account ending 1234) with the furnisher and correct it if it is not accurate or cannot be verified.');
+    expect(one).not.toMatch(/differs|\$700|\$640/);
+    // A row picked from an older report stands alone: it is not compared with anything.
+    expect(values('incorrect_balance', older)).toEqual(['experian $700.00']);
+    expect(values('incorrect_dates', newer, [older, newer])).toEqual(['experian March 5, 2019']); // once, not once per report
+    // Two rows for the account on one bureau's newest report still give one value for that bureau.
+    expect(values('incorrect_balance', newer, [newer, equifax, row('eqf-dup', 'equifax', 99900, true)])).toEqual(['experian $640.00', 'equifax $650.00']);
+    // Without account digits the account cannot be matched across reports, so only the chosen row is used.
+    const noDigits = row('exp-x', 'experian', 5000, true, { account_last4: null });
+    expect(values('incorrect_balance', noDigits, [noDigits, row('eqf-x', 'equifax', 6000, true, { account_last4: null })])).toEqual(['experian $50.00']);
+    expect(reportedFor('obsolete', row('c', 'experian', 0, true, { date_of_first_delinquency: '2018-01-10' }), all).map((e) => `${e.field}: ${e.value}`)).toEqual(['Date of first delinquency: January 10, 2018']);
+    expect(reportedFor('incorrect_balance', undefined, all)).toEqual([]);
+    expect(reportedFor('not_mine', newer, all)).toEqual([]);
+  });
+
+  it('a bare request to verify is held until a person adds the client’s own facts', () => {
+    const account = { name: 'Acme Bank', reference: '1234' };
+    // With nothing from a report, every drafted reason is a request to verify and nothing else: the specificity check holds it.
+    for (const category of ['incorrect_balance', 'incorrect_status', 'incorrect_dates', 'duplicate', 'obsolete', 'other']) {
+      const bare = draftReason({ category, ...tl });
+      expect(bare, category).toMatch(/^Please verify /);
+      expect(isConcreteReason(bare, account), category).toBe(false);
+      expect(isConcreteReason(draftReason({ category, creditor: '' })), `${category}, account not named`).toBe(false);
+    }
+    // In the letter: an account typed by staff, balance dispute, the pre-filled reason left as it was.
+    const typed = { ...bureauDispute, tradeline: null, item_label: 'Summit Finance ••4410 (Equifax)', bureau: 'equifax', reason: draftReason({ category: 'incorrect_balance', creditor: '' }) };
+    const weak = renderLibraryLetter('inaccurate_balance', { ...fixture('inaccurate_balance'), dispute: typed });
+    expect(weak.ok && weak.body).toContain('Reason for my request:\nPlease verify the balance reported for this account with the furnisher and correct it if it is not accurate or cannot be verified.\n');
+    expect(weak.ok && specificityIssues({ body: weak.body, category: 'incorrect_balance', reason: typed.reason, fields: ['Balance'], account: null }).map((i) => i.key)).toEqual(['reason']);
+    // A late payment the client disputes has no drafted reason at all: nobody recorded that it "does not match my records".
+    expect(draftReason({ category: 'incorrect_payment_history', ...tl })).toBe('');
+    expect(REASON_PROMPT.incorrect_payment_history).toMatch(/Which late payment the client disputes[\s\S]*what the client’s own records show/);
+    // One reported value does not change that: restating the bureau's own figure or date is not a reason.
+    const rep = (bureau: 'experian' | 'equifax', field: string, value: string) => ({ bureau, field, value, source: 'reported' as const });
+    expect(isConcreteReason(draftReason({ category: 'incorrect_balance', ...tl, evidence: [rep('experian', 'Balance', '$980.00')] }), account)).toBe(false);
+    expect(isConcreteReason(draftReason({ category: 'incorrect_dates', ...tl, evidence: [rep('experian', 'Date opened', 'March 5, 2019')] }), account)).toBe(false);
+    // What stands on its own: a difference the client's reports show, the reported date an outdated-item letter rests
+    // on, and the client's own statement that the account is not theirs.
+    expect(isConcreteReason(draftReason({ category: 'incorrect_balance', ...tl, evidence: [rep('experian', 'Balance', '$980.00'), rep('equifax', 'Balance', '$900.00')] }), account)).toBe(true);
+    expect(isConcreteReason(draftReason({ category: 'obsolete', ...tl, evidence: [rep('experian', 'Date of first delinquency', 'February 14, 2016')] }), account)).toBe(true);
+    expect(isConcreteReason(draftReason({ category: 'not_mine', ...tl }), account)).toBe(true);
+  });
+
+  it('with no account name on hand, a drafted reason says “this account” and still reads as a sentence', () => {
+    // The new dispute form drafts before the person has typed the account's name (it used to pass "the account").
+    const say = (category: string, evidence?: Parameters<typeof draftReason>[0]['evidence']) => draftReason({ category, creditor: '', evidence });
+    expect(say('duplicate')).toBe('Please verify whether this account is reported more than once, or by more than one company for the same debt, and if it is, report it once.');
+    expect(say('duplicate', [{ bureau: 'experian', field: 'Account ending', value: '1234', source: 'reported' }])).toMatch(/^This account appears to be reported more than once/);
+    // An inquiry has no drafted reason at all any more: “I do not recall authorizing the inquiry” was also pre-filled
+    // for a finding that only says the inquiry is more than two years old, which is not something the client said.
+    expect(say('unauthorized_inquiry')).toBe('');
+    expect(draftReason({ category: 'unauthorized_inquiry', ...tl })).toBe('');
+    expect(categoryForFinding({ category: 'old_inquiry' })).toBe('unauthorized_inquiry');
+    expect(REASON_PROMPT.unauthorized_inquiry).toMatch(/What the client says about this inquiry[\s\S]*inquiry’s date as the report shows it/);
+    expect(say('not_mine')).toMatch(/^I do not recognize this account\. Please provide verification that it belongs to me,/);
+    expect(say('incorrect_balance')).toBe('Please verify the balance reported for this account with the furnisher and correct it if it is not accurate or cannot be verified.');
+    for (const category of Object.keys(CATEGORIES).filter((c) => !reasonIsClientsOwn(c) && c !== 'specialty_item')) {
+      expect(say(category), category).toMatch(/^[A-Z]/);
+      expect(say(category), category).not.toMatch(/the account appears|inquiry by the account|\(\)|  /);
+    }
+    // Named, the wording is what it was.
+    expect(draftReason({ category: 'not_mine', ...tl })).toMatch(/^I do not recognize Acme Bank \(account ending 1234\)\. Please provide verification that this account belongs to me,/);
+  });
+
+  it('a finding starts the dispute that matches what it says, and a bureau dispute about an account on no report has to name it', () => {
+    // "Client says payments were never late" is a payment-history dispute. It used to start a "not my account" one.
+    expect(categoryForFinding({ category: 'client_statement', dedupe_key: 'client-never-late:8a188ba6' })).toBe('incorrect_payment_history');
+    expect(categoryForFinding({ category: 'client_statement', dedupe_key: 'client-not-mine:8a188ba6' })).toBe('not_mine');
+    expect(categoryForFinding({ category: 'client_statement' })).toBe('not_mine');
+    expect(categoryForFinding({ category: 'balance_mismatch', dedupe_key: 'client-never-late:odd' })).toBe('incorrect_balance');
+    expect(categoryForFinding({ category: 'no_such_finding' })).toBeUndefined();
+    // No drafted reason for it, so bulk drafting leaves it to a person.
+    expect(reasonIsClientsOwn('incorrect_payment_history')).toBe(true);
+    // The account's name is required for a bureau dispute with no report account, and for nothing else.
+    for (const category of ['incorrect_balance', 'not_mine', 'unauthorized_inquiry', 'other']) expect(mustNameAccount(category, false), category).toBe(true);
+    expect(mustNameAccount('incorrect_balance', true)).toBe(false);
+    for (const category of ['personal_info', 'goodwill', 'unverifiable_collection', 'furnisher_direct', 'specialty_item']) expect(mustNameAccount(category, false), category).toBe(false);
+    // What the form then labels the item: the typed name and digits, never a bare “Item” for personal information.
+    expect(typedItemLabel({ category: 'incorrect_balance', hasReportAccount: false, accountName: 'Summit Finance', accountLast4: '4410' })).toBe('Summit Finance ••4410');
+    expect(typedItemLabel({ category: 'unauthorized_inquiry', hasReportAccount: false, accountName: 'Capital One', accountLast4: '' })).toBe('Capital One');
+    expect(typedItemLabel({ category: 'goodwill', hasReportAccount: false, recipientName: 'Acme Bank', accountLast4: '1234' })).toBe('Acme Bank ••1234');
+    expect(typedItemLabel({ category: 'goodwill', hasReportAccount: false, recipientName: 'Acme Bank' })).toBeUndefined(); // the recipient alone is already the label
+    expect(typedItemLabel({ category: 'personal_info', hasReportAccount: false })).toBe('Personal information');
+    expect(typedItemLabel({ category: 'incorrect_balance', hasReportAccount: true, accountName: 'Ignored' })).toBeUndefined();
   });
 
   it('naming the account is not a reason: its own name and number never make a stock sentence concrete', () => {
@@ -533,6 +797,16 @@ describe('bank account sent to collections', () => {
     expect(s.steps.find((x) => x.key === 'update')!.links![0]!.href).toContain('templateKey=payment_update_en');
     expect(steps({ paid: 'no' }).steps.find((x) => x.key === 'update')!.links).toBeUndefined();
     expect(text({ paid: 'no' })).toMatch(/Whether to pay is the client’s decision/);
+  });
+
+  it('says a closed bank account may be reported, and does not say the agencies publish how long they keep it', () => {
+    // The registry says only that these agencies report accounts a bank closed and reported, and records no retention period.
+    const reports = steps({}).steps.find((x) => x.key === 'reports')!;
+    expect(reports.body).toMatch(/^A closed or overdrawn bank account may be reported to a bank-account reporting agency,/);
+    expect(reports.body).not.toMatch(/generally reported/);
+    const period = steps({}).steps.find((x) => x.key === 'period')!;
+    expect(period.body).toMatch(/^How long ChexSystems and Early Warning keep a closed-account record is not stated here because it has not been confirmed at its source\. Ask the agency, or look on its own site or on the disclosure itself\./);
+    expect(period.body).not.toMatch(/publish/);
   });
 
   it('states a retention period only where the registry records its source', () => {

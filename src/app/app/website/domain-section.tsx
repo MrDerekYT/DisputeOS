@@ -2,7 +2,7 @@ import { ActionForm, Field, SubmitButton } from '@/components/forms';
 import { Badge, Notice, Section } from '@/components/ui';
 import { domainForOrg } from '@/lib/agency-domains';
 import type { Ctx } from '@/lib/auth/context';
-import { bareDomain } from '@/lib/domain-rules';
+import { bareDomain, ownershipHost } from '@/lib/domain-rules';
 import { vercelMissing } from '@/lib/vercel-domains';
 import { checkDomainAction, connectDomainAction, removeDomainAction } from './domain-actions';
 
@@ -42,16 +42,17 @@ export async function DomainSection({ ctx }: { ctx: Ctx }) {
         <>
           {d.details.error && <div className="mt-3"><Notice tone={d.status === 'failed' ? 'bad' : 'warn'}>{d.details.error}</Notice></div>}
           {manual && <div className="mt-3">{operatorNote}</div>}
-          <p className="mt-4 text-[0.8125rem] text-muted">Create {d.details.records.length > 1 ? 'these records' : 'this record'} where you manage the domain’s DNS (usually the registrar you bought it from):</p>
+          <p className="mt-4 text-[0.8125rem] text-muted">Create these records where you manage the domain’s DNS (usually the registrar you bought it from):</p>
           <table className="mt-2 w-full text-left text-xs">
             <thead className="text-muted"><tr><th className="py-1 pr-3 font-medium">Type</th><th className="py-1 pr-3 font-medium">Name</th><th className="py-1 font-medium">Value</th></tr></thead>
             <tbody>
-              {d.details.records.map((r, i) => (
+              {[...d.details.records, d.ownership].map((r, i) => (
                 <tr key={i} className="border-t border-line align-top"><td className="py-1.5 pr-3">{r.type}</td><td className="py-1.5 pr-3 break-all">{r.name}</td><td className="py-1.5 break-all">{r.value}</td></tr>
               ))}
             </tbody>
           </table>
-          {manual && <p className="mt-2 text-[0.8125rem] text-muted">These are the hosting provider’s general values. The platform operator confirms the exact ones when adding your domain.</p>}
+          <p className="mt-2 text-[0.8125rem] text-muted">The TXT record named {d.ownership.name} (in full: {ownershipHost(d.domain)}) proves the domain is yours: only someone who manages its DNS can create it. Your domain is not verified, and so not connected, until that record is there.</p>
+          {manual && <p className="mt-2 text-[0.8125rem] text-muted">The {d.details.records[0]?.type ?? 'A or CNAME'} value above is the hosting provider’s general one. The platform operator confirms the exact value when adding your domain. The TXT record is exactly as shown.</p>}
         </>
       )}
       <p className="mt-3 text-[0.8125rem] text-muted">Only {d.domain} is connected. To make {twin} work too, forward it to {d.domain} at your registrar.</p>

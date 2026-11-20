@@ -64,8 +64,10 @@ export async function partnerAskedToStop(db: Db, a: PartnerActor, partnerId: str
 }
 
 /**
- * Asks for another try of an email the email service refused. Row-level security allows exactly this change
- * ('failed' -> 'retry'); the scheduled job then sends it, at most three attempts in all.
+ * Asks for another try of an email that failed: the email service refused it, or this app's own claims guard did.
+ * Row-level security allows exactly this change ('failed' -> 'retry'); the scheduled job then sends it, at most three
+ * attempts in all. An email the service gave no answer for is not 'failed' and cannot be tried again: it may have
+ * gone out.
  */
 export async function retryPartnerStep(db: Db, a: PartnerActor, partnerId: string): Promise<boolean> {
   const changed = await db.run("update public.partner_outreach set status = 'retry' where partner_id = $1 and org_id = $2 and status = 'failed'", [partnerId, a.orgId]);

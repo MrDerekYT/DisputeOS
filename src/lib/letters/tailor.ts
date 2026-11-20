@@ -10,14 +10,18 @@
  *  - The model is asked to reword those few lines in one voice, picked by a style seed worked out from the client's id
  *    (./brief.ts voiceFor). The instruction is made of fixed phrases: nothing about the client is in it.
  *  - Every marker must come back once, in order, on its own line, and the protected passages are put back verbatim.
- *  - The result is then checked again here (tailorIssue): the protected content is unchanged, the claims guard passes,
- *    the wording makes no demand, legal claim, threat, deadline, promise or new request, it sits on the same lines with
- *    no more sentences and about the same length, and EVERY WORD of it is plain courtesy (COURTESY_WORDS). A reworded
- *    line therefore cannot state anything about the client, the account or earlier contact: the words are not there.
- *    A dispute letter must also still pass the specificity check. If any check fails the result is discarded, the
- *    letter is unchanged and nothing is charged (withAiCredits gives the credits back).
+ *  - The result is then checked again here (tailorIssue): the protected content is unchanged and on the same lines, the
+ *    claims guard passes, the wording makes no demand, legal claim, threat, deadline, promise or new request, and it
+ *    sits on the same lines with no more sentences and about the same length. The salutation and the sign-off must each
+ *    be one of a short fixed list (SALUTATIONS, SIGN_OFFS). A linking or closing sentence that was changed must be
+ *    written in plain English words that are all on a list of courtesy words (COURTESY_WORDS; a linking sentence only
+ *    the part of it that points to the details, POINTER_WORDS), and its line may not say "I", "me" or "my" more often
+ *    than before. A dispute letter must also still pass the specificity check. If any check fails the result is
+ *    discarded, the letter is unchanged and nothing is charged (withAiCredits gives the credits back).
  *
- * Everything this produces is a suggestion or a DRAFT version. A person still reads it and a manager still approves it.
+ * The facts are locked. The reworded lines are checked against a word list, which is not proof of what a sentence says:
+ * one built from listed words can still say something nobody recorded. So everything this produces is a suggestion or a
+ * DRAFT version: a person still reads it and a manager still approves it.
  */
 import { protect, sameProtectedContent, TOKEN } from '../ai/protected';
 import { getProvider, rewriteSafely, type AiProvider, type Rewritten } from '../ai/provider';
@@ -50,13 +54,22 @@ export interface TermSource {
   templateBody?: string | null;
 }
 
+/** Line ends as the protected-rewriting rules read them (protect in ../ai/protected.ts): CRLF and a lone CR each end a line. */
+const lf = (text: string) => text.replace(/\r\n?/g, '\n');
 /**
  * Splits text at least as finely as the protected-rewriting rules split a line into sentences, so that every sentence
  * they could treat as editable contains one of these pieces and is locked by it.
  */
-const split = (text: string) => text.split(/\n|(?<=[.!?]["'”’)\]]*)\s+/).map((p) => p.trim());
+const split = (text: string) => lf(text).split(/\n|(?<=[.!?]["'”’)\]]*)\s+/).map((p) => p.trim());
 const pieces = (text: string) => split(text).filter((p) => p.length >= 4);
 const squash = (s: string) => s.replace(/\s+/g, ' ').trim();
+
+/**
+ * The salutations and the sign-offs a letter may carry after rewording: first the one the built-in letters use, then a
+ * few ordinary alternatives. Each is a whole line taken as it is, so it cannot be emptied, moved or given a name.
+ */
+export const SALUTATIONS: ReadonlySet<string> = new Set(['To whom it may concern:', 'To Whom It May Concern:', 'Dear Sir or Madam:', 'Dear Madam or Sir:']);
+export const SIGN_OFFS: ReadonlySet<string> = new Set(['Sincerely,', 'Respectfully,', 'Regards,', 'Kind regards,', 'Best regards,', 'Yours truly,', 'Yours sincerely,', 'Cordially,', 'Thank you,']);
 
 /**
  * The only sentences of a drafted letter an AI wording suggestion may see and reword: the standard salutation and
@@ -75,7 +88,7 @@ const MERGE_FIELD = /\{\{\s*\w+\s*\}\}/;
  * field. Empty when the line above the field is no longer in the letter.
  */
 export function reasonLinesFrom(templateBody: string, letterBody: string): string[] {
-  const t = templateBody.split('\n').map((l) => l.trim());
+  const t = lf(templateBody).split('\n').map((l) => l.trim());
   const at = t.findIndex((l) => l.includes('{{reason}}'));
   if (at < 0) return [];
   // A line with enough wording of its own to be told apart from what a person typed; one made only of fields has none.
@@ -83,7 +96,7 @@ export function reasonLinesFrom(templateBody: string, letterBody: string): strin
   const shapes = t.map(shape);
   const fixed = shapes.filter((x): x is RegExp => !!x);
   const above = shapes.slice(0, at).reverse().find((x) => !!x);
-  const lines = letterBody.split('\n');
+  const lines = lf(letterBody).split('\n');
   const start = above ? lines.findIndex((l) => above.test(l.trim())) : -1;
   if (start < 0) return [];
   const out: string[] = [];
@@ -102,13 +115,15 @@ export function reasonLinesFrom(templateBody: string, letterBody: string): strin
  * wherever else they might appear (and for a caller that passes no body).
  */
 export function letterTerms(s: TermSource): string[] {
-  const lines = (s.body ?? '').split('\n');
+  // Split into lines exactly where the protected-rewriting rules split it, or a line locked here would not match there.
+  const body = lf(s.body ?? '');
+  const lines = body.split('\n');
   const listLines = lines.map((l) => /^\s*(?:[-•*]|\d+[.)])\s+(.+)$/.exec(l)?.[1] ?? '').filter(Boolean);
   // The reason as the letter states it now (it can be edited in the letter after the dispute was written): where the
   // template puts it, or failing that whatever sits under a reason heading.
-  let reasonLines = s.body && s.templateBody ? reasonLinesFrom(s.templateBody, s.body) : [];
-  if (!reasonLines.length && s.body) {
-    const stated = squash(reasonInLetter(s.body, ''));
+  let reasonLines = body && s.templateBody ? reasonLinesFrom(s.templateBody, body) : [];
+  if (!reasonLines.length && body) {
+    const stated = squash(reasonInLetter(body, ''));
     reasonLines = stated ? lines.filter((l) => l.trim().length >= 4 && stated.includes(squash(l))) : [];
   }
   // Every sentence of the letter that is not one of the few this app wrote as connective wording. Two characters is
@@ -121,7 +136,8 @@ export function letterTerms(s: TermSource): string[] {
     ...[...(s.facts ?? []), ...listLines, ...reasonLines].filter((x): x is string => typeof x === 'string' && x.length > 0).flatMap(pieces),
     ...byPosition,
   ];
-  return [...new Set(out.map((t) => t.trim()).filter(Boolean))];
+  // A term is looked for inside one line, so a name that carries a line break is locked part by part.
+  return [...new Set(out.flatMap((t) => lf(t).split('\n')).map((t) => t.trim()).filter(Boolean))];
 }
 
 // ---------------------------------------------------------------- what the wording may not become
@@ -138,10 +154,11 @@ const TONE: [RegExp, string][] = [
   [/\b(?:will|is going to|are going to)\s+(?:be\s+)?(?:corrected|updated|blocked|approved|fixed|changed|resolved|improve\w*|increase\w*|raise\w*)\b|\b(?:guarant\w*|promis\w*|scores?|sure to|certain to)\b/i, 'it promises or predicts a result'],
   [/\b(eras\w*|expung\w*|wip(?:e|ed|ing)|purg\w*|eliminat\w*|taken? off)\b/i, 'it asks for information to be taken off the report'],
   [/\b(illegal\w*|unlawful\w*|negligen\w*|willful\w*|false|lie[sd]?|lying)\b/i, 'it makes an accusation'],
-  // "Thank you for writing to me", "It is good to hear from you", "Thanks for getting in touch": each says the reader
-  // contacted the writer first. Nothing on file says so, and it is made of courtesy words only, so the word list below
-  // cannot catch it. (It also discards "I would appreciate hearing from you"; that costs a suggestion, nothing else.)
-  [/\b(?:thank(?:s|ing|ful)?|grateful|gratitude|appreciat\w*|glad|pleased|happy|good|nice|kind)\b[^.!?;:]*\b(?:writing|contacting|reaching|hear(?:ing)?\s+from|getting\s+in\s+touch|letting\s+me\s+know|your\s+(?:contact|mail|note|message|letter|reply|response|call))\b/i, 'it refers to earlier contact that is not on file'],
+  // "Thank you for writing to me", "It is good to hear from you", "Regarding your contact", "About your questions",
+  // "As you write to me": each says the reader contacted the writer first. Nothing on file says so, and it can be made
+  // of courtesy words only, so the word list below cannot catch it. (It also discards "I would appreciate hearing from
+  // you" and "write to me with your questions"; that costs a suggestion, nothing else.)
+  [/\b(?:thank(?:s|ing|ful)?|grateful|gratitude|appreciat\w*|glad|pleased|happy|good|nice|kind)\b[^.!?;:]*\b(?:writing|contacting|reaching|hear(?:ing)?\s+from|getting\s+in\s+touch|letting\s+me\s+know)\b|\byour\s+(?:contact|mail|note|message|letter|reply|response|call|questions?|writing)\b|(?<!\bif\s)\byou\s+(?:write|contact|reach)\b/i, 'it refers to earlier contact that is not on file'],
 ];
 const ASKS = /\b(please|kindly|i ask|i would like you to|i want you to|i need you to|i expect)\b/gi;
 /** An invitation to write back is courtesy, not a request about the file: "please write to me", "kindly contact me", "please feel free to reach me". */
@@ -166,69 +183,115 @@ export function toneIssue(sourceWording: string, proposedWording: string): strin
 }
 
 /**
- * Every word a reworded line may be made of. Greetings, thanks, an invitation to write back, and the plain words that
- * join them: nothing else. There is no word here for a person's circumstances, an account, money, work, health, time
- * that has passed, an earlier letter or call, a reply, or a result; no "have" or "has" to say that something already
- * happened; no "will", "should" or "must" to say what happens next; and no "not" or "no" to turn a courtesy into a
- * complaint (the one use a courtesy line has for it, "do not hesitate", is allowed by name). So a sentence built from
- * this list cannot state one. That is the point: a denylist of
- * bad phrases can always be worded around, a short list of allowed words is much harder to. A suggestion that uses any
- * other word is discarded (and not charged), which only ever costs a suggestion, never a fact in a letter.
+ * The words a changed linking or closing sentence may be made of: thanks, an invitation to write back, a pointer to the
+ * details, and the plain words that join them. Left out on purpose are the usual words for saying that something is
+ * someone's, or has happened, been said or been sent: "is", "are" and "am", every past form and "have", "my" and
+ * "mine", and any word for mail, a letter or a reply. So are the words for wanting, needing or keeping something,
+ * "will", "should" and "must", "not", "no", "but" and "only", and words that are also first names ("may", "hope"). A
+ * few phrases are allowed by name (BY_NAME). A suggestion that uses any other word is discarded and not charged. A word
+ * list narrows what a sentence can say; it does not prove what one says, which is why the result is only ever a draft
+ * for a person to read.
  */
 export const COURTESY_WORDS: ReadonlySet<string> = new Set(`
-  a an the and or but so if as at by for from in into of on to with about above below here there this that these those it is are am be
-  i me my mine myself you your yours yourself can may might could would do does what which when
-  please thank thanks thanking thankful grateful gratitude appreciate appreciated appreciation appreciative obliged welcome glad gladly pleased happy
-  kind kindly courtesy courteous consideration considerate considering consider care careful carefully attention attentive time help helping
-  helpful assistance assist assisting understanding cooperation effort efforts advance
-  reading read look looking review reviewing taking see keep keeping brief briefly
-  details detail specifics particulars points information facts summary outline following follows follow set out laid listed
-  described explained included shown stated provided put find finds hope wish like want need
-  write writing contact contacting reach reached reaching mail post postal via available address hear hearing forward convenience get touch let know feel free hesitate
-  questions question anything something further more most much many very also too just only all each every any other else additional
-  dear sir madam hello greetings good day regards regard best warm warmly sincerely respectfully cordially truly faithfully
-  whom concern matter regarding concerning
-  i'm i'd you'd it's here's that's
+  a an the and or so if as at by for in into of on to with about above below here this that these those it
+  i me you your can would
+  please thank thanks thanking thankful grateful gratitude appreciate appreciation appreciative
+  kind kindly courtesy courteous consideration considerate considering carefully attention attentive help helping
+  assistance assisting understanding cooperation effort efforts
+  reading looking reviewing
+  details specifics particulars follows follow
+  write writing contact reach convenience
+  anything most much many very also all any other else
+  matter regarding
+  i'd
 `.split(/\s+/).filter(Boolean));
-/** The one negative a courtesy line uses: "please do not hesitate to write". */
-const NOT_HESITATE = /\b(?:do\s+not|don['’]t)\s+hesitate\b/gi;
+/**
+ * The part of the list a linking sentence may use. It points to the details and does nothing else; a closing line gives
+ * thanks or invites a reply and does not bring the details up (in a closing line the same words would ask for them).
+ */
+export const POINTER_WORDS: ReadonlySet<string> = new Set('a the this these those of as matter details specifics particulars follow follows below here'.split(' '));
+const POINTER = /^(?:details|specifics|particulars)$/;
+/**
+ * Phrases of plain courtesy whose key word is not on the list, because on its own it could say more ("I hear that", "in
+ * time", "be kind", "address this", "this questions"): each is allowed in this one form, and read as the listed words
+ * beside it. Applied in this order before the words are checked.
+ */
+export const BY_NAME: [phrase: string, find: RegExp, readAs: string][] = [
+  ['to hear from you', /\bto\s+hear(?:ing)?\s+from\s+you\b/gi, 'to you'],
+  ['look forward to', /\blook(?:ing)?\s+forward\s+to\b/gi, 'to'],
+  ['do not hesitate to', /\b(?:do\s+not|don['’]t)\s+hesitate\s+to\b/gi, 'to'],
+  ['feel free to', /\bfeel\s+free\s+to\b/gi, 'to'],
+  ['would be grateful', /\b(would|I['’]d)\s+be(?=\s+(?:(?:so|very|most)\s+)?(?:grateful|thankful|appreciative)\b)/gi, '$1'],
+  ['your time', /\byour\s+time\b/gi, 'your'],
+  ['the address above', /\bthe\s+address\s+above\b/gi, 'above'],
+  ['any questions', /\b(any(?:\s+other)?|with)\s+questions\b/gi, '$1'],
+  ['in advance', /\bin\s+advance\b/gi, 'in'],
+];
+/** One token of a reworded line: a plain English word, with an apostrophe or hyphen inside it and ordinary punctuation around it at most. */
+const PLAIN_WORD = /^["'“‘(]?[A-Za-z]+(?:['’-][A-Za-z]+)*[.,;:!?"'”’)]*$/;
+/** A capital letter belongs at the start of a sentence and in "I". Anywhere else it shouts, or makes a word read as a name. */
+const oddCapital = (word: string, first: boolean) => /[A-Z]/.test(first || /^I(?![A-Za-z])/.test(word) ? word.slice(1) : word);
+const FIRST_PERSON = /\b(?:i|me|my|mine|we|us|our)\b/gi;
+const firstPerson = (line: string) => line.match(FIRST_PERSON)?.length ?? 0;
 
 const wordsOf = (text: string) => text.toLowerCase().replace(/[’‘]/g, "'").split(/[^a-z']+/).map((w) => w.replace(/^'+|'+$/g, '')).filter(Boolean);
-const sentenceCount = (line: string) => line.split(/(?<=[.!?:;])\s+/).filter((x) => x.trim()).length;
-/** How long a reworded line may be: half as long again as the line it replaces (a short line such as a sign-off gets a few characters of room). */
+const sentences = (line: string) => line.split(/(?<=[.!?:;])\s+/).filter((x) => x.trim());
+/** How long a reworded line may be: half as long again as the line it replaces (a short line gets a few characters of room). */
 const maxLength = (source: string) => Math.max(Math.ceil(source.length * 1.5), source.length + 16);
 
-/** The connective wording of a letter, by the line it sits on. Null when the text cannot be read (it carries protection markers). */
-function wordingByLine(body: string, terms: string[]): { lines: number; at: Map<number, string> } | null {
+/**
+ * A letter line by line: the connective wording each line carries, and how many protected passages each line holds.
+ * Only spaces and tabs are folded into one space: any other blank or invisible character stays in the wording, where
+ * the plain-word check finds it. Null when the text cannot be read (it carries protection markers).
+ */
+function wordingByLine(body: string, terms: string[]): { locked: number[]; at: Map<number, string> } | null {
   let masked: string;
   try { masked = protect(body.trim(), terms).masked; } catch { return null; }
   const rows = masked.split('\n');
   const at = new Map<number, string>();
-  rows.forEach((row, i) => { const w = squash(row.replace(TOKEN, ' ')); if (w) at.set(i, w); });
-  return { lines: rows.length, at };
+  rows.forEach((row, i) => { const w = row.replace(TOKEN, ' ').replace(/[ \t]+/g, ' ').trim(); if (w) at.set(i, w); });
+  return { locked: rows.map((row) => row.match(TOKEN)?.length ?? 0), at };
 }
 
 /**
- * Why the reworded wording is not a like-for-like replacement, or null. A rewording keeps every line where it was, puts
- * wording only where the letter already had some, adds no sentence, stays about the same length, and uses courtesy
- * words only. (A linking or closing line may be left out: less courtesy is still a correct letter.)
+ * Why the reworded wording is not a like-for-like replacement, or null. A rewording keeps every line and every
+ * protected passage where it was, puts wording only where the letter already had some, adds no sentence and stays about
+ * the same length. The salutation and the sign-off stay, each as one of the fixed lists. A linking or closing line may
+ * be left out (less courtesy is still a correct letter); one that is changed is held to the word checks below.
  */
 export function rewordingIssue(source: string, proposed: string, terms: string[]): string | null {
   const a = wordingByLine(source, terms);
   const b = wordingByLine(proposed, terms);
   if (!a || !b) return 'it could not be compared with the letter';
-  if (a.lines !== b.lines) return 'it adds or removes a line';
+  if (a.locked.length !== b.locked.length) return 'it adds or removes a line';
+  if (a.locked.join() !== b.locked.join()) return 'it moves a protected passage to another line';
+  for (const [i, was] of a.at) {
+    const list = SALUTATIONS.has(was) ? SALUTATIONS : SIGN_OFFS.has(was) ? SIGN_OFFS : null;
+    if (list && !list.has(b.at.get(i) ?? '')) return `the ${list === SALUTATIONS ? 'salutation' : 'sign-off'} is missing or is not one of the standard ones`;
+  }
   for (const [i, text] of b.at) {
     const was = a.at.get(i);
     if (was == null) return 'it adds wording where the letter had none';
-    if (sentenceCount(text) > sentenceCount(was)) return 'it adds a sentence the letter did not have';
+    // Unchanged wording is the letter's own, whatever its words. A salutation or a sign-off was settled above.
+    if (text === was || SALUTATIONS.has(was) || SIGN_OFFS.has(was)) continue;
+    const odd = text.split(' ').find((t) => !PLAIN_WORD.test(t));
+    if (odd) return /^[\x21-\x7e]+$/.test(odd) ? `it uses something that is not a plain English word (“${odd}”)` : 'it uses characters that are not plain English letters';
+    if (sentences(text).length > sentences(was).length) return 'it adds a sentence the letter did not have';
     if (text.length > maxLength(was)) return 'it makes a line much longer than it was';
-    if (text === was) continue; // unchanged wording is the letter's own, whatever its words
-    // A rewording may reuse the words of the line it replaces ("this letter", "if you have any questions") and
-    // otherwise only words of plain courtesy.
-    const own = new Set(wordsOf(was));
-    const stray = wordsOf(text.replace(NOT_HESITATE, 'hesitate')).find((w) => !COURTESY_WORDS.has(w) && !own.has(w));
+    // A sentence left exactly as it was keeps its words. A changed one gets no words from the line it replaces: every
+    // word of it has to be on the list.
+    const kept = new Set(sentences(was));
+    const changed = sentences(text).filter((x) => !kept.has(x));
+    const words = wordsOf(BY_NAME.reduce((t, [, re, to]) => t.replace(re, to), changed.join(' ')));
+    const stray = words.find((w) => !COURTESY_WORDS.has(w));
     if (stray) return `it uses wording that is not plain courtesy (“${stray}”)`;
+    // A line that pointed to the details is the linking sentence: it keeps to POINTER_WORDS. No other line brings the details up.
+    const linking = wordsOf(was).some((w) => POINTER.test(w));
+    const beyond = words.find((w) => (linking ? !POINTER_WORDS.has(w) : POINTER.test(w)));
+    if (beyond) return linking ? `it makes the linking sentence do more than point to the details (“${beyond}”)` : 'it brings up the details in a line that did not mention them';
+    const capital = changed.flatMap((x) => x.split(' ').map((t, i) => [t.replace(/^["'“‘(]/, ''), i === 0] as const)).find(([w, first]) => oddCapital(w, first));
+    if (capital) return `it uses a capital letter where a plain word has none (“${capital[0]}”)`;
+    if (firstPerson(text) > firstPerson(was)) return 'it uses “I”, “me” or “my” more often than the line it replaces';
   }
   return null;
 }
@@ -254,13 +317,20 @@ export function tailorIssue(source: string, proposed: string, o: TailorInput): s
 /** A salutation and a sign-off alone are not worth a model call (or a charge): there has to be a sentence to reword. */
 export const MIN_WORDING = 40;
 
-/** The instruction for one voice. Fixed phrases chosen by the seed: no name, account, date or other detail of the client. */
+/**
+ * The instruction for one voice. Fixed phrases chosen by the seed: no name, account, date or other detail of the client.
+ * It names what the checks accept (the fixed salutations and sign-offs, the word list), so a rewording is not discarded
+ * for a word the model could not have known was off the list.
+ */
 export function tailorGoal(seed?: number): string {
   const v = seed == null ? null : voiceFor(seed);
   return [
     'Reword only the visible wording of this consumer letter: the salutation, the short linking sentence, the closing courtesy and the sign-off.',
     v ? `Voice: ${v.tone}. ${v.habit}` : 'Voice: clear, courteous and concise.',
     'Keep every line where it is, with the same number of sentences on it and about the same length. Use plain words of courtesy only: a greeting stays a greeting, thanks stay thanks, an invitation to write back stays one.',
+    `Keep the salutation, or replace it with one of these, exactly as written: ${[...SALUTATIONS].map((x) => `“${x}”`).join(' ')}. Keep the sign-off, or replace it with one of these, exactly as written: ${[...SIGN_OFFS].map((x) => `“${x}”`).join(' ')}.`,
+    `Leave the linking sentence exactly as it is, or rewrite it using only these words: ${[...POINTER_WORDS].join(' ')}.`,
+    `Leave any other sentence exactly as it is, or rewrite it using only these words: ${[...COURTESY_WORDS].filter((w) => !POINTER.test(w)).join(' ')}; and these phrases: ${BY_NAME.map(([phrase]) => phrase).join(', ')}. Do not use “I” or “me” more often on a line than the line does now.`,
     'Add nothing about the writer, their circumstances, the matter, any earlier contact or what should happen next, and ask for nothing.',
   ].join(' ');
 }
@@ -282,8 +352,10 @@ export async function tailorSafely(source: string, o: TailorInput, provider: AiP
   if (wording.length < MIN_WORDING) return keep('AI wording was not used: this letter has too little connective wording to reword. Only the standard linking sentence and closing lines can be reworded; everything else in it is locked.');
   const tone = toneWordIssue(wording);
   if (tone) return keep(`AI wording was not used: ${tone}. Reword that sentence first.`);
-  const out = await rewriteSafely(source, tailorGoal(o.seed), provider, o.protectedTerms);
-  if (!out.usedAi) return out;
-  const issue = tailorIssue(source, out.text, o);
+  // Line ends as protect() reads them, so a result that differs from the letter only in its line ends is not a change.
+  const text = lf(source);
+  const out = await rewriteSafely(text, tailorGoal(o.seed), provider, o.protectedTerms);
+  if (!out.usedAi) return { ...out, text: source };
+  const issue = tailorIssue(text, out.text, o);
   return issue ? keep(`AI rewrite discarded: ${issue}.`) : out;
 }

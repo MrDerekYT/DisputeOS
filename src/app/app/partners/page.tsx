@@ -5,8 +5,10 @@ import { ChevronDown, Handshake, Search } from 'lucide-react';
 import { ActionForm, Check, Field, Select, SubmitButton } from '@/components/forms';
 import { FilterChips } from '@/components/staff-kit';
 import { Badge, EmptyState, Notice, PageHeader, Pagination, Section, Stat } from '@/components/ui';
+import { publicSiteBySlug, siteHome } from '@/lib/agency-site';
 import { requireStaff } from '@/lib/auth/context';
 import { emailIsLive } from '@/lib/lead-outreach';
+import { MAILING_ADDRESS_MAX } from '@/lib/mailing-address';
 import { APPROVAL_COLS, APPROVAL_NEEDED, isNewlyApproved, NEW_WORKSPACE_DAILY_EMAILS, NEW_WORKSPACE_DAYS, outreachApproval, type ApprovalRow } from '@/lib/outreach-approval';
 import {
   decidePartnerStep, PARTNER_CATEGORIES, PARTNER_CATEGORY_LABEL, PARTNER_DAILY_CAP, PARTNER_FAILURE_HOLD_HOURS, PARTNER_PER_RUN_CAP, PARTNER_RUN_FAILURE_LIMIT, PARTNER_STATUSES, PARTNER_STATUS_LABEL, partnerWordingIssue,
@@ -42,7 +44,7 @@ export default async function PartnersPage({ searchParams }: { searchParams: Pro
   const like = q ? `%${escapeLike(q)}%` : '';
   type Row = PartnerStateRow & { id: string; business_name: string; contact_name: string | null; category: PartnerCategory; email: string; city: string | null; state: string | null; referred: number };
   const { org, byStatus, emails, referred, rows, total, lastRun, hold, bounces } = await ctx.tx(async (db) => {
-    const org = (await db.row<ApprovalRow & { settings: Record<string, unknown> }>(`select ${APPROVAL_COLS}, settings from public.organizations where id = $1`, [ctx.orgId]))!;
+    const org = (await db.row<ApprovalRow & { slug: string; settings: Record<string, unknown> }>(`select ${APPROVAL_COLS}, slug, settings from public.organizations where id = $1`, [ctx.orgId]))!;
     const byStatus = await db.rows<{ status: string; n: number }>('select status, count(*)::int as n from public.partners group by status');
     const emails = (await db.row<{ sent: number; failed: number; unconfirmed: number; last_day: number; opted_out: number }>(
       `select count(*) filter (where status = 'sent')::int as sent, count(*) filter (where status = 'failed')::int as failed,
@@ -65,9 +67,13 @@ export default async function PartnersPage({ searchParams }: { searchParams: Pro
   const all = byStatus.reduce((sum, b) => sum + b.n, 0);
   const settings = partnerSettings(org.settings);
   const live = emailIsLive();
-  const blocker = partnerBlocker(settings, live, org);
+  // The introduction and the follow-up link to the agency's published website, so its address is checked with the rest.
+  const site = settings.enabled ? await publicSiteBySlug(org.slug) : null;
+  const siteUrl = site ? siteHome(site) : null;
+  const blocker = partnerBlocker(settings, live, org, siteUrl);
   const approval = outreachApproval(org);
-  const nameIssue = partnerWordingIssue(org.name);
+  const wording = blocker === 'name_claim' || blocker === 'site_claim' || blocker === 'address_claim' ? partnerWordingIssue(org.name, { siteUrl, address: settings.address }) : null;
+  const claim = wording ? `${wording.why} (“${wording.excerpt}”)` : '';
   const now = new Date();
   // What one agency may send in 24 hours: fewer while the workspace is newly approved.
   const dailyCap = isNewlyApproved(org, now) ? NEW_WORKSPACE_DAILY_EMAILS : PARTNER_DAILY_CAP;
@@ -92,7 +98,9 @@ export default async function PartnersPage({ searchParams }: { searchParams: Pro
     : blocker === 'no_address' ? 'A postal address is required: nothing is sent until you save one below.'
     : blocker === 'no_reply' ? 'A reply address is required: nothing is sent until you save one below.'
     : !live ? 'Email is not connected, so nothing is being sent.'
-    : blocker === 'name_claim' ? `Your business name cannot be used in these emails. ${nameIssue?.why ?? ''} (“${nameIssue?.excerpt ?? ''}”) Change the name in Settings.`
+    : blocker === 'name_claim' ? `Your business name cannot be used in these emails. ${claim} Change the name in Settings.`
+    : blocker === 'site_claim' ? `The address of your website (${siteUrl}) cannot be printed in these emails. ${claim} The introduction and the follow-up link to your published site. Connect your own domain on the Website page, or unpublish the site.`
+    : blocker === 'address_claim' ? `Your mailing address cannot be printed in these emails as it is written. ${claim}`
     : null;
   // Holding with nothing else in the way: the email service refused messages, or too many addresses bounced.
   const holding = !blocker && (hold || bounces.hold);
@@ -115,7 +123,7 @@ export default async function PartnersPage({ searchParams }: { searchParams: Pro
             {why && <span>{why}{blocker === 'email_not_connected' && <> <Link href="/app/settings#integrations" className="link">See Settings → Integrations</Link></>}</span>}
           </p>
           {!blocker && bounces.hold && (
-            <p className="mt-2 text-sm text-warn">{bounces.bounced} of the {Math.max(bounces.sent, bounces.bounced)} addresses emailed in the last 30 days bounced. The sequence is holding: check where the list came from and remove the addresses that are not real, then ask the platform operator to approve the workspace again.</p>
+            <p className="mt-2 text-sm text-warn">{bounces.bounced} addresses have bounced since this workspace was approved, against {bounces.sent} emails sent. The sequence is holding, and it does not start again by itself. Check where the list came from and remove the partners not yet emailed whose addresses are not real. Then ask the platform operator to approve the workspace again.</p>
           )}
           {hold && settings.enabled && (
             <p className="mt-2 text-sm text-warn [overflow-wrap:anywhere]">The email service refused the last {PARTNER_RUN_FAILURE_LIMIT} emails ({hold}). Nothing more is tried for {PARTNER_FAILURE_HOLD_HOURS} hours, or until you open one of those partners and press “Try again”.</p>
@@ -125,8 +133,8 @@ export default async function PartnersPage({ searchParams }: { searchParams: Pro
           <details className="group mt-3">
             <summary className={SUMMARY.replace('text-sm', 'text-[0.8125rem]')}>How it works <ChevronDown size={15} aria-hidden className="transition-transform group-open:rotate-180" /></summary>
             <div className="mt-2.5 space-y-2.5 text-[0.8125rem] leading-relaxed text-muted">
-              <p>The platform operator approves each workspace before its sequence can send, and again after a change of business name. Once it is approved and switched on, the scheduled runs send the emails. Nobody approves each message. They go out on business days only, at most {PARTNER_PER_RUN_CAP} per run and {PARTNER_DAILY_CAP} in any 24 hours ({NEW_WORKSPACE_DAILY_EMAILS} during the first {NEW_WORKSPACE_DAYS} days), so a list is spread out and never sent at once. The wording is fixed, in English and Spanish, and uses only the category and city you entered. No AI writes any part of it.</p>
-              <p>It stops for a partner when you mark that they replied, are interested, are not interested or bounced, when you pause them, or when the email service refuses a message. If the email service refuses {PARTNER_RUN_FAILURE_LIMIT} in a row, everything holds for {PARTNER_FAILURE_HOLD_HOURS} hours and the owners and admins are told why; it also holds when too many addresses bounce. An opt-out is permanent: that address is never emailed again and cannot be added again. The link in the email opens a page with one button, so a mail scanner that opens links does not opt anyone out.</p>
+              <p>The platform operator approves each workspace before its sequence can send, and again after a change of business name. Once it is approved and switched on, the scheduled runs send the emails. Nobody approves each message. They go out on business days only, at most {PARTNER_PER_RUN_CAP} per run and {PARTNER_DAILY_CAP} in any 24 hours ({NEW_WORKSPACE_DAILY_EMAILS} during the first {NEW_WORKSPACE_DAYS} days), so a list is spread out and never sent at once. The wording is fixed, in English and Spanish. From your records it takes each partner’s category, city and state and the contact’s first name, and from you your business name, your mailing address and a link to your website when it is published. No AI writes any part of it.</p>
+              <p>It stops for a partner when you mark that they replied, are interested, are not interested or bounced, and when you pause them. It also stops when an email does not go through: the email service refuses it, this app’s own check finds a claim in it (a city name can read as one), or the service does not answer, in which case the email may or may not have gone out and is never sent a second time. If the email service refuses {PARTNER_RUN_FAILURE_LIMIT} in a row, everything holds for {PARTNER_FAILURE_HOLD_HOURS} hours and the owners and admins are told why. When too many addresses bounce, everything holds until the platform operator approves the workspace again. An opt-out is permanent: that address is never emailed again and cannot be added again. The link in the email opens a page with one button, so a mail scanner that opens links does not opt anyone out.</p>
               <p><strong className="font-semibold text-ink">Replies are not read automatically.</strong> An answer goes to your reply address below. This system does not see it. Open the partner and use “They replied”, “Interested” or “Not interested” so no further automatic email goes out.</p>
               <p>{lastRun ? `Scheduled jobs last ran ${relTime(lastRun)}.` : 'Scheduled jobs have not run yet in this workspace; the emails are sent by the scheduled job (see Automations).'}</p>
             </div>
@@ -134,7 +142,7 @@ export default async function PartnersPage({ searchParams }: { searchParams: Pro
           {ctx.can('settings:manage') ? (
             <ActionForm action={savePartnerOutreachAction} className="mt-4 space-y-4 border-t border-line pt-4">
               <Check name="enabled" defaultChecked={settings.enabled}>Send the email sequence to partners automatically</Check>
-              <Field label="Mailing address shown in every email" name="address" maxLength={300} defaultValue={settings.address} placeholder="Street, city, state, ZIP" hint="A physical postal address is required in commercial email (CAN-SPAM). It is the same address your lead follow-up uses." />
+              <Field label="Mailing address shown in every email" name="address" maxLength={MAILING_ADDRESS_MAX} defaultValue={settings.address} placeholder="Street, city, state, ZIP" hint="Commercial email has to show a physical postal address (CAN-SPAM). Enter yours on one line, from the street number or PO Box to the state and ZIP code. It is the same address your lead follow-up uses." />
               <Field label="Reply email address" name="replyTo" type="email" maxLength={254} defaultValue={settings.replyTo} placeholder="you@yourbusiness.com" hint="When a partner answers, the reply goes here." />
               <SubmitButton>Save</SubmitButton>
             </ActionForm>

@@ -67,6 +67,16 @@ export const FINDING_TO_CATEGORY: Record<string, string> = {
 };
 
 /**
+ * The dispute category a finding starts as. A "client statement" finding records one of two different things the
+ * client said, told apart by its key (src/lib/reports/analysis.ts): "I do not recognize this account" is a not-mine
+ * dispute, and "my payments were never late" is a dispute of the payment history, never of whose account it is.
+ */
+export function categoryForFinding(f: { category: string; dedupe_key?: string | null }): string | undefined {
+  if (f.category === 'client_statement' && f.dedupe_key?.startsWith('client-never-late:')) return 'incorrect_payment_history';
+  return FINDING_TO_CATEGORY[f.category];
+}
+
+/**
  * FCRA § 611(a)(1): a bureau has 30 days from RECEIPT of a dispute to investigate (45 if the consumer sends
  * additional relevant information during that window). We count from the received date when known, otherwise the
  * date it was submitted — the UI says so. Other workflow types use 30 days as a follow-up checkpoint.
@@ -126,6 +136,26 @@ export function nextSteps(d: NextStepInput, now = new Date()): string[] {
     default: break;
   }
   return out;
+}
+
+/**
+ * True when the new dispute form has to be given the account's name: a dispute with a bureau about an account that is
+ * on no imported report. Without a name the letter could only call it “Item”. Personal information is not an account.
+ */
+export const mustNameAccount = (category: string, hasReportAccount: boolean): boolean =>
+  !hasReportAccount && CATEGORIES[category]?.target === 'bureau' && category !== 'personal_info';
+
+/**
+ * The label the new dispute form gives an item that is on no imported report: the company the account is with, and the
+ * last digits when typed; “Personal information” for a personal information dispute. Undefined for an account on a
+ * report (createDispute labels it from the report row) and when nothing was typed that names the item.
+ */
+export function typedItemLabel(x: { category: string; hasReportAccount: boolean; accountName?: string; accountLast4?: string; recipientName?: string }): string | undefined {
+  if (x.hasReportAccount) return undefined;
+  // Typed for a bureau dispute; for a letter to a creditor or collector it is the company the letter goes to.
+  const accountWith = x.accountName || (CATEGORIES[x.category]?.target !== 'bureau' ? x.recipientName : undefined);
+  if (accountWith && (x.accountName || x.accountLast4)) return `${accountWith}${x.accountLast4 ? ` ••${x.accountLast4}` : ''}`;
+  return x.category === 'personal_info' ? 'Personal information' : undefined;
 }
 
 /** Reporting fields a dispute can ask the recipient to review. */

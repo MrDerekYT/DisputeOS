@@ -54,6 +54,22 @@ describe('lead texts go to US numbers only', () => {
     for (const bad of ['', null, undefined, '555-0134', '212-555-0142 ext 4', 'call me', '+12125550', '12125550142999']) expect(toUsE164(bad as string | null | undefined)).toBeNull();
   });
 
+  it('a number that cannot exist is refused, typed with or without the "+": an exchange that starts with 0 or 1, or a service code such as 911', () => {
+    for (const no of [
+      '212 911 1234', '+1 212 911 1234', '(212) 411-1234', '+12122111234', '512-611-0134', // N11 as the exchange: 911, 411, 211, 611
+      '+1 212 055 0123', '+1 212 155 0123', '+12120550123', // an exchange starts with 2 to 9, also when the number is typed with its "+"
+      '212 055 0123', '212 155 0123',
+    ]) {
+      expect(toUsE164(no), no).toBeNull();
+    }
+    for (const e164 of ['+12129111234', '+12124111234', '+12120550123', '+12121550123']) expect(usAreaCodeState(e164), e164).toBeNull();
+    // Ordinary numbers next to those still pass: only the exchange decides, and 555-1212 is a real number.
+    expect(toUsE164('+1 212 555 1212')).toBe('+12125551212');
+    expect(toUsE164('(212) 912-1234')).toBe('+12129121234');
+    expect(toUsE164('212 311 1234')).toBeNull();
+    expect(usAreaCodeState('+12123101234')).toBe('NY');
+  });
+
   it('every area code in the list is three digits starting 2-9, appears once, and no state is missing', () => {
     const src = read('src/lib/us-phone.ts');
     const table = /US_AREA_CODES_BY_STATE: Record<string, string> = \{([\s\S]*?)\n\};/.exec(src)![1]!;

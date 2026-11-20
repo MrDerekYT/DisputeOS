@@ -10,6 +10,7 @@ import { requireStaff } from '@/lib/auth/context';
 import { getEnv } from '@/lib/env';
 import { decideLeadStep, DEFAULT_LEAD_SOURCE, LEAD_SOURCE_TAGS, LEAD_STEPS, LEAD_WINDOW_DAYS, type LeadDecision } from '@/lib/lead-emails';
 import { DELIVERED_BY_TEAM_SQL, emailIsLive, EMAIL_STEPS_SQL, LEAD_TEXT_STATE_SQL, leadState, leadTextBlocker, leadTextState, outreachBlocker, outreachSettings, TEXT_STEPS_SQL, type LeadTextStateRow } from '@/lib/lead-outreach';
+import { MAILING_ADDRESS_MAX } from '@/lib/mailing-address';
 import { APPROVAL_COLS, APPROVAL_NEEDED, outreachApproval, type ApprovalRow } from '@/lib/outreach-approval';
 import { decideLeadText, LEAD_TEXT_STEPS } from '@/lib/lead-texts';
 import { smsUsable } from '@/lib/sms';
@@ -93,7 +94,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
 
   const settings = outreachSettings(org.settings);
   const live = emailIsLive();
-  const blocker = outreachBlocker(settings, live);
+  const blocker = outreachBlocker(settings, live, org);
   // Text follow-up: its own switch, and only ever for a lead who ticked the text-message box on the form.
   const textsUsable = smsUsable();
   const textBlocker = leadTextBlocker(settings, textsUsable, org);
@@ -107,7 +108,9 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
   if (page > pages) redirect(href(pages));
   const canWrite = ctx.can('clients:write');
   // Why automatic email is not going out, in a few words (null when it is running).
-  const why = !live ? 'Email is not connected, so nothing is being sent.'
+  const notApproved = blocker === 'not_approved' && approval !== 'approved';
+  const why = notApproved ? APPROVAL_NEEDED[approval]
+    : !live ? 'Email is not connected, so nothing is being sent.'
     : blocker === 'no_address' ? 'A postal address is required: nothing is sent until you save one below.'
     : blocker === 'no_reply' ? 'A reply address is required: nothing is sent until you save one below.'
     : null;
@@ -173,7 +176,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
           {/* One line says whether it is running and, if not, the one thing in the way. The rest is behind "How it works". */}
           <p className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5 text-sm">
             <Badge tone={blocker ? (settings.enabled ? 'warn' : 'neutral') : 'ok'} dot>{blocker ? (settings.enabled ? 'On, but not sending' : 'Off') : 'On and sending'}</Badge>
-            {why && <span>{why}{!live && <> <Link href="/app/settings#integrations" className="link">See Settings → Integrations</Link></>}</span>}
+            {why && <span>{why}{!live && !notApproved && <> <Link href="/app/settings#integrations" className="link">See Settings → Integrations</Link></>}</span>}
           </p>
           <p className="mt-2 text-[0.8125rem] text-muted">{emails.sent} sent · {emails.failed} failed{emails.unconfirmed ? ` · ${emails.unconfirmed} not confirmed` : ''} · {emails.opted_out} opted out</p>
           <p className="mt-2 text-[0.8125rem] text-muted">Only people who sent your form and ticked “you may contact me” get these. Every email carries an opt-out link and your mailing address, and never promises a result.</p>
@@ -188,7 +191,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
           <details className="group mt-3">
             <summary className="flex w-fit cursor-pointer list-none items-center gap-1 rounded-md text-[0.8125rem] font-semibold text-brand-strong [&::-webkit-details-marker]:hidden">How it works <ChevronDown size={15} aria-hidden className="transition-transform group-open:rotate-180" /></summary>
             <div className="mt-2.5 space-y-2.5 text-[0.8125rem] leading-relaxed text-muted">
-              <p>It covers enquiries received after you switch it on. Nobody approves each message: once it is on, the welcome goes out right after the enquiry and the scheduled runs send the rest. It stops when your team messages the lead or logs a call, when you mark that they replied or asked to stop, when they become a client, or when they use the opt-out link. The wording is fixed, in English and Spanish.</p>
+              <p>It covers enquiries received after you switch it on, and it starts once the platform operator has approved this workspace: your business name is the sender of every email. Nobody approves each message: once it is running, the welcome goes out right after the enquiry and the scheduled runs send the rest. It stops when your team messages the lead or logs a call, when you mark that they replied or asked to stop, when they become a client, or when they use the opt-out link. The wording is fixed, in English and Spanish.</p>
               <p><strong className="font-semibold text-ink">Texts need their own consent.</strong> With text follow-up on, your form shows a second, unticked box for text messages. Only a person who ticks it gets a welcome text and one follow-up text {LEAD_TEXT_STEPS[1].afterDays} days later, at the number they entered; everyone else gets email only. Texts wait through the night, a reply of STOP ends them for good, and a reply by text appears on the lead’s Messages tab.</p>
               <p><strong className="font-semibold text-ink">Replies are not read automatically.</strong> An answer goes to your reply address below — this system does not see it. Use “They replied” on the lead (or “Asked to stop”) so no further automatic email goes out.</p>
               <p>{lastRun ? `Scheduled jobs last ran ${relTime(lastRun)}.` : 'Scheduled jobs have not run yet in this workspace; the follow-up and the last note are sent by the scheduled job (see Automations).'}</p>
@@ -198,7 +201,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
             <ActionForm action={saveLeadFollowUpAction} className="mt-4 space-y-4 border-t border-line pt-4">
               <Check name="enabled" defaultChecked={settings.enabled}>Send automatic follow-up email to new enquiries</Check>
               <Check name="texts" defaultChecked={settings.texts}>Also text people who separately agree to text messages on the form{textsUsable ? '' : ' (text messaging is not connected yet, so nothing is texted and the box is not shown)'}</Check>
-              <Field label="Mailing address shown in every email" name="address" maxLength={300} defaultValue={settings.address} placeholder="Street, city, state, ZIP" hint="A physical postal address is required in marketing email (CAN-SPAM)." />
+              <Field label="Mailing address shown in every email" name="address" maxLength={MAILING_ADDRESS_MAX} defaultValue={settings.address} placeholder="Street, city, state, ZIP" hint="A physical postal address is required in marketing email (CAN-SPAM). Enter yours on one line, from the street number or PO Box to the state and ZIP code." />
               <Field label="Reply email address" name="replyTo" type="email" maxLength={254} defaultValue={settings.replyTo} placeholder="you@yourbusiness.com" hint="When someone answers an automatic email, the reply goes here." />
               <SubmitButton>Save</SubmitButton>
             </ActionForm>

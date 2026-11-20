@@ -22,7 +22,8 @@ export const LEAD_TEXT_MIN_GAP_DAYS = 2;
 export const ENQUIRY_FORM_CONSENT = 'enquiry_form';
 /**
  * Most follow-up texts one agency sends to leads in any 24 hours. An agency that really gets more enquiries than this
- * in a day can raise it with the operator; a form being fed numbers by a script stops here.
+ * in a day can raise it with the operator; a form being fed numbers by a script stops here. Every text that was
+ * claimed counts, also one that failed or that the carrier reported undelivered.
  */
 export const LEAD_TEXT_DAILY_CAP = 40;
 

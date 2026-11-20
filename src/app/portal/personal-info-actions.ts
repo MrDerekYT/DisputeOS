@@ -21,7 +21,9 @@ export async function portalAddPersonalInfoAction(_: ActionState, fd: FormData):
     const d = z.object({ bureau: z.enum(['experian', 'equifax', 'transunion']), kind: z.enum(['name', 'address', 'employer', 'phone', 'date_of_birth']), value: z.string().trim().min(1).max(300), issue: z.enum(['not_mine', 'incorrect']), correctValue: zOpt(300) })
       .safeParse(Object.fromEntries([...fd.entries()].filter(([k, v]) => !k.startsWith('$ACTION') && typeof v === 'string')));
     if (!d.success) throw new UserError(t('pi_bad'));
-    await ctx.tx((db) => addMark(db, { orgId: ctx.orgId, userId: ctx.userId, source: 'client' }, ctx.clientId, d.data));
+    const written = await ctx.tx((db) => addMark(db, { orgId: ctx.orgId, userId: ctx.userId, source: 'client' }, ctx.clientId, d.data));
+    // Staff already marked this entry and their answer stands: nothing was saved, so the client is told that instead.
+    if (!written) return { error: t('pi_teamListed') };
     revalidatePath('/portal/profile');
     return { ok: t('a_saved') };
   });

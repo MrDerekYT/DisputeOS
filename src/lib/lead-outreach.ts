@@ -8,6 +8,7 @@ import { getEnv } from './env';
 import { decideLeadStep, leadEmail, LEAD_MAX_ATTEMPTS, LEAD_STEPS, LEAD_WINDOW_DAYS, type LeadOutreachState, type LeadStep } from './lead-emails';
 import { decideLeadText, ENQUIRY_FORM_CONSENT, LEAD_TEXT_DAILY_CAP, LEAD_TEXT_STEPS, leadSmsConsentText, leadText, linkInName, type LeadTextState } from './lead-texts';
 import { sendEmail, type Email, type SendResult } from './mailer';
+import { usableMailingAddress } from './mailing-address';
 import { APPROVAL_COLS, outreachApproved, type ApprovalRow } from './outreach-approval';
 import { sendSms, smsUsable, toE164, toUsE164, type Sms, type SmsResult } from './sms';
 import { usAreaCodeState } from './us-phone';
@@ -17,12 +18,15 @@ import { isUuid } from './util';
  * Agency-level switch and the details every automatic lead email needs. Stored in organizations.settings.
  * `texts` is the separate switch for text follow-up: off by default, and it only ever reaches leads who ticked the
  * text-message box on the enquiry form.
+ * `address` is the saved mailing address only when it has the shape of a postal address (./mailing-address.ts). A
+ * saved value that is a sentence or carries a link reads as no address, so nothing that prints it is sent: the lead
+ * follow-up emails here and the partner emails (src/lib/partner-outreach.ts reads the same settings).
  */
 export interface OutreachSettings { enabled: boolean; since: string | null; address: string; replyTo: string; texts: boolean }
 export function outreachSettings(settings: Record<string, unknown> | null | undefined): OutreachSettings {
   const s = settings ?? {};
   const str = (k: string) => (typeof s[k] === 'string' ? (s[k] as string).trim() : '');
-  return { enabled: s.lead_followup_enabled === true, since: str('lead_followup_since') || null, address: str('lead_mailing_address'), replyTo: str('lead_reply_email'), texts: s.lead_text_followup === true };
+  return { enabled: s.lead_followup_enabled === true, since: str('lead_followup_since') || null, address: usableMailingAddress(str('lead_mailing_address')), replyTo: str('lead_reply_email'), texts: s.lead_text_followup === true };
 }
 
 /** True only when email really leaves the building. The `log` driver writes to a file and delivers nothing. */
@@ -31,10 +35,15 @@ export function emailIsLive(): boolean {
   return env.EMAIL_DRIVER === 'resend' && !!env.RESEND_API_KEY;
 }
 
-export type OutreachBlocker = 'off' | 'no_address' | 'no_reply' | 'email_not_connected';
-/** Why nothing automatic is being sent, or null when it is. */
-export function outreachBlocker(s: OutreachSettings, live: boolean): OutreachBlocker | null {
+export type OutreachBlocker = 'off' | 'not_approved' | 'no_address' | 'no_reply' | 'email_not_connected';
+/**
+ * Why nothing automatic is being sent, or null when it is. Never before the platform operator has approved the
+ * workspace under its current name (./outreach-approval.ts): the enquiry form is public and takes any address, and the
+ * business name is the From name of every email and part of its subject.
+ */
+export function outreachBlocker(s: OutreachSettings, live: boolean, org: ApprovalRow | null | undefined): OutreachBlocker | null {
   if (!s.enabled || !s.since) return 'off';
+  if (!org || !outreachApproved(org)) return 'not_approved';
   if (!s.address) return 'no_address';
   if (!s.replyTo) return 'no_reply';
   if (!live) return 'email_not_connected';
@@ -114,11 +123,22 @@ export const leadTextState = (r: LeadTextStateRow, since: string | null): LeadTe
 });
 
 // ---------------------------------------------------------------- sending
-export interface OutreachResult { sent: number; failed: number; blocked: OutreachBlocker | null }
+export interface OutreachResult {
+  sent: number; failed: number; blocked: OutreachBlocker | null;
+  /**
+   * Why a run with nothing in the way stopped before the list was done. 'time': the scheduled job's deadline passed
+   * while emails were still due; they go out with a later run. 'no_answer': the email service did not answer for the
+   * email just handed to it, so nothing more was handed over in this run. 'switched_off': follow-up was switched off,
+   * an address was changed, or the approval ended, while the run was under way.
+   */
+  held?: 'time' | 'no_answer' | 'switched_off';
+}
 export interface OutreachOptions {
   /** Only this lead (the welcome right after an enquiry). */
   clientId?: string;
   now?: Date;
+  /** The scheduled job's own deadline (epoch ms): nothing new is claimed after it, so a send in flight can still finish. */
+  stopAt?: number;
   /** Tests only: stand in for a connected email service. */
   live?: boolean;
   send?: (mail: Email) => Promise<SendResult>;
@@ -128,17 +148,24 @@ const STEP_LABEL = Object.fromEntries(LEAD_STEPS.map((s) => [s.key, s.label])) a
 
 /**
  * Sends whichever automatic email each consenting lead of one agency is due — at most one per lead per call.
- * Nothing is sent, and nothing is recorded as sent, unless the agency switched follow-up on, saved a postal address
- * and a reply address, and email is really connected. Safe to run twice or concurrently: each (lead, step) is
- * claimed through a unique key, and the claim is committed before the email is handed to the email service.
+ * Nothing is sent, and nothing is recorded as sent, unless the platform operator approved the workspace under its
+ * current name, the agency switched follow-up on, saved a postal address and a reply address, and email is really
+ * connected. Safe to run twice or concurrently: each (lead, step) is claimed through a unique key, and the claim is
+ * committed before the email is handed to the email service. The approval, the switch and both addresses are read
+ * again with every claim.
+ *
+ * A step that does not go through: when the email service refused it, the step is 'failed' and is tried again by a
+ * later run, LEAD_MAX_ATTEMPTS times in all. When the service gave no answer (a timeout, a dropped connection) the
+ * email may have gone out, so the step stays 'sending': it is never sent again, nothing later goes out on top of it,
+ * and the run hands nothing more to the service.
  */
 export async function runLeadOutreach(orgId: string, opts: OutreachOptions = {}): Promise<OutreachResult> {
   const now = opts.now ?? new Date();
-  const org = await withSystem((db) => db.row<{ name: string; settings: Record<string, unknown> }>(
-    "select name, settings from public.organizations where id = $1 and status = 'active' and mode = 'agency'", [orgId]));
+  const org = await withSystem((db) => db.row<ApprovalRow & { settings: Record<string, unknown> }>(
+    `select ${APPROVAL_COLS}, settings from public.organizations where id = $1 and status = 'active' and mode = 'agency'`, [orgId]));
   if (!org) return { sent: 0, failed: 0, blocked: 'off' };
   const settings = outreachSettings(org.settings);
-  const blocked = outreachBlocker(settings, opts.live ?? emailIsLive());
+  const blocked = outreachBlocker(settings, opts.live ?? emailIsLive(), org);
   if (blocked) return { sent: 0, failed: 0, blocked };
 
   const leads = await withSystem((db) => db.rows<LeadStateRow & { id: string; full_name: string; email: string; preferred_language: string }>(
@@ -155,11 +182,17 @@ export async function runLeadOutreach(orgId: string, opts: OutreachOptions = {})
     if (out.sent + out.failed >= MAX_EMAILS_PER_RUN) break;
     const d = decideLeadStep(leadState(l, settings.since), now);
     if (d.kind !== 'send') continue;
+    if (opts.stopAt != null && Date.now() > opts.stopAt) { out.held = 'time'; break; }
     const step = d.step;
 
     // 1. Claim the step in its own short transaction, so the claim is on record before anything is handed to the email
     //    service. Every stop condition is checked again here, under a row lock: the list above may be minutes old.
     const claim = await withSystem(async (db) => {
+      // The approval is for the name the email carries, and it can be withdrawn while a run is under way; so can the
+      // switch and the two addresses. All are read again here, and the run ends when any of them changed.
+      const cur = await db.row<ApprovalRow & { settings: Record<string, unknown> }>(`select ${APPROVAL_COLS}, settings from public.organizations where id = $1 and status = 'active'`, [orgId]);
+      const s = outreachSettings(cur?.settings);
+      if (!cur || !outreachApproved(cur) || cur.name !== org.name || !s.enabled || s.since !== settings.since || s.address !== settings.address || s.replyTo !== settings.replyTo) return 'switched_off' as const;
       if (!(await db.row('select 1 from public.clients where id = $1 and org_id = $2 for update', [l.id, orgId]))) return null;
       const fresh = await db.row<Lead>(`select c.id, c.full_name, c.email, c.preferred_language, ${LEAD_STATE_SQL} from public.clients c where c.id = $1 and c.org_id = $2`, [l.id, orgId]);
       if (!fresh || !fresh.email) return null;
@@ -172,19 +205,25 @@ export async function runLeadOutreach(orgId: string, opts: OutreachOptions = {})
          returning id`, [orgId, l.id, step, LEAD_MAX_ATTEMPTS]);
       return row ? { id: row.id, lead: fresh } : null;
     });
+    if (claim === 'switched_off') { out.held = 'switched_off'; break; }
     if (!claim) continue;
 
     // 2. Send outside any transaction: no lock or pooled connection is held while waiting on the email service.
     let mail: Email | null = null;
     let error = '';
     let ref: string | null = null;
+    /** Handed to the email service, and no answer came back: it may or may not have been accepted. */
+    let unconfirmed = false;
     try {
       const m = leadEmail(step, claim.lead.preferred_language === 'es' ? 'es' : 'en', { firstName: claim.lead.full_name, orgName: org.name, address: settings.address, optOutUrl: optOutUrl(l.id) });
       assertNoBlockedClaims(`${m.subject}\n${m.text}`);
       mail = { to: claim.lead.email, subject: m.subject, text: m.text, replyTo: settings.replyTo, fromName: org.name };
       const res = await (opts.send ?? sendEmail)(mail);
       if (res.provider !== 'resend') error = 'Email is not connected; nothing was delivered.';
-      else if (!res.ok) error = res.error ?? 'The email service refused the message.';
+      else if (!res.ok) {
+        error = res.error ?? 'The email service refused the message.';
+        unconfirmed = res.unconfirmed === true;
+      }
       ref = res.providerRef ?? null;
     } catch (e) {
       error = String((e as Error).message ?? e);
@@ -192,6 +231,18 @@ export async function runLeadOutreach(orgId: string, opts: OutreachOptions = {})
 
     // 3. Record the outcome. If this never runs (a crash, a lost connection) the row stays 'sending', which is treated
     //    as "delivery unknown" and never sent again automatically: at worst one email is lost, never duplicated.
+    if (unconfirmed) {
+      // No answer came back, so the email may have gone out. A 'failed' step is tried again by a later run, which
+      // could put a second copy in the same mailbox; so this one stays 'sending', with the reason kept beside it,
+      // and nothing more is handed to a service that is not answering.
+      await withSystem(async (db) => {
+        await db.run("update public.lead_outreach set error = $2 where id = $1 and status = 'sending'", [claim.id, error.slice(0, 500)]);
+        await db.run("insert into public.client_events (org_id, client_id, kind, summary, meta) values ($1, $2, 'lead_outreach_unconfirmed', $3, $4)",
+          [orgId, l.id, `Automatic follow-up email (${STEP_LABEL[step]}): the email service did not answer, so it may or may not have arrived. It is not sent again.`, JSON.stringify({ step })]);
+      });
+      out.held = 'no_answer';
+      break;
+    }
     if (error || !mail) {
       await withSystem((db) => db.run("update public.lead_outreach set status = 'failed', error = $2 where id = $1 and status = 'sending'", [claim.id, error.slice(0, 500)]));
       out.failed++;
@@ -252,12 +303,16 @@ export async function leadTextsOfferedBySlug(slug: string): Promise<boolean> {
  *    to the portal, or staff with a note of how they agreed, can;
  *  - one number is followed up once per agency: when another enquiry of the same agency already holds a form consent
  *    for the number, no second one is recorded, so sending the form again and again cannot text a number repeatedly.
+ *    That holds when the form is sent several times at the same moment too: the checks below run under a lock on the
+ *    agency and the number, kept until the enquiry's transaction commits, so a second submission waits for the first
+ *    and then finds its consent.
  */
 export async function recordEnquirySmsConsent(db: Db, a: { orgId: string; clientId: string; orgName: string; phone: string | null | undefined; lang: 'en' | 'es'; ip?: string | null; userAgent?: string | null }): Promise<'recorded' | 'no_phone' | 'stopped' | 'duplicate' | 'failed'> {
   const phone = toUsE164(a.phone);
   if (!phone) return 'no_phone';
   await db.run('savepoint enquiry_sms_consent');
   try {
+    await db.run('select pg_advisory_xact_lock(hashtextextended($1, 29))', [`${a.orgId}:${phone}`]);
     let outcome: 'recorded' | 'stopped' | 'duplicate' = 'recorded';
     // The newest consent this agency holds for the number, on any record, was ended; or a record of this agency with
     // this number was marked "asked to stop" (which also covers someone who never had a consent to withdraw).
@@ -316,7 +371,8 @@ const TEXT_LABEL = Object.fromEntries(LEAD_TEXT_STEPS.map((s) => [s.key, s.label
  * ends the emails). Texts are marketing, so they go out between 9:00 and 20:00 only, judged in the workspace's zone,
  * in Eastern and Pacific, and in the zones of the state the number's area code belongs to (leadQuietZones); a number
  * that is not a US number we can place is never texted. An agency sends at most LEAD_TEXT_DAILY_CAP of them in any 24
- * hours and the whole deployment at most OUTREACH_PLATFORM_DAILY_TEXTS, both counted under a lock when a text is claimed.
+ * hours and the whole deployment at most OUTREACH_PLATFORM_DAILY_TEXTS, both counted under a lock when a text is
+ * claimed; a text that failed or was not delivered still counts.
  *
  * Same guarantees as the emails: nothing is sent unless the agency switched follow-up and texts on and a text service
  * is connected; each (lead, step) is claimed through the unique key before the text is handed over, with every stop
@@ -360,12 +416,14 @@ export async function runLeadTexts(orgId: string, opts: LeadTextOptions = {}): P
     if (inQuietHoursAnywhere(now, leadQuietZones(orgTz, l.state, areaState), MARKETING_WINDOW)) { out.waiting++; continue; }
 
     // 1. Claim, under a lock on the lead, reading the consent and every stop condition again. One claim at a time
-    //    across the deployment, so both 24-hour limits are counted exactly even when runs overlap.
+    //    across the deployment, so both 24-hour limits are counted exactly even when runs overlap. Every claim of the
+    //    last 24 hours counts, whatever became of the text: one the carrier later reported undelivered was still handed
+    //    to the text service, so a form fed with dead numbers reaches the limit like any other.
     const claim = await withSystem(async (db) => {
       await db.run('select pg_advisory_xact_lock(hashtextextended($1, 28))', ['lead-texts']);
       const used = await db.row<{ org: number; platform: number }>(
         `select count(*) filter (where org_id = $1)::int as org, count(*)::int as platform from public.lead_outreach
-          where step in (${TEXT_STEPS_SQL}) and status in ('sending', 'sent') and created_at > now() - interval '24 hours'`, [orgId]);
+          where step in (${TEXT_STEPS_SQL}) and created_at > now() - interval '24 hours'`, [orgId]);
       if ((used?.org ?? 0) >= LEAD_TEXT_DAILY_CAP) return 'daily_cap' as const;
       if ((used?.platform ?? 0) >= platformCap) return 'platform_cap' as const;
       if (!(await db.row('select 1 from public.clients where id = $1 and org_id = $2 for update', [l.id, orgId]))) return null;

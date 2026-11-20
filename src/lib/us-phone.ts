@@ -32,9 +32,13 @@ const US_AREA_CODES_BY_STATE: Record<string, string> = {
 };
 const AREA_CODE_STATE = new Map(Object.entries(US_AREA_CODES_BY_STATE).flatMap(([state, codes]) => codes.split(' ').map((code) => [code, state] as const)));
 
-/** The state (or DC, PR) a "+1" number's area code is assigned to, or null when it is not a US geographic code we know. */
+/**
+ * The state (or DC, PR) a "+1" number's area code is assigned to, or null when it is not a US geographic number we
+ * know. The exchange (the three digits after the area code) has to be one that can exist: it starts with 2 to 9 and is
+ * not a service code such as 411 or 911, however the number was typed.
+ */
 export function usAreaCodeState(e164: string | null | undefined): string | null {
-  const m = /^\+1(\d{3})(\d{3})\d{4}$/.exec(e164 ?? '');
+  const m = /^\+1(\d{3})([2-9](?!11)\d{2})\d{4}$/.exec(e164 ?? '');
   // 976 as an exchange is a pay-per-call number in any area code.
   return m && m[2] !== '976' ? AREA_CODE_STATE.get(m[1]!) ?? null : null;
 }

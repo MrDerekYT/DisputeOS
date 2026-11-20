@@ -99,7 +99,10 @@ describe('letter tailoring screens render what the rules decided, and nothing el
     const on = html(createElement(LetterTailoringSetting, { on: true }));
     expect(on).toContain('Tailor wording automatically when a letter is drafted: on');
     expect(on).toContain('a person still reads and approves it before anything is mailed');
-    expect(on).toContain('Only the standard salutation, linking sentence, closing lines and sign-off can change, and only into words of courtesy; every other line of the letter is locked.');
+    // It claims what the checks do and no more: which lines can change, what they are checked against, and that a person still decides.
+    expect(on).toContain('Only the standard salutation, linking sentence, closing lines and sign-off can change; every other line of the letter is locked.');
+    expect(on).toContain('The salutation and the sign-off have to come from a short fixed list, and the reworded linking and closing lines are checked against a list of courtesy words.');
+    expect(on).not.toMatch(/words of courtesy only|only into words of courtesy|cannot/);
     expect(on).toContain('name="on" value="false"');
   });
 });

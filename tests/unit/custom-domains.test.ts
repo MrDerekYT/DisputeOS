@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_A, DEFAULT_CNAME, hostRoute, hstsFor, isPlatformHost, parseDomain, pointingRecord } from '@/lib/domain-rules';
+import { DEFAULT_A, DEFAULT_CNAME, hostRoute, hstsFor, isPlatformHost, ownershipHost, ownershipRecord, parseDomain, pointingRecord } from '@/lib/domain-rules';
 import { addDomain, domainState, removeDomain, type VercelConfig } from '@/lib/vercel-domains';
 
 const APP = 'https://disputeos.com';
@@ -66,6 +66,8 @@ describe('platform host or agency domain', () => {
     for (const p of ['/app', '/app/clients', '/app/clients/export.csv', '/login', '/signup', '/mfa/other', '/mfax', '/pricing', '/a/another-agency', '/a/_host/x', '/start/another-agency', '/domain/sitemap.xml', '/portalx']) {
       expect(r(p), p).toEqual({ kind: 'redirect', origin: APP });
     }
+    // A path that starts with two slashes is sent to the platform like any other; the origin is the platform's, never one read from the path.
+    for (const p of ['//evil.example/x', '///evil.example', '//evil.example/portal/login']) expect(r(p), p).toEqual({ kind: 'redirect', origin: APP });
   });
 });
 
@@ -89,6 +91,25 @@ describe('the DNS record that points a domain at the platform', () => {
   it('uses the registered domain and the values the provider reports', () => {
     expect(pointingRecord('acme.co.uk', { apex: 'acme.co.uk', a: '216.198.79.1' })).toEqual({ type: 'A', name: '@', value: '216.198.79.1' });
     expect(pointingRecord('www.acme.co.uk', { apex: 'acme.co.uk', cname: 'abc123.vercel-dns-017.com' })).toEqual({ type: 'CNAME', name: 'www', value: 'abc123.vercel-dns-017.com' });
+  });
+});
+
+describe('the TXT record that ties a domain to one workspace', () => {
+  it('lives at a fixed label in front of the domain, without a leading "www."', () => {
+    expect(ownershipHost('acme-credit.com')).toBe('_disputeos.acme-credit.com');
+    expect(ownershipHost('www.acme-credit.com')).toBe('_disputeos.acme-credit.com');
+    expect(ownershipHost('clients.acme-credit.com')).toBe('_disputeos.clients.acme-credit.com');
+    expect(ownershipHost('www.clients.acme-credit.com')).toBe('_disputeos.clients.acme-credit.com');
+  });
+  it('is shown with its name written against the registered domain, like the pointing record', () => {
+    expect(ownershipRecord('acme-credit.com', 'value')).toEqual({ type: 'TXT', name: '_disputeos', value: 'value' });
+    expect(ownershipRecord('www.acme-credit.com', 'value')).toEqual({ type: 'TXT', name: '_disputeos', value: 'value' });
+    expect(ownershipRecord('clients.portal.acme-credit.com', 'value')).toEqual({ type: 'TXT', name: '_disputeos.clients.portal', value: 'value' });
+    // With the registered domain the provider reports, a name under a two-part ending is written correctly too.
+    expect(ownershipRecord('www.acme.co.uk', 'value', 'acme.co.uk')).toEqual({ type: 'TXT', name: '_disputeos', value: 'value' });
+    expect(ownershipRecord('clients.acme.co.uk', 'value', 'acme.co.uk')).toEqual({ type: 'TXT', name: '_disputeos.clients', value: 'value' });
+    // A registered domain that does not fit the name is not believed.
+    expect(ownershipRecord('www.acme-credit.com', 'value', 'other.com')).toEqual({ type: 'TXT', name: '_disputeos', value: 'value' });
   });
 });
 
@@ -184,6 +205,12 @@ describe('middleware on an agency domain', () => {
       const staff = go('https://www.acme-credit.com/app/clients?q=1', 'www.acme-credit.com');
       expect([staff.status, staff.headers.get('location')]).toEqual([307, 'https://disputeos.com/app/clients?q=1']);
       expect(go('https://www.acme-credit.com/login', 'www.acme-credit.com').headers.get('location')).toBe('https://disputeos.com/login');
+      // A path that starts with two slashes cannot name another host: the redirect goes to the platform and nowhere else.
+      expect(go('https://www.acme-credit.com//evil.example/x?a=1', 'www.acme-credit.com').headers.get('location')).toBe('https://disputeos.com//evil.example/x?a=1');
+      for (const p of ['//evil.example/x', '///evil.example', '/\\evil.example/x', '//evil.example/app']) {
+        const to = go(`https://www.acme-credit.com${p}`, 'www.acme-credit.com');
+        expect([to.status, new URL(to.headers.get('location')!).host], p).toEqual([307, 'disputeos.com']);
+      }
       // The portal stays on the agency's host: no session -> its own sign-in page.
       expect(go('https://www.acme-credit.com/portal', 'www.acme-credit.com').headers.get('location')).toBe('https://www.acme-credit.com/portal/login');
       expect(go('https://www.acme-credit.com/portal/login', 'www.acme-credit.com').headers.get('x-middleware-rewrite')).toBeNull();

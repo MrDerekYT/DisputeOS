@@ -228,7 +228,8 @@ export default async function DisputePage({ params }: { params: Promise<{ id: st
               )}
               {d.status === 'response_received' && <Transition id={d.id} to="resolved" label="Mark resolved" />}
               {d.status === 'on_hold' && <Transition id={d.id} to={d.submitted_at ? 'under_investigation' : 'draft'} label="Resume" />}
-              {d.status === 'resolved' && ['verified', 'unresolved', 'no_response', 'frivolous'].includes(d.outcome ?? '') && !children.length && !d.client_confirmed_accurate && (
+              {/* The next round is started here, once. A next round that was cancelled does not count: it will not proceed. */}
+              {d.status === 'resolved' && ['verified', 'unresolved', 'no_response', 'frivolous'].includes(d.outcome ?? '') && !children.some((c) => c.status !== 'cancelled') && !d.client_confirmed_accurate && (
                 <details className="rounded-xl border border-line-strong/60 p-4">
                   <summary className="cursor-pointer text-sm font-semibold">Start round {d.round + 1}</summary>
                   <ActionForm action={nextRoundAction} className="mt-4 space-y-3">

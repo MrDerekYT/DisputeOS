@@ -70,8 +70,14 @@ export async function loadBriefRecord(db: Db, clientId: string, disputeId: strin
     record.identityDocs = intakeStatus(await loadIntakeDocs(db, clientId), today, INTAKE_REQUIRED).filter((x) => x.state === 'accepted').map((x) => ({ key: x.item.key, label: x.item.label.en }));
   }
   if (d.target_type === 'collector') {
+    // A notice is this account's when it is linked to the same report row, or to a row with the same creditor and
+    // account digits (another bureau's report of the debt, or a later import). A key without digits says too little.
     record.notices = await db.rows<BriefRecord['notices'][number]>(
-      'select collector_name, date_kind, notice_date::text, tradeline_id from public.collector_notices where client_id = $1 order by notice_date desc, created_at desc', [clientId]);
+      `select n.collector_name, n.date_kind, n.notice_date::text, n.tradeline_id,
+              coalesce(n.tradeline_id is not null and t.match_key ~ '^[^|]+[|][^|]+$'
+                and t.match_key = (select x.match_key from public.tradelines x where x.id = $2 and x.client_id = $1), false) as same_account
+         from public.collector_notices n left join public.tradelines t on t.id = n.tradeline_id
+        where n.client_id = $1 order by n.notice_date desc, n.created_at desc`, [clientId, d.tradeline_id]);
   }
   record.letters = await db.rows<BriefRecord['letters'][number]>("select template_key, kind, status from public.letters where dispute_id = $1 and status <> 'void' order by created_at", [d.id]);
   return record;

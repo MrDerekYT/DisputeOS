@@ -12,6 +12,8 @@ export interface JobsResult {
   clientUpdates: number;
   /** Organizations whose reminders, lead emails and client updates were not reached before the time ran out. They come first in the next run. */
   notReached: number;
+  /** Organizations that still had lead emails or client updates to send when the time ran out. What is left stays queued for a later run. */
+  unfinished: number;
   /** True when the outreach pass (lead texts, partner emails) stopped before every organization had its turn. Those left out come first in the next run. */
   outreachCutShort: boolean;
   /** Inbound texts that belong to no workspace and nobody has reviewed (last 30 days). */ unmatchedInboundTexts: number;
@@ -35,7 +37,9 @@ export const JOBS_DEADLINE_MS = 40_000;
  * Each pass takes the organizations in the order of who has waited longest: pass 1 by when their scheduled work last
  * ran (never, first), pass 2 by when their outreach last went out. So when a run does run out of time, it is never
  * the same organizations that go without: whoever was left out is first in the next run. A pass stops starting work
- * at the deadline, and what was not reached is counted in the result.
+ * at the deadline, and what was not reached is counted in the result. The deadline holds inside an organization's own
+ * work too: its lead emails and client updates stop being claimed once it has passed, so one organization with a long
+ * queue cannot carry the run past it. What it has left stays queued for a later run and is counted (`unfinished`).
  *
  * - Each organization runs in its own transaction, so one organization's failure cannot stop or roll back another's.
  * - Safe to retry: automation runs are unique per (automation, subject, cooldown bucket), so running this twice
@@ -64,7 +68,7 @@ export async function runScheduledJobs(opts: {
   const longestWaitFirst = (key: 'last_run' | 'last_outreach') => [...listed].sort((a, b) => (a[key] ? new Date(a[key]!).getTime() : 0) - (b[key] ? new Date(b[key]!).getTime() : 0));
   const orgs = longestWaitFirst('last_run');
   const stopAt = Date.now() + (opts.deadlineMs ?? JOBS_DEADLINE_MS);
-  const out: JobsResult = { orgs: orgs.length, failures: 0, executed: 0, pending: 0, skipped: 0, leadEmails: 0, leadTexts: 0, partnerEmails: 0, clientUpdates: 0, notReached: 0, outreachCutShort: false, unmatchedInboundTexts: 0, aiRefunds: 0, cleaned: {}, failed: [] };
+  const out: JobsResult = { orgs: orgs.length, failures: 0, executed: 0, pending: 0, skipped: 0, leadEmails: 0, leadTexts: 0, partnerEmails: 0, clientUpdates: 0, notReached: 0, unfinished: 0, outreachCutShort: false, unmatchedInboundTexts: 0, aiRefunds: 0, cleaned: {}, failed: [] };
 
   const fail = async (orgId: string, started: Date, e: unknown) => {
     const error = String((e as Error).message ?? e).slice(0, 1000);
@@ -92,9 +96,13 @@ export async function runScheduledJobs(opts: {
       const sums = await withSystem((db) => sweep(db, { orgId: o.id, userId: null }));
       const t = sums.reduce((a, s) => ({ executed: a.executed + s.executed, pending: a.pending + s.pending, skipped: a.skipped + s.skipped }), { executed: 0, pending: 0, skipped: 0 });
       out.executed += t.executed; out.pending += t.pending; out.skipped += t.skipped;
-      out.leadEmails += (await runLeadOutreach(o.id)).sent;
+      // Both stop claiming at the run's deadline, like the outreach below: a send in flight finishes, the rest waits.
+      const leads = await runLeadOutreach(o.id, { stopAt });
+      out.leadEmails += leads.sent;
       // Client updates by text and email: queue investigation windows that ended, send what is due (src/lib/client-updates/service.ts).
-      out.clientUpdates += (await runClientUpdateJobs(o.id)).sent;
+      const updates = await runClientUpdateJobs(o.id, { stopAt });
+      out.clientUpdates += updates.sent;
+      if (leads.held === 'time' || updates.held === 'time') out.unfinished++;
       await withSystem((db) => db.run("insert into public.job_runs (org_id, started_at, finished_at, status, executed, pending, skipped) values ($1, $2, now(), 'ok', $3, $4, $5)", [o.id, started, t.executed, t.pending, t.skipped]));
     } catch (e) {
       failedHere.add(o.id);
@@ -102,6 +110,7 @@ export async function runScheduledJobs(opts: {
     }
   }
   if (out.notReached) console.warn(`[jobs] ${out.notReached} organization(s) were not reached before the time ran out; they come first in a later run`);
+  if (out.unfinished) console.warn(`[jobs] ${out.unfinished} organization(s) still had lead emails or client updates to send when the time ran out; what is left stays queued for a later run`);
 
   // ---- Pass 2: outreach. Only with time left, one organization after another, each stopping at the same deadline.
   for (const o of longestWaitFirst('last_outreach')) {

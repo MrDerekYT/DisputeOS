@@ -6,7 +6,7 @@
  * and drops repeated addresses. Nothing here fetches, looks up or enriches a contact.
  */
 import { z } from 'zod';
-import { isPartnerCategory, isPlainCity, PARTNER_CATEGORIES, type PartnerCategory } from './partner-emails';
+import { isPartnerCategory, isPlainCity, PARTNER_CATEGORIES, partnerCityIssue, type PartnerCategory } from './partner-emails';
 
 export const PARTNER_IMPORT_MAX_ROWS = 200;
 /** Largest pasted or uploaded list, in characters. 200 rows fit many times over. */
@@ -22,15 +22,23 @@ export const partnerSchema = z.object({
   category: z.enum(PARTNER_CATEGORIES, { error: 'Choose a category' }),
   email: z.string().trim().toLowerCase().max(254).email('Enter a valid email address'),
   phone: blank(30).refine((v) => v == null || /^[0-9+().\-\sx]*$/i.test(v), 'Use digits and + ( ) - only'),
-  // Printed in the email ("because you work as a real estate agent in Austin, TX"), so it has to be a city name and nothing else.
-  city: blank(80).refine((v) => v == null || isPlainCity(v), 'Enter the city name only, for example “Austin” or “St. Louis”'),
+  // Printed in the email ("because you work as a real estate agent in Austin, TX"), so it has to be a city name and
+  // nothing else, and one the claims guard lets through: a place such as "Free Soil" would get the email refused later.
+  city: blank(80).refine((v) => v == null || isPlainCity(v), 'Enter the city name only, for example “Austin” or “St. Louis”').superRefine((v, ctx) => {
+    const issue = v != null && isPlainCity(v) ? partnerCityIssue(v) : null;
+    if (issue) ctx.addIssue({ code: 'custom', message: `This city cannot be printed in the emails: “${issue.excerpt}” would read as a claim they may not make. Leave the city empty for this partner.` });
+  }),
   state: z.string().trim().toUpperCase().optional().transform((v) => (v ? v : null)).refine((v) => v == null || /^[A-Z]{2}$/.test(v), 'Use a two-letter state code'),
   language: z.enum(['en', 'es']).default('en'),
   sourceNote: blank(300),
 });
 export type PartnerInput = z.infer<typeof partnerSchema>;
 
-/** The exact sentence a person confirms when adding one partner or a list. Stored nowhere else: who and when is on each row. */
+/**
+ * The exact sentence a person confirms when adding one partner or a list. Who confirmed and when is on each row; the
+ * sentence itself is written to the audit entry of the addition, so a later change of wording leaves a record of what
+ * was confirmed at the time.
+ */
 export const PARTNER_ATTESTATION = 'I compiled this myself from public business contact details and my own business contacts. These are business email addresses, and none came from a bought, rented or scraped list.';
 
 // ---------------------------------------------------------------- reading a list

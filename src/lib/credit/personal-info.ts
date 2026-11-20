@@ -53,8 +53,10 @@ export interface NewMark { bureau: string; kind: string; value: string; issue: s
 /**
  * Records that one entry on one bureau's report is not the client's, or is not correct. Runs as staff or as the client
  * (row-level security decides which rows either may write). Marking the same entry again replaces the earlier answer.
+ * Returns false when nothing was written: the client listed an entry that staff already marked, and a client cannot
+ * replace an answer staff gave, so that answer stands. The caller must not report it as saved.
  */
-export async function addMark(db: Db, who: { orgId: string; userId: string; source: 'staff' | 'client' }, clientId: string, input: NewMark): Promise<void> {
+export async function addMark(db: Db, who: { orgId: string; userId: string; source: 'staff' | 'client' }, clientId: string, input: NewMark): Promise<boolean> {
   if (!(PI_BUREAUS as string[]).includes(input.bureau)) throw new UserError('Choose the bureau.');
   if (!(PI_KINDS as readonly string[]).includes(input.kind)) throw new UserError('Choose what kind of entry it is.');
   const value = clean(input.value);
@@ -69,10 +71,11 @@ export async function addMark(db: Db, who: { orgId: string; userId: string; sour
   const shown = earlier?.value ?? value;
   // Staff replace any earlier answer; for a client, row-level security limits this to an answer they gave themselves.
   await db.run('delete from public.personal_info_marks where client_id = $1 and bureau = $2 and kind = $3 and lower(btrim(value)) = lower($4)', [clientId, input.bureau, input.kind, value]);
-  await db.run(
+  const written = await db.run(
     `insert into public.personal_info_marks (org_id, client_id, bureau, kind, value, issue, correct_value, source, created_by) values ($1,$2,$3,$4,$5,$6,$7,$8,$9)
      on conflict (client_id, bureau, kind, lower(btrim(value))) do nothing`,
     [who.orgId, clientId, input.bureau, input.kind, shown, issue, correct, who.source, who.userId]);
+  return written > 0;
 }
 
 export async function removeMark(db: Db, clientId: string, markId: string): Promise<void> {

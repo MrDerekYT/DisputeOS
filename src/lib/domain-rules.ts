@@ -120,12 +120,28 @@ export interface DnsRecord { type: 'A' | 'CNAME' | 'TXT'; name: string; value: s
 export const DEFAULT_A = '76.76.21.21';
 export const DEFAULT_CNAME = 'cname.vercel-dns.com';
 
+/** The registered domain record names are written against: the provider's answer when it fits, else the last two labels. */
+const apexOf = (domain: string, apex?: string | null) => (apex && (domain === apex || domain.endsWith(`.${apex}`)) ? apex : domain.split('.').slice(-2).join('.'));
+
 /**
  * The record that points a domain at the platform. `apex` is the registered domain when the provider told us;
  * without it, a two-label name (example.com) is treated as a root domain and anything longer as a subdomain.
  */
 export function pointingRecord(domain: string, opts: { apex?: string | null; a?: string | null; cname?: string | null } = {}): DnsRecord {
-  const apex = opts.apex && (domain === opts.apex || domain.endsWith(`.${opts.apex}`)) ? opts.apex : domain.split('.').slice(-2).join('.');
+  const apex = apexOf(domain, opts.apex);
   if (domain === apex) return { type: 'A', name: '@', value: opts.a || DEFAULT_A };
   return { type: 'CNAME', name: domain.slice(0, -(apex.length + 1)), value: opts.cname || DEFAULT_CNAME };
+}
+
+/**
+ * Where the TXT record that ties a domain to one workspace lives: a fixed label in front of the domain without a
+ * leading "www." (a domain and its www twin are one name). Only someone who manages the domain's DNS can create it.
+ */
+export const ownershipHost = (domain: string) => `_disputeos.${bareDomain(domain)}`;
+
+/** That record as the agency creates it: the name is written against the registered domain, like the pointing record's. */
+export function ownershipRecord(domain: string, value: string, apex?: string | null): DnsRecord {
+  const host = ownershipHost(domain);
+  const a = apexOf(domain, apex);
+  return { type: 'TXT', name: host.endsWith(`.${a}`) ? host.slice(0, -(a.length + 1)) : host, value };
 }

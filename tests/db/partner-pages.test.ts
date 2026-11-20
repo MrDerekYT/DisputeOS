@@ -8,7 +8,7 @@ import { resetEnvCache } from '@/lib/env';
 import { leadTextsOfferedBySlug, runLeadTexts } from '@/lib/lead-outreach';
 import { submitLead } from '@/lib/leads';
 import type { Email, SendResult } from '@/lib/mailer';
-import type { PartnerInput } from '@/lib/partner-import';
+import { PARTNER_ATTESTATION, type PartnerInput } from '@/lib/partner-import';
 import { addPartners, optOutPartner, partnerOptOutToken, runPartnerOutreach } from '@/lib/partner-outreach';
 import { markPartner, setReferredBy } from '@/lib/partners';
 import { can, type Role } from '@/lib/rbac';
@@ -160,7 +160,7 @@ describe('Partners pages render from real data', () => {
     signIn(fresh2);
     const waiting = read(await PartnersPage({ searchParams: Promise.resolve({}) }));
     expect(waiting).toContain('On, but not sending');
-    expect(waiting).toContain('This workspace has not been approved for automatic outreach yet. The platform operator approves each workspace before partner emails or lead texts go out; nothing is sent until then.');
+    expect(waiting).toContain('This workspace has not been approved for automatic outreach yet. The platform operator approves each workspace before automatic emails to leads or partners, or any text message, go out; nothing is sent until then.');
     expect(waiting).not.toContain('Email is not connected, so nothing is being sent.');
     // Approved, then renamed: the page asks for a new approval instead of sending under a name nobody looked at.
     await approveOutreach(fresh2.orgId, new Date('2025-06-02T15:00:00Z'));
@@ -181,6 +181,101 @@ describe('Partners pages render from real data', () => {
     expect(page).toContain('The email service refused the last 2 emails (domain not verified). Nothing more is tried for 24 hours, or until you open one of those partners and press “Try again”.');
     expect(page.match(/Stopped: an email was not sent\. Open to see why/g)).toHaveLength(2);
     expect(page).toContain('Nothing sent. The sequence is not running'); // the third partner was not tried, and is not stopped
+  });
+
+  it('with email connected, the page names what is in the way: the website address, the mailing address, or too many bounces', async () => {
+    // Email reads as connected for this test, so nothing else is in the way. Rendering a page sends nothing.
+    Object.assign(process.env, { EMAIL_DRIVER: 'resend', RESEND_API_KEY: 're_test_key_for_vitest' });
+    resetEnvCache();
+    try {
+      const page = async () => read(await PartnersPage({ searchParams: Promise.resolve({}) }));
+      // The address of a site on the platform keeps the name the workspace signed up with.
+      const a = await agency('Free Credit Help', { ...ON, website: { published: true, headline: 'Credit report help' } });
+      await withSystem((db) => db.run('update public.organizations set name = $2 where id = $1', [a.orgId, `Hill Credit ${uniq()}`]));
+      await approveOutreach(a.orgId, new Date('2025-06-02T15:00:00Z'));
+      const [waiting] = await add(a, [P('Waiting Realty')]) as [string];
+      signIn(a);
+      const blocked = await page();
+      expect(blocked).toContain('On, but not sending');
+      expect(blocked).toContain(`The address of your website (http://localhost:3000/a/${a.slug}) cannot be printed in these emails. Only a first consultation may be called free. Do not call credit repair, reports, scores or results free. (“free”) The introduction and the follow-up link to your published site. Connect your own domain on the Website page, or unpublish the site.`);
+      expect(blocked).toContain('Nothing sent. The sequence is not running');
+      expect(blocked).not.toContain('On and sending');
+      // The partner's own page says the same: due, but not going out.
+      const own = read(await PartnerPage({ params: Promise.resolve({ id: waiting }) }));
+      expect(own).toContain('Due, but the sequence is not running');
+      expect(own).not.toContain('Goes out with the next scheduled run');
+      // Unpublished, the emails carry no link and nothing is in the way.
+      await withSystem((db) => db.run("update public.organizations set settings = jsonb_set(settings, '{website,published}', 'false'::jsonb) where id = $1", [a.orgId]));
+      expect(await page()).toContain('On and sending');
+      expect(read(await PartnerPage({ params: Promise.resolve({ id: waiting }) }))).toContain('Goes out with the next scheduled run');
+
+      // A mailing address the claims guard would refuse under every email is named too.
+      const b = await agency('PagesAddressClaim', { ...ON, lead_mailing_address: '100 Guarantee Blvd, Tampa, FL 33606' });
+      signIn(b);
+      expect(await page()).toContain('Your mailing address cannot be printed in these emails as it is written. Results cannot be guaranteed. (“Guarantee”)');
+      // Saved text that is not a postal address (from before the forms refused it) reads as none: the page asks for
+      // one, and the form does not offer the old text back.
+      const c = await agency('PagesAddressJunk', { ...ON, lead_mailing_address: 'URGENT: sign in at https://secure-escrow-verify.example/login today' });
+      signIn(c);
+      expect(await page()).toContain('A postal address is required: nothing is sent until you save one below.');
+      const formHtml = markup(await PartnersPage({ searchParams: Promise.resolve({}) }));
+      expect(formHtml).not.toContain('secure-escrow-verify');
+      expect(formHtml).toMatch(/<input[^>]*maxLength="160"[^>]*name="address" value=""\/>/);
+
+      // Too many bounces: counted since the approval, and the page says it does not start again by itself.
+      const d = await agency('PagesBounces', ON);
+      const ids = await add(d, Array.from({ length: 8 }, (_, i) => P(`Bounce Realty ${i}`)));
+      expect((await runPartnerOutreach(d.orgId, { live: true, send: sendWith(), now: MON })).sent).toBe(8);
+      for (const id of ids.slice(0, 3)) await asUser(d.ownerId, (db) => markPartner(db, { orgId: d.orgId, userId: d.ownerId }, id, 'bounced'));
+      signIn(d);
+      const SENTENCE = '3 addresses have bounced since this workspace was approved, against 8 emails sent. The sequence is holding, and it does not start again by itself. Check where the list came from and remove the partners not yet emailed whose addresses are not real. Then ask the platform operator to approve the workspace again.';
+      const held = await page();
+      expect(held).toContain('On, but holding');
+      expect(held).toContain(SENTENCE);
+      expect(held).not.toContain('in the last 30 days bounced');
+      // A month later nothing has changed: the hold is still on and the page still says so.
+      await withSystem((db) => db.run("update public.partner_events set created_at = created_at - interval '31 days' where org_id = $1 and kind = 'bounced'", [d.orgId]));
+      expect(await page()).toContain(SENTENCE);
+      expect(await page()).toContain('When too many addresses bounce, everything holds until the platform operator approves the workspace again.');
+    } finally {
+      process.env.EMAIL_DRIVER = saved.EMAIL_DRIVER;
+      delete process.env.RESEND_API_KEY;
+      resetEnvCache();
+    }
+  });
+
+  it('a step that did not go through says which kind it was: refused by this app’s own check, or never answered by the email service', async () => {
+    const a = await agency('PagesNotThrough', ON);
+    // A city on file from before cities were checked when a partner is added.
+    const [soil, unanswered] = await add(a, [P('Soil Realty', { city: 'Free Soil', state: 'MI' }), P('Quiet Realty')]) as [string, string];
+    expect((await runPartnerOutreach(a.orgId, { live: true, send: sendWith(), now: MON, partnerId: soil })).failed).toBe(1);
+    expect(await runPartnerOutreach(a.orgId, { live: true, send: sendWith({ ok: false, error: 'The operation was aborted due to timeout', unconfirmed: true }), now: MON, partnerId: unanswered })).toMatchObject({ sent: 0, failed: 0, held: 'no_answer' });
+    signIn(a);
+
+    const guard = read(await PartnerPage({ params: Promise.resolve({ id: soil }) }));
+    expect(guard).toContain('This app did not send it, and the email service was never asked: the message would contain a claim that is not allowed (Only a first consultation may be called free. Do not call credit repair, reports, scores or results free.). Something on this record reads as a claim. Check the city and the contact name under “Edit details”, then ask for another try. Nothing further is sent to this partner until then.');
+    expect(guard).not.toContain('The email service did not accept it');
+    expect(guard).toContain('Try again');
+    // The form on that page refuses the city for the same reason, and takes the record without it.
+    const VALID = { id: soil, businessName: 'Soil Realty', category: 'real_estate_agent', state: 'MI', language: 'en' };
+    const fd = (o: Record<string, string>) => { const f = new FormData(); for (const [k, v] of Object.entries(o)) f.set(k, v); return f; };
+    expect(await updatePartnerAction(undefined, fd({ ...VALID, city: 'Free Soil' }))).toEqual({ error: 'This city cannot be printed in the emails: “Free” would read as a claim they may not make. Leave the city empty for this partner.' });
+    expect(await updatePartnerAction(undefined, fd({ ...VALID, city: '' }))).toEqual({ ok: 'Saved.' });
+    await retryPartnerAction(fd({ id: soil }));
+    expect((await runPartnerOutreach(a.orgId, { live: true, send: sendWith(), now: MON, partnerId: soil })).sent).toBe(1);
+
+    const quiet = read(await PartnerPage({ params: Promise.resolve({ id: unanswered }) }));
+    expect(quiet).toContain('Introduction Not confirmed as sent');
+    expect(quiet).toContain('It was handed to the email service, and it is not known whether the service accepted it (The operation was aborted due to timeout). It may or may not have arrived, so it is not sent again. Contact this partner yourself.');
+    expect(quiet).toContain('Stopped: one email was not confirmed as sent. Contact them yourself');
+    expect(quiet).toContain('Read the email'); // what may have arrived can be read
+    expect(quiet).not.toContain('Try again');
+    expect(quiet).not.toContain('The email service did not accept it');
+    expect(quiet).toContain('Introduction email: the email service did not answer (The operation was aborted due to timeout), so it may or may not have arrived. It is not sent again. The sequence stopped for this partner.');
+    // The list says the same in its one line, and nowhere is an email marked as written by AI.
+    const list = read(await PartnersPage({ searchParams: Promise.resolve({}) }));
+    expect(list).toContain('Stopped: one email was not confirmed as sent. Contact them yourself');
+    for (const text of [guard, quiet, list]) expect(text).not.toContain('Reworded by AI');
   });
 
   it('a partner page shows the email as it was sent, the next one, the timeline and the honest buttons', async () => {
@@ -365,8 +460,16 @@ describe('partner actions, as the forms call them', () => {
     expect(await addPartnerAction(undefined, form({ ...VALID, email, category: '', attest: 'on' }))).toEqual({ error: 'Choose a category' });
     expect(await addPartnerAction(undefined, form({ ...VALID, email, attest: 'on' }))).toEqual({ ok: 'Hill Realty was added. Nothing is sent until the email sequence is switched on.' });
     expect(await addPartnerAction(undefined, form({ ...VALID, email: email.toUpperCase(), attest: 'on' }))).toEqual({ error: expect.stringMatching(/already on your partner list/) });
+    // Another spelling of the same mailbox is the same partner, and the message says why it was not added.
+    expect(await addPartnerAction(undefined, form({ ...VALID, email: email.replace('@', '+second@'), attest: 'on' })))
+      .toEqual({ error: 'That email address is already on your partner list, perhaps in another spelling: a “+tag”, and for Gmail the dots, do not make a different mailbox. A mailbox is only ever listed once, and one that opted out stays opted out.' });
+    // A city whose name would read as a claim in the email is refused here, with what to do about it.
+    expect(await addPartnerAction(undefined, form({ ...VALID, email: `soil-${uniq()}@hill.example.test`, city: 'Free Soil', state: 'MI', attest: 'on' })))
+      .toEqual({ error: 'This city cannot be printed in the emails: “Free” would read as a claim they may not make. Leave the city empty for this partner.' });
     const rows = await withSystem((db) => db.rows<{ email: string; state: string; status: string; attested_by: string }>('select email, state, status, attested_by from public.partners where org_id = $1', [a.orgId]));
     expect(rows).toEqual([{ email, state: 'TX', status: 'new', attested_by: a.ownerId }]);
+    // The sentence the person ticked is kept on the audit entry, so a later change of wording leaves a record of this one.
+    expect(await withSystem((db) => db.rows<{ metadata: Record<string, unknown> }>("select metadata from public.audit_logs where org_id = $1 and action = 'partner.added'", [a.orgId]))).toEqual([{ metadata: { attestation: PARTNER_ATTESTATION } }]);
   });
 
   it('importing a list: pasted or as a file, with the rows left out named, and never without the confirmation', async () => {
@@ -386,6 +489,14 @@ describe('partner actions, as the forms call them', () => {
     expect(await withSystem((db) => db.rows<{ email: string; category: string }>('select email, category from public.partners where org_id = $1 order by email', [a.orgId]))).toEqual([
       { email: `a@a-${u}.example`, category: 'real_estate_agent' }, { email: `b@b-${u}.example`, category: 'car_dealership' }, { email: `c@c-${u}.example`, category: 'tax_preparer' },
     ]);
+    // Other spellings of mailboxes already listed are skipped and counted, like a repeated address.
+    expect(await importPartnersAction(undefined, form({ list: `business name,email,category\nA tagged,a+1@a-${u}.example,realtor\nB tagged,b+sales@b-${u}.example,car dealer\nD Tax,d@d-${u}.example,tax preparer`, attest: 'on' })))
+      .toEqual({ ok: '1 added. 2 skipped: already on your list or repeated in this one. Nothing is sent until the email sequence is switched on.' });
+    // Every import that added anything keeps the sentence that was ticked.
+    const imports = await withSystem((db) => db.rows<{ metadata: Record<string, unknown> }>("select metadata from public.audit_logs where org_id = $1 and action = 'partners.imported' order by id", [a.orgId]));
+    expect(imports.length).toBeGreaterThanOrEqual(3);
+    for (const i of imports) expect(i.metadata.attestation).toBe(PARTNER_ATTESTATION);
+    expect(imports.at(-1)!.metadata).toEqual({ added: 1, already_listed: 2, repeated: 0, left_out: 0, attestation: PARTNER_ATTESTATION });
   });
 
   it('the buttons on a partner record what happened; the email address never changes; only an untouched partner can be removed', async () => {
@@ -431,6 +542,41 @@ describe('partner actions, as the forms call them', () => {
     expect(await withSystem((db) => db.rows('select partner_id from public.partner_referrals where client_id = $1', [client]))).toEqual([{ partner_id: other }]);
     expect(await setReferredByAction(undefined, form({ clientId: client, partnerId: '' }))).toEqual({ ok: 'Cleared.' });
     expect(await withSystem((db) => db.rows('select partner_id from public.partner_referrals where client_id = $1', [client]))).toEqual([]);
+  });
+
+  it('the mailing address has to be shaped like a postal address, on the Partners form and on the Leads form', async () => {
+    const HELP = 'Enter the postal address your business receives mail at, starting with the street number or PO Box and ending with the state and ZIP code, for example "500 Bayshore Blvd, Suite 210, Tampa, FL 33606". It is printed in every automatic email.';
+    const URGENT = 'URGENT: your escrow account is on hold. Sign in at https://secure-escrow-verify.example/login today or the closing is cancelled.';
+    const NOT_ADDRESSES: [string, string][] = [
+      ['x', HELP], ['n/a', HELP], ['12 Main St, Austin, TX', HELP], [URGENT, `A mailing address cannot contain a web address. ${HELP}`],
+      [`${URGENT} P.S. As we discussed at the expo, most local agents already use us.`, HELP], ['As we discussed at the expo most local agents already use us 78701', HELP],
+      ['<b>12 Main St, Austin, TX 78701</b>', HELP], ['12 Main St, Austin, TX 78701! Call now', HELP],
+    ];
+    for (const [label, save] of [['Partners', savePartnerOutreachAction], ['Leads', saveLeadFollowUpAction]] as const) {
+      const a = await agency(`ActionsAddress${label}`);
+      signIn(a);
+      for (const [address, error] of NOT_ADDRESSES) {
+        // Refused with the switch on and with it off: such text is never saved.
+        expect(await save(undefined, form({ enabled: 'on', address, replyTo: REPLY })), `${label}: ${address}`).toEqual({ error });
+        expect(await save(undefined, form({ address, replyTo: REPLY })), `${label}: ${address}`).toEqual({ error });
+      }
+      expect(await settings(a)).not.toHaveProperty('lead_mailing_address');
+      expect(await settings(a)).not.toHaveProperty('lead_reply_email');
+      // A postal address is saved, on one line.
+      expect(await save(undefined, form({ enabled: 'on', address: '  500 Bayshore Blvd,  Suite 210,\nTampa, FL 33606 ', replyTo: REPLY }))).toMatchObject({ ok: expect.stringMatching(/^Saved/) });
+      expect(await settings(a)).toMatchObject({ lead_mailing_address: '500 Bayshore Blvd, Suite 210, Tampa, FL 33606', lead_reply_email: REPLY });
+      // It cannot be replaced by a message afterwards (the operator's approval does not cover this line): the address stays.
+      await approveOutreach(a.orgId, new Date('2025-06-02T15:00:00Z'));
+      expect(await save(undefined, form({ enabled: 'on', address: URGENT, replyTo: REPLY }))).toEqual({ error: `A mailing address cannot contain a web address. ${HELP}` });
+      expect(await settings(a)).toMatchObject({ lead_mailing_address: '500 Bayshore Blvd, Suite 210, Tampa, FL 33606' });
+    }
+    // Left blank, the Partners form keeps the saved address; the Leads form clears it when follow-up is switched off.
+    const b = await agency('ActionsAddressBlank', ON);
+    signIn(b);
+    expect(await savePartnerOutreachAction(undefined, form({ address: '', replyTo: '' }))).toEqual({ ok: 'Saved. The sequence is off.' });
+    expect(await settings(b)).toMatchObject({ lead_mailing_address: ADDRESS });
+    expect(await saveLeadFollowUpAction(undefined, form({ address: '', replyTo: '' }))).toEqual({ ok: 'Saved. Automatic follow-up is off.' });
+    expect(await settings(b)).toMatchObject({ lead_mailing_address: '' });
   });
 
   it('only an owner or admin can switch the sequence on, it needs both addresses, and it never touches the lead switch', async () => {

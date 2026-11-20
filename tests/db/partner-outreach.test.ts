@@ -13,8 +13,8 @@ import { PARTNER_CATEGORIES, PARTNER_DAILY_CAP, PARTNER_PER_RUN_CAP, partnerEmai
 import { parsePartnerList, type PartnerInput } from '@/lib/partner-import';
 import { NEW_WORKSPACE_DAILY_EMAILS } from '@/lib/outreach-approval';
 import {
-  addPartners, optOutPartner, PARTNER_BOUNCE_MIN, partnerBounceHealth, partnerFailureHold, partnerOneClickUrl, partnerOptOutInfo, partnerOptOutToken, recordPartnerDeliveryEvent, runPartnerOutreach,
-  type PartnerRunOptions,
+  addPartners, optOutPartner, PARTNER_BOUNCE_MIN, PARTNER_GUARD_REFUSAL, partnerBounceHealth, partnerFailureHold, partnerOneClickUrl, partnerOptOutInfo, partnerOptOutToken, recordPartnerDeliveryEvent,
+  runPartnerOutreach, type PartnerRunOptions,
 } from '@/lib/partner-outreach';
 import { markPartner, partnerAskedToStop, pausePartner, removePartner, resumePartner, retryPartnerStep, setReferredBy, updatePartner } from '@/lib/partners';
 import { smsLog, toUsE164, type Sms, type SmsResult } from '@/lib/sms';
@@ -64,8 +64,8 @@ function outbox(result: Partial<SendResult> = {}) {
 }
 const partner = (id: string) => withSystem((db) => db.row<{ status: string; paused: boolean; opted_out: boolean; attested_by: string | null; email: string }>(
   'select status, (paused_at is not null) as paused, (opted_out_at is not null) as opted_out, attested_by, email from public.partners where id = $1', [id]));
-const steps = (id: string) => withSystem((db) => db.rows<{ step: string; status: string; attempts: number; subject: string | null; body: string | null; ai_used: boolean; error: string | null }>(
-  'select step, status, attempts, subject, body, ai_used, error from public.partner_outreach where partner_id = $1 order by created_at', [id]));
+const steps = (id: string) => withSystem((db) => db.rows<{ step: string; status: string; attempts: number; subject: string | null; body: string | null; error: string | null }>(
+  'select step, status, attempts, subject, body, error from public.partner_outreach where partner_id = $1 order by created_at', [id]));
 const events = (id: string) => withSystem((db) => db.rows<{ kind: string; summary: string }>('select kind, summary from public.partner_events where partner_id = $1 order by created_at', [id]));
 const count = (sql: string, p: unknown[]) => withSystem((db) => db.row<{ n: number }>(sql, p as never[])).then((r) => r!.n);
 const sum = (rs: { sent: number }[]) => rs.reduce((n, r) => n + r.sent, 0);
@@ -91,6 +91,12 @@ describe('referral partners: the automatic email sequence', () => {
     const [id] = await add(a, [P()]);
     const box = outbox();
     expect((await runPartnerOutreach(a.orgId, { ...box.opts, now: MON })).blocked).toBe('no_address');
+    // Saved text that is not shaped like a postal address counts as none. The forms refuse it; this is a value saved
+    // before they did, or written some other way. Nothing prints it in an email.
+    for (const junk of ['x', 'URGENT: your escrow account is on hold. Sign in at https://secure-escrow-verify.example/login today or the closing is cancelled. P.S. As we discussed at the expo, most local agents already use us.']) {
+      await withSystem((db) => db.run('update public.organizations set settings = settings || $2::jsonb where id = $1', [a.orgId, JSON.stringify({ lead_mailing_address: junk })]));
+      expect(await runPartnerOutreach(a.orgId, { ...box.opts, now: MON }), junk).toEqual({ sent: 0, failed: 0, blocked: 'no_address', held: null });
+    }
     await withSystem((db) => db.run('update public.organizations set settings = settings || $2::jsonb where id = $1', [a.orgId, JSON.stringify({ lead_mailing_address: ADDRESS, lead_reply_email: '' })]));
     expect((await runPartnerOutreach(a.orgId, { ...box.opts, now: MON })).blocked).toBe('no_reply');
     await withSystem((db) => db.run('update public.organizations set settings = settings || $2::jsonb where id = $1', [a.orgId, JSON.stringify({ lead_reply_email: REPLY })]));
@@ -119,6 +125,33 @@ describe('referral partners: the automatic email sequence', () => {
       expect((await runPartnerOutreach(a.orgId, { ...box.opts, now: MON })).blocked, name).toBe('name_claim');
     }
     expect(box.mails).toEqual([]);
+  });
+
+  it('a website address that reads as a claim blocks the sequence before anything is claimed, instead of failing partner after partner', async () => {
+    // The address of a site on the platform keeps the name the workspace signed up with, whatever it is called now.
+    const a = await agency('Free Credit Help', ON);
+    expect(a.slug).toMatch(/^free-credit-help-/);
+    await withSystem((db) => db.run('update public.organizations set name = $2, settings = settings || $3::jsonb where id = $1',
+      [a.orgId, `Hill Credit ${uniq()}`, JSON.stringify({ website: { published: true, headline: 'Credit report help' } })]));
+    await approveOutreach(a.orgId, APPROVED); // approved under the name it has now, which says nothing
+    const ids = await add(a, [P(), P(), P()]);
+    const box = outbox();
+    const told = () => count("select count(*)::int as n from public.notifications where org_id = $1 and title = 'Partner emails are not going out'", [a.orgId]);
+    for (const now of [MON, day(1)]) expect(await runPartnerOutreach(a.orgId, { ...box.opts, now })).toEqual({ sent: 0, failed: 0, blocked: 'site_claim', held: null });
+    expect(box.mails).toEqual([]);
+    // Nobody was moved to "failed", nothing holds and nobody was told the email service refused anything.
+    for (const id of ids) { expect(await steps(id)).toEqual([]); expect(await partner(id)).toMatchObject({ status: 'new' }); }
+    expect(await withSystem((db) => partnerFailureHold(db, a.orgId, MON))).toBeNull();
+    expect(await told()).toBe(0);
+    // With the site unpublished the emails carry no link, and go out.
+    await withSystem((db) => db.run("update public.organizations set settings = jsonb_set(settings, '{website,published}', 'false'::jsonb) where id = $1", [a.orgId]));
+    expect(await runPartnerOutreach(a.orgId, { ...box.opts, now: MON })).toEqual({ sent: 3, failed: 0, blocked: null, held: null });
+    expect(box.mails.some((m) => m.text.includes('/a/'))).toBe(false);
+    // A site whose address says nothing is linked from the introduction.
+    const b = await agency('Hill Path', { ...ON, website: { published: true, headline: 'Credit report help' } });
+    await add(b, [P()]);
+    expect(await runPartnerOutreach(b.orgId, { ...box.opts, now: MON })).toEqual({ sent: 1, failed: 0, blocked: null, held: null });
+    expect(box.mails.at(-1)!.text).toContain(`You can read about us here: http://localhost:3000/a/${b.slug}`);
   });
 
   it('switched on: each step goes out once, on its business day, even when runs overlap, and every send is recorded', async () => {
@@ -156,7 +189,7 @@ describe('referral partners: the automatic email sequence', () => {
     expect((await to(es))[0]!.text).toContain(`Este mensaje es una oferta comercial de ${a.name}.`);
     expect((await to(bare))[0]!.text.startsWith('Hello,\n\n')).toBe(true);
     // Recorded: the step, the email exactly as sent, the status and the timeline.
-    expect(await steps(en)).toEqual([{ step: 'intro', status: 'sent', attempts: 1, subject: intro.subject, body: intro.text, ai_used: false, error: null }]);
+    expect(await steps(en)).toEqual([{ step: 'intro', status: 'sent', attempts: 1, subject: intro.subject, body: intro.text, error: null }]);
     expect(await partner(en)).toMatchObject({ status: 'in_sequence' });
     expect((await events(en)).map((e) => e.kind)).toEqual(['added', 'email_sent']);
 
@@ -362,6 +395,111 @@ describe('referral partners: the automatic email sequence', () => {
     expect(await steps(id)).toMatchObject([{ step: 'intro', status: 'sending', attempts: 1 }]);
   });
 
+  it('no answer from the email service: the email may have gone out, so the step is never sent again, cannot be retried and is not a refusal', async () => {
+    const a = await agency('PartnersNoAnswer', ON);
+    const ids = await add(a, [P(), P(), P()]);
+    const handed: Email[] = [];
+    // The service accepts and delivers every request; its first answer is lost on the way back. `unconfirmed` is what the
+    // real driver reports for a timeout or a dropped connection (tests/unit/mailer-unconfirmed.test.ts).
+    const send = async (m: Email): Promise<SendResult> => {
+      handed.push(m);
+      return handed.length === 1 ? { ok: false, provider: 'resend', error: 'The operation was aborted due to timeout', unconfirmed: true } : { ok: true, provider: 'resend', providerRef: `ref-${handed.length}` };
+    };
+    const told = () => count("select count(*)::int as n from public.notifications where org_id = $1 and title = 'Partner emails are not going out'", [a.orgId]);
+    // Nothing more is handed to a service that is not answering: the run ends there.
+    expect(await runPartnerOutreach(a.orgId, { live: true, send, now: MON })).toEqual({ sent: 0, failed: 0, blocked: null, held: 'no_answer' });
+    expect(handed).toHaveLength(1);
+    const all = await Promise.all(ids.map(async (id) => ({ id, steps: await steps(id), email: (await partner(id))!.email })));
+    const stuck = all.find((x) => x.steps.length)!;
+    expect(stuck.email).toBe(handed[0]!.to);
+    // It is not 'failed'. The email as it was handed over and the reason are kept with the step.
+    expect(stuck.steps).toEqual([{ step: 'intro', status: 'sending', attempts: 1, subject: handed[0]!.subject, body: handed[0]!.text, error: 'The operation was aborted due to timeout' }]);
+    expect((await events(stuck.id)).at(-1)).toEqual({ kind: 'email_unconfirmed', summary: 'Introduction email: the email service did not answer (The operation was aborted due to timeout), so it may or may not have arrived. It is not sent again. The sequence stopped for this partner.' });
+    expect(await partner(stuck.id)).toMatchObject({ status: 'new' });
+    // Nobody can ask for another try of it: "Try again" is for an email the service refused.
+    expect(await asUser(a.ownerId, (db) => retryPartnerStep(db, actor(a), stuck.id))).toBe(false);
+    await expect(asUser(a.ownerId, (db) => db.run("update public.partner_outreach set status = 'retry' where partner_id = $1", [stuck.id]))).resolves.toBe(0);
+    // It is not a refusal either: nothing holds, and nobody is told the email service refused anything.
+    expect(await withSystem((db) => partnerFailureHold(db, a.orgId, MON))).toBeNull();
+    expect(await told()).toBe(0);
+    // The next run carries on with the others. That step, and everything after it, is never sent to that partner.
+    expect(await runPartnerOutreach(a.orgId, { live: true, send, now: new Date(MON.getTime() + 3_600_000) })).toEqual({ sent: 2, failed: 0, blocked: null, held: null });
+    for (const n of [4, 11, 30]) await runPartnerOutreach(a.orgId, { live: true, send, now: day(n) });
+    expect(handed.filter((m) => m.to === stuck.email)).toHaveLength(1); // one copy, ever
+    expect(handed).toHaveLength(1 + 2 * 3);
+    expect(await steps(stuck.id)).toMatchObject([{ step: 'intro', status: 'sending', attempts: 1 }]);
+
+    // A refusal and then an unanswered send are not "two refusals in a row".
+    const b = await agency('PartnersNoAnswerMixed', ON);
+    const [refused, unanswered] = await add(b, [P(), P()]) as [string, string];
+    expect(await runPartnerOutreach(b.orgId, { ...outbox({ ok: false, error: 'domain not verified' }).opts, now: MON, partnerId: refused })).toMatchObject({ failed: 1, held: null });
+    expect(await runPartnerOutreach(b.orgId, { ...outbox({ ok: false, error: 'read ECONNRESET', unconfirmed: true }).opts, now: MON, partnerId: unanswered })).toEqual({ sent: 0, failed: 0, blocked: null, held: 'no_answer' });
+    expect(await steps(unanswered)).toMatchObject([{ status: 'sending', error: 'read ECONNRESET' }]);
+    expect(await withSystem((db) => partnerFailureHold(db, b.orgId, MON))).toBeNull();
+
+    // The real driver, with only the request to the email service stood in for: it times out.
+    const c = await agency('PartnersRealTimeout', ON);
+    const [viaDriver] = await add(c, [P()]) as [string];
+    Object.assign(process.env, { EMAIL_DRIVER: 'resend', RESEND_API_KEY: 're_test_key_for_vitest' });
+    resetEnvCache();
+    vi.stubGlobal('fetch', async () => { throw new DOMException('The operation was aborted due to timeout', 'TimeoutError'); });
+    try {
+      expect(await runPartnerOutreach(c.orgId, { now: MON })).toEqual({ sent: 0, failed: 0, blocked: null, held: 'no_answer' });
+      expect(await steps(viaDriver)).toMatchObject([{ step: 'intro', status: 'sending', attempts: 1, error: 'The operation was aborted due to timeout' }]);
+    } finally {
+      vi.unstubAllGlobals();
+      process.env.EMAIL_DRIVER = saved.EMAIL_DRIVER;
+      delete process.env.RESEND_API_KEY;
+      resetEnvCache();
+    }
+    for (const n of [0, 4, 11]) expect((await runPartnerOutreach(c.orgId, { ...outbox().opts, now: day(n) })).sent).toBe(0);
+  });
+
+  it('an email this app’s own guard refuses stops that partner only: it is not a refusal by the email service, and nothing holds', async () => {
+    const a = await agency('PartnersGuard', ON);
+    // Rows as they could be on file from before a city was checked when a partner is added ("Free Soil" is now refused there).
+    const soil = await add(a, [P({ city: 'Free Soil', state: 'MI' }), P({ city: 'Free Soil', state: 'MI' })]);
+    await add(a, [P(), P()]);
+    const box = outbox();
+    const told = () => count("select count(*)::int as n from public.notifications where org_id = $1 and title = 'Partner emails are not going out'", [a.orgId]);
+    // Two are refused, in a row, and the run carries on to the partners after them.
+    expect(await runPartnerOutreach(a.orgId, { ...box.opts, now: MON })).toEqual({ sent: 2, failed: 2, blocked: null, held: null });
+    expect(box.mails).toHaveLength(2); // the two refused emails were never handed to the email service
+    for (const id of soil) {
+      expect(await steps(id)).toMatchObject([{ step: 'intro', status: 'failed', attempts: 1, error: `${PARTNER_GUARD_REFUSAL} (Only a first consultation may be called free. Do not call credit repair, reports, scores or results free.)` }]);
+      expect((await events(id)).at(-1)).toEqual({ kind: 'email_failed', summary: 'Introduction email was not sent: the message would contain a claim that is not allowed (Only a first consultation may be called free. Do not call credit repair, reports, scores or results free.). The sequence stopped for this partner.' });
+    }
+    // The sequence does not hold, and the owners are not told that the email service refused anything.
+    expect(await withSystem((db) => partnerFailureHold(db, a.orgId, MON))).toBeNull();
+    expect(await told()).toBe(0);
+    await add(a, [P()]);
+    expect(await runPartnerOutreach(a.orgId, { ...box.opts, now: new Date(MON.getTime() + 3_600_000) })).toEqual({ sent: 1, failed: 0, blocked: null, held: null });
+    // With the city taken off the record and another try asked for, the email goes out without a place.
+    expect(await asUser(a.ownerId, (db) => updatePartner(db, actor(a), soil[0]!, { ...P(), city: null, state: 'MI' }))).toBe(true);
+    expect(await asUser(a.ownerId, (db) => retryPartnerStep(db, actor(a), soil[0]!))).toBe(true);
+    expect((await runPartnerOutreach(a.orgId, { ...box.opts, now: day(1), partnerId: soil[0]! })).sent).toBe(1);
+    expect(box.mails.at(-1)!.text).toContain('I am contacting you because you work as a real estate agent.');
+    expect(await steps(soil[0]!)).toMatchObject([{ step: 'intro', status: 'sent', attempts: 2, error: null }]);
+
+    // What the email service refuses still counts, and a guard refusal between two of those neither adds to them nor
+    // breaks the run of them. (Added one at a time, so the order they are tried in is the order they were added in.)
+    const b = await agency('PartnersGuardMixed', ON);
+    const [first] = await add(b, [P()]) as [string];
+    const [between] = await add(b, [P({ city: 'Free Soil', state: 'MI' })]) as [string];
+    const [second] = await add(b, [P()]) as [string];
+    const [untried] = await add(b, [P()]) as [string];
+    const bad = outbox({ ok: false, error: 'domain not verified' });
+    expect(await runPartnerOutreach(b.orgId, { ...bad.opts, now: MON })).toEqual({ sent: 0, failed: 3, blocked: null, held: 'failures' });
+    expect(bad.mails).toHaveLength(2);
+    expect(await steps(between)).toMatchObject([{ status: 'failed', error: expect.stringContaining(PARTNER_GUARD_REFUSAL) }]);
+    for (const id of [first, second]) expect(await steps(id)).toMatchObject([{ status: 'failed', error: 'domain not verified' }]);
+    expect(await steps(untried)).toEqual([]);
+    // The hold and the notification give the reason the email service gave, not the guard's.
+    expect(await withSystem((db) => partnerFailureHold(db, b.orgId, MON))).toBe('domain not verified');
+    expect(await withSystem((db) => db.rows<{ body: string }>("select body from public.notifications where org_id = $1 and title = 'Partner emails are not going out'", [b.orgId])))
+      .toEqual([{ body: 'The email service refused 2 partner emails in a row (domain not verified). Nothing more is tried for 24 hours, or until you press “Try again” on one of those partners.' }]);
+  });
+
   it('the claim is on record before the email is handed over, and no transaction is open during the send', async () => {
     const a = await agency('PartnersClaimFirst', ON);
     const [id] = await add(a, [P()]) as [string];
@@ -513,6 +651,31 @@ describe('adding partners', () => {
     expect((await add(a, PARTNER_CATEGORIES.map((category) => P({ category })))).length).toBe(PARTNER_CATEGORIES.length);
   });
 
+  it('one mailbox is one partner: another spelling of an address already listed is skipped, so nobody gets the sequence twice', async () => {
+    const a = await agency('PartnersMailbox', ON);
+    const u = uniq();
+    // Five spellings of one Gmail mailbox in one list: one partner, four counted as already on the list.
+    const spellings = [`sam${u}@gmail.com`, `sam${u}+1@gmail.com`, `sam${u}+2@gmail.com`, `sa.m${u}@gmail.com`, `sam${u}@googlemail.com`];
+    expect(await asUser(a.ownerId, (db) => addPartners(db, actor(a), spellings.map((email) => P({ email })), 'Imported'))).toMatchObject({ added: 1, existing: 4 });
+    // Later, one at a time; and a "+tag" on any domain. Dots only mean nothing at Gmail.
+    expect(await asUser(a.ownerId, (db) => addPartners(db, actor(a), [P({ email: `sam${u}+later@gmail.com` })], 'Added by hand.'))).toEqual({ added: 0, existing: 1, ids: [] });
+    expect(await asUser(a.ownerId, (db) => addPartners(db, actor(a), [P({ email: `dana@hill-${u}.example` }), P({ email: `dana+spring@hill-${u}.example` }), P({ email: `d.ana@hill-${u}.example` })], 'Imported')))
+      .toMatchObject({ added: 2, existing: 1 });
+    expect(await count('select count(*)::int as n from public.partners where org_id = $1', [a.orgId])).toBe(3);
+    // The key is in the database, whatever inserts the row.
+    await expect(withSystem((db) => db.run("insert into public.partners (org_id, business_name, category, email, attested_by) values ($1, 'X Co', 'other', $2, $3)", [a.orgId, `sam${u}+direct@gmail.com`, a.ownerId])))
+      .rejects.toThrow(/partners_org_email_norm_idx/);
+    expect(await withSystem((db) => db.rows<{ indexname: string; indexdef: string }>("select indexname, indexdef from pg_indexes where schemaname = 'public' and tablename = 'partners' and indexdef like 'CREATE UNIQUE%' order by indexname")))
+      .toEqual([{ indexname: 'partners_org_email_norm_idx', indexdef: 'CREATE UNIQUE INDEX partners_org_email_norm_idx ON public.partners USING btree (org_id, app.email_norm(email))' }, { indexname: 'partners_pkey', indexdef: 'CREATE UNIQUE INDEX partners_pkey ON public.partners USING btree (id)' }]);
+    // So that mailbox gets one introduction, not five.
+    const box = outbox();
+    expect((await runPartnerOutreach(a.orgId, { ...box.opts, now: MON })).sent).toBe(3);
+    expect(box.mails.filter((m) => m.to.includes(u) && /gmail\.com$|googlemail\.com$/.test(m.to))).toHaveLength(1);
+    // Another agency may have the same mailbox on its own list: the key is per agency.
+    const b = await agency('PartnersMailboxB');
+    expect(await add(b, [P({ email: `sam${u}+b@gmail.com` })])).toHaveLength(1);
+  });
+
   it('only staff of the agency can add, nobody can attest for someone else, and a row cannot start part-way through', async () => {
     const a = await agency('PartnersGuard');
     const portal = await addPortalClient(a.orgId);
@@ -598,7 +761,11 @@ describe('nothing unattended goes out until the operator has approved the worksp
     const a = await agency('PartnersOperator', ON, false);
     await add(a, Array.from({ length: NEW_WORKSPACE_DAILY_EMAILS + 4 }, () => P()));
     const box = outbox();
-    expect(approveByCommand(a.slug)).toContain(`Approved "${a.name}" (${a.slug}) for automatic outreach under that name.`);
+    const printed = approveByCommand(a.slug);
+    expect(printed).toContain(`Approved "${a.name}" (${a.slug}) for automatic outreach under that name.`);
+    // Before it approves, the command shows what the emails of this workspace carry besides its name.
+    expect(printed).toContain(`"${a.name}" (${a.slug}) has saved, for its automatic emails:\n  Mailing address: "${ADDRESS}"\n  Reply address:   "${REPLY}"\n`);
+    expect(printed.indexOf('Mailing address:')).toBeLessThan(printed.indexOf('Approved "'));
     const given = (await approval(a.orgId))!;
     expect(given.name).toBe(a.name);
     expect(Date.now() - new Date(given.at!).getTime()).toBeLessThan(60_000);
@@ -623,7 +790,12 @@ describe('nothing unattended goes out until the operator has approved the worksp
     expect((await runPartnerOutreach(a.orgId, { ...box.opts, now: later })).sent).toBe(1); // back under the approved name
 
     // Withdrawn: nothing more is sent. An unknown workspace changes nothing and says so.
-    expect(approveByCommand(a.slug, '--revoke')).toContain(`Approval withdrawn for "${a.name}"`);
+    const withdrawn = approveByCommand(a.slug, '--revoke');
+    expect(withdrawn).toContain(`Approval withdrawn for "${a.name}"`);
+    expect(withdrawn).not.toContain('Mailing address');
+    // A workspace that saved neither address is shown as such, with whatever text it did save printed as it is.
+    const bare = await agency('PartnersOperatorBare', { lead_mailing_address: 'URGENT: sign in at https://secure-escrow-verify.example/login' }, false);
+    expect(approveByCommand(bare.slug)).toContain('  Mailing address: "URGENT: sign in at https://secure-escrow-verify.example/login"\n  Reply address:   none saved\n');
     expect(await approval(a.orgId)).toEqual({ at: null, name: null });
     await add(a, [P()]);
     expect((await runPartnerOutreach(a.orgId, { ...box.opts, now: later })).blocked).toBe('not_approved');
@@ -658,33 +830,89 @@ describe('nothing unattended goes out until the operator has approved the worksp
   it('one opt-out list for the whole service: an address that stopped these emails is not written to through another workspace, or under a +tag', async () => {
     const a = await agency('PartnersListA', ON);
     const b = await agency('PartnersListB', ON);
+    const c = await agency('PartnersListC', ON);
     const u = uniq();
     const [pa, ga] = await add(a, [P({ email: `dana@hill-${u}.example` }), P({ email: `dana.hill.${u}@gmail.com` })]) as [string, string];
-    const [same, tagged, gmail, other] = await add(b, [
-      P({ email: `dana@hill-${u}.example` }), P({ email: `dana+spring@hill-${u}.example` }), P({ email: `danahill${u}+work@googlemail.com` }), P({ email: `sam@hill-${u}.example` }),
-    ]) as [string, string, string, string];
+    const [same, gmail, other] = await add(b, [P({ email: `dana@hill-${u}.example` }), P({ email: `danahill${u}+work@googlemail.com` }), P({ email: `sam@hill-${u}.example` })]) as [string, string, string];
+    const [tagged] = await add(c, [P({ email: `dana+spring@hill-${u}.example` })]) as [string];
     const box = outbox();
     expect((await runPartnerOutreach(a.orgId, { ...box.opts, now: MON })).sent).toBe(2);
     await optOutPartner(partnerOptOutToken(pa));
     await optOutPartner(partnerOptOutToken(ga));
 
-    // The second workspace has all three on its list, as new partners. Only the address that never opted out is emailed.
+    // Two other workspaces have those mailboxes on their lists, as new partners. Only the address that never opted out is emailed.
     expect(await runPartnerOutreach(b.orgId, { ...box.opts, now: MON })).toEqual({ sent: 1, failed: 0, blocked: null, held: null });
+    expect(await runPartnerOutreach(c.orgId, { ...box.opts, now: MON })).toEqual({ sent: 0, failed: 0, blocked: null, held: null });
     expect(box.mails.slice(2).map((m) => m.to)).toEqual([`sam@hill-${u}.example`]);
     for (const id of [same, tagged, gmail]) {
       expect(await steps(id)).toEqual([]);
-      expect(await partner(id)).toMatchObject({ status: 'opted_out', opted_out: true });
-      expect((await events(id)).at(-1)).toEqual({ kind: 'opted_out', summary: 'This address has asked not to receive partner emails sent through this service. No email is sent to it.' });
+      // Paused with the reason, not stamped as opted out: that stamp can never be lifted, and the stop is on another workspace's record.
+      expect(await partner(id)).toMatchObject({ status: 'new', paused: true, opted_out: false });
+      expect((await events(id)).at(-1)).toEqual({ kind: 'paused', summary: 'Paused automatically: this address opted out of partner emails sent through this service. No email is sent to it.' });
     }
     expect(await partner(other)).toMatchObject({ status: 'in_sequence', opted_out: false });
     // Whatever day it is, and however often the job runs, they stay off.
-    for (const n of [1, 4, 11]) await runPartnerOutreach(b.orgId, { ...box.opts, now: day(n) });
+    for (const n of [1, 4, 11]) for (const org of [b, c]) await runPartnerOutreach(org.orgId, { ...box.opts, now: day(n) });
+    // Resumed by a person, it is paused again by the next run, and one entry is written each time, not one per run.
+    expect(await asUser(b.ownerId, (db) => resumePartner(db, actor(b), same))).toBe(true);
+    for (const n of [14, 15]) await runPartnerOutreach(b.orgId, { ...box.opts, now: day(n) }); // a Monday and a Tuesday
+    expect(await partner(same)).toMatchObject({ status: 'new', paused: true, opted_out: false });
+    expect((await events(same)).filter((e) => e.kind === 'paused')).toHaveLength(2);
     expect(box.mails.filter((m) => /dana|danahill/.test(m.to))).toHaveLength(2); // the two introductions the first workspace sent before the opt-out
     // The normalisation the list is read by: case, a "+tag", and for Gmail the dots it ignores.
     const norm = (addr: string) => withSystem((db) => db.row<{ n: string }>('select app.email_norm($1) as n', [addr])).then((r) => r!.n);
     expect(await norm(' Dana+Spring@Hill.Example ')).toBe('dana@hill.example');
     expect(await norm('d.a.n.a+x@googlemail.com')).toBe('dana@gmail.com');
     expect(await norm('dana.hill@outlook.example')).toBe('dana.hill@outlook.example'); // dots matter everywhere else
+  });
+
+  it('“Asked to stop” recorded by the staff of one workspace stops that workspace’s emails and nobody else’s', async () => {
+    const victim = await agency('PartnersVictim', ON);
+    const rival = await agency('PartnersRival', null, false); // signed up a minute ago: not approved, has never sent anything
+    const specialist = await addMember(rival.orgId, 'specialist');
+    const u = uniq();
+    const ids = await add(victim, [P({ email: `sam@oak-${u}.example` }), P({ email: `dana@hill-${u}.example` }), P({ email: `lee.realtor.${u}@gmail.com` })]) as string[];
+    // The rival lists the same mailboxes, in other spellings too, and its lowest staff role presses "Asked to stop" on each.
+    const theirs = (await asUser(specialist.id, (db) => addPartners(db, { orgId: rival.orgId, userId: specialist.id }, [
+      P({ email: `sam@oak-${u}.example` }), P({ email: `dana+x@hill-${u}.example` }), P({ email: `leerealtor${u}@googlemail.com` }),
+    ], 'Added by hand.'))).ids as string[];
+    for (const id of theirs) expect(await asUser(specialist.id, (db) => partnerAskedToStop(db, { orgId: rival.orgId, userId: specialist.id }, id))).toBe(true);
+    // A signed-in person cannot write the kind of entry that counts for every workspace: the timeline takes entries under their own name only.
+    await expect(asUser(specialist.id, (db) => db.run(
+      "insert into public.partner_events (org_id, partner_id, actor_id, kind, summary) values ($1, $2, null, 'opted_out', 'x')", [rival.orgId, theirs[0]]))).rejects.toThrow(/row-level security/);
+
+    const box = outbox();
+    expect(await runPartnerOutreach(victim.orgId, { ...box.opts, now: MON })).toEqual({ sent: 3, failed: 0, blocked: null, held: null });
+    for (const id of ids) {
+      expect(await partner(id)).toMatchObject({ status: 'in_sequence', paused: false, opted_out: false });
+      expect((await events(id)).map((e) => e.kind)).toEqual(['added', 'email_sent']);
+    }
+    // In its own workspace the stop holds as before.
+    for (const id of theirs) expect(await partner(id)).toMatchObject({ status: 'opted_out', opted_out: true });
+  });
+
+  it('where a partner stands in the sequence is written by the scheduled job: a signed-in person cannot put a bounced or finished address back in line', async () => {
+    const a = await agency('PartnersLine', ON);
+    const [bounced, finished, fresh] = await add(a, [P(), P(), P()]) as [string, string, string];
+    await asUser(a.ownerId, (db) => markPartner(db, actor(a), bounced, 'bounced'));
+    await withSystem((db) => db.run("update public.partners set status = 'finished' where id = $1", [finished]));
+    const set = (id: string, status: string) => asUser(a.ownerId, (db) => db.run('update public.partners set status = $2 where id = $1', [id, status]));
+    for (const status of ['new', 'in_sequence']) {
+      await expect(set(bounced, status), status).rejects.toThrow(/set by the scheduled job only/);
+      await expect(set(finished, status), status).rejects.toThrow(/set by the scheduled job only/);
+    }
+    await expect(set(fresh, 'finished')).rejects.toThrow(/set by the scheduled job only/);
+    await expect(set(fresh, 'in_sequence')).rejects.toThrow(/set by the scheduled job only/);
+    // What a person does record still saves, and so does everything that leaves the status alone.
+    expect(await asUser(a.ownerId, (db) => markPartner(db, actor(a), finished, 'replied'))).toBe(true);
+    expect(await asUser(a.ownerId, (db) => pausePartner(db, actor(a), fresh))).toBe(true);
+    expect(await asUser(a.ownerId, (db) => resumePartner(db, actor(a), fresh))).toBe(true);
+    expect(await asUser(a.ownerId, (db) => updatePartner(db, actor(a), fresh, { ...P(), businessName: 'Renamed Co' }))).toBe(true);
+    const box = outbox();
+    expect((await runPartnerOutreach(a.orgId, { ...box.opts, now: MON })).sent).toBe(1);
+    expect(box.mails).toHaveLength(1);
+    expect(await partner(fresh)).toMatchObject({ status: 'in_sequence' });
+    expect(await partner(bounced)).toMatchObject({ status: 'bounced' });
   });
 
   it('opening the opt-out link changes nothing; the button on that page, or the mail program’s one-click request, is the opt-out', async () => {
@@ -781,12 +1009,20 @@ describe('nothing unattended goes out until the operator has approved the worksp
     const third = ids.find((id) => ![complained.id, first.id, second.id].includes(id))!;
     await asUser(a.ownerId, (db) => markPartner(db, actor(a), third, 'bounced'));
     expect(PARTNER_BOUNCE_MIN).toBe(3);
-    expect(await asUser(a.ownerId, (db) => partnerBounceHealth(db, a.orgId, APPROVED))).toMatchObject({ bounced: 3, hold: true });
+    // Counted from the approval: the twelve emails sent since then, whenever that was, and the three bounces.
+    expect(await asUser(a.ownerId, (db) => partnerBounceHealth(db, a.orgId, APPROVED))).toEqual({ sent: 12, bounced: 3, hold: true });
     const sentSoFar = mails.length;
     for (const n of [4, 5, 11]) {
       const r = await runPartnerOutreach(a.orgId, { live: true, send, now: day(n) });
       expect(r.sent).toBe(0);
       if (isBusinessDay(day(n).toISOString().slice(0, 10))) expect(r.held).toBe('bounces');
+    }
+    expect(mails).toHaveLength(sentSoFar);
+    // Time does not lift it. The same bounces a month and a year later hold the sequence all the same.
+    for (const age of ['31 days', '1 year']) {
+      await withSystem((db) => db.run('update public.partner_events set created_at = created_at - $2::interval where org_id = $1 and kind = \'bounced\'', [a.orgId, age]));
+      expect(await asUser(a.ownerId, (db) => partnerBounceHealth(db, a.orgId, APPROVED)), age).toEqual({ sent: 12, bounced: 3, hold: true });
+      expect(await runPartnerOutreach(a.orgId, { live: true, send, now: day(11) }), age).toEqual({ sent: 0, failed: 0, blocked: null, held: 'bounces' });
     }
     expect(mails).toHaveLength(sentSoFar);
     // It stays held until the operator has looked at the list and approved the workspace again, which restarts the count.
@@ -811,7 +1047,7 @@ describe('nothing unattended goes out until the operator has approved the worksp
       expect(await count("select count(*)::int as n from public.ai_credit_ledger where org_id = $1 and reason <> 'grant'", [a.orgId])).toBe(0);
       const vars = { contactName: 'Dana Whitfield', category: 'real_estate_agent' as const, city: 'Austin', state: 'TX', orgName: a.name, address: ADDRESS, optOutUrl: `http://localhost:3000/unsubscribe/partner/${partnerOptOutToken(id)}`, siteUrl: null };
       expect(box.mails.map((m) => m.text)).toEqual((['intro', 'followup', 'final'] as const).map((step) => partnerEmail(step, 'en', vars).text));
-      expect(await steps(id)).toMatchObject([{ step: 'intro', ai_used: false }, { step: 'followup', ai_used: false }, { step: 'final', ai_used: false }]);
+      expect(await steps(id)).toMatchObject([{ step: 'intro', status: 'sent' }, { step: 'followup', status: 'sent' }, { step: 'final', status: 'sent' }]);
       expect((await events(id)).filter((e) => e.kind === 'email_sent').map((e) => e.summary)).toEqual(['Introduction email sent automatically', 'Follow-up email sent automatically', 'Last note email sent automatically']);
     } finally {
       vi.unstubAllGlobals();
@@ -989,7 +1225,9 @@ describe('lead follow-up by text: only with a text consent from the enquiry form
     // Anchorage, so those two wait, while a number from the 48 states could be texted.
     const b = await agency('LeadTextsZones', TEXTS_ON());
     const line = () => String(Math.floor(Math.random() * 10_000)).padStart(4, '0');
-    const [hawaii, alaska, mainland] = [`+1808${2 + Math.floor(Math.random() * 7)}${line().slice(0, 2)}${line()}`, `+1907${2 + Math.floor(Math.random() * 7)}${line().slice(0, 2)}${line()}`, phone()];
+    // (Drawn again when the exchange comes out as a service code such as 411, which is not a number that can exist.)
+    const inAreaCode = (code: string): string => { const n = `+1${code}${2 + Math.floor(Math.random() * 7)}${line().slice(0, 2)}${line()}`; return toUsE164(n) ? n : inAreaCode(code); };
+    const [hawaii, alaska, mainland] = [inAreaCode('808'), inAreaCode('907'), phone()];
     expect([usAreaCodeState(hawaii), usAreaCodeState(alaska)]).toEqual(['HI', 'AK']);
     for (const n of [hawaii, alaska, mainland]) expect((await enquire(b, { phone: n, smsConsent: true })).r).toEqual({ ok: true });
     expect(await runLeadTexts(b.orgId, { now: new Date(`${tomorrow}T17:00:00Z`) })).toEqual({ sent: 1, failed: 0, waiting: 2, blocked: null });
@@ -1060,6 +1298,24 @@ describe('lead follow-up by text: only with a text consent from the enquiry form
       .toEqual(['Ticked the text message box on the enquiry form, but another enquiry already has a text consent for this number. No second consent was recorded and no text is sent for this one.']);
   });
 
+  it('the form sent many times at the same moment with one number records one consent and sends one text', async () => {
+    const a = await agency('LeadTextsRace', TEXTS_ON());
+    const number = phone();
+    // Eight submissions at once: the same number, different names, email addresses and IP addresses.
+    const all = await Promise.all(Array.from({ length: 8 }, (_, i) => enquire(a, { phone: number, smsConsent: true, fullName: `Pat ${i}` })));
+    expect(all.map((l) => l.r)).toEqual(Array.from({ length: 8 }, () => ({ ok: true }))); // every enquiry is saved
+    expect(await count("select count(*)::int as n from public.sms_consents where org_id = $1 and phone = $2 and revoked_at is null", [a.orgId, number])).toBe(1);
+    expect(await count("select count(*)::int as n from public.sms_consents where org_id = $1 and phone = $2", [a.orgId, number])).toBe(1);
+    // The other seven are told on their timeline why they have no consent.
+    expect(await count("select count(*)::int as n from public.client_events where org_id = $1 and kind = 'sms_consent' and summary like 'Ticked the text message box on the enquiry form, but another enquiry already has a text consent%'", [a.orgId])).toBe(7);
+    expect(await runLeadTexts(a.orgId, { now: NOON })).toEqual({ sent: 1, failed: 0, waiting: 0, blocked: null });
+    expect(textsTo(number)).toHaveLength(1);
+    // And the one follow-up, three days later.
+    for (const l of all) await age(a, l.id, 3);
+    expect((await runLeadTexts(a.orgId, { now: NOON })).sent).toBe(1);
+    expect(textsTo(number)).toHaveLength(2);
+  });
+
   it('two runs at the same moment send one text, and another agency is unaffected', async () => {
     const a = await agency('LeadTextsA', TEXTS_ON());
     const b = await agency('LeadTextsB', LEADS_ON());
@@ -1080,16 +1336,30 @@ describe('lead follow-up by text: only with a text consent from the enquiry form
     const a = await agency('LeadTextsCap', TEXTS_ON());
     const numbers = Array.from({ length: LEAD_TEXT_DAILY_CAP + 3 }, () => phone());
     for (const n of numbers) expect((await enquire(a, { phone: n, smsConsent: true })).r).toEqual({ ok: true });
-    const burst = await Promise.all([runLeadTexts(a.orgId, { now: NOON }), runLeadTexts(a.orgId, { now: NOON }), runLeadTexts(a.orgId, { now: NOON })]);
+    // A text service that accepts every text and gives each an id, as Twilio does.
+    const handed: { to: string; ref: string }[] = [];
+    const send = async (m: Sms): Promise<SmsResult> => { const ref = `SM${uniq()}${uniq()}`; handed.push({ to: m.to, ref }); return { ok: true, provider: 'twilio', providerRef: ref }; };
+    const texted = (n: string) => handed.filter((h) => h.to === n).length;
+    const run = () => runLeadTexts(a.orgId, { now: NOON, send });
+    const burst = await Promise.all([run(), run(), run()]);
     expect(sum(burst)).toBe(LEAD_TEXT_DAILY_CAP);
     expect(burst.some((r) => r.held === 'daily_cap')).toBe(true);
-    expect(await runLeadTexts(a.orgId, { now: NOON })).toMatchObject({ sent: 0, failed: 0, held: 'daily_cap' });
-    expect(numbers.filter((n) => textsTo(n).length === 1)).toHaveLength(LEAD_TEXT_DAILY_CAP);
-    expect(numbers.some((n) => textsTo(n).length > 1)).toBe(false); // nobody was texted twice
+    expect(await run()).toMatchObject({ sent: 0, failed: 0, held: 'daily_cap' });
+    expect(numbers.filter((n) => texted(n) === 1)).toHaveLength(LEAD_TEXT_DAILY_CAP);
+    expect(numbers.some((n) => texted(n) > 1)).toBe(false); // nobody was texted twice
+    // The carrier then reports ten of them undelivered (dead numbers, landlines). They were handed to the text service
+    // all the same, so they still count: a form fed with numbers that take no texts reaches the limit like any other.
+    for (const h of handed.slice(0, 10)) expect(await recordSmsStatus(h.ref, 'undelivered', '30006')).toEqual({ kind: 'status', matched: 1 });
+    expect(await count("select count(*)::int as n from public.lead_outreach where org_id = $1 and status = 'failed'", [a.orgId])).toBe(10);
+    expect(await run()).toMatchObject({ sent: 0, failed: 0, held: 'daily_cap' });
+    // So does a text the text service refused outright.
+    await withSystem((db) => db.run("update public.lead_outreach set status = 'failed', error = 'The text service refused the message' where id in (select id from public.lead_outreach where org_id = $1 and status = 'sent' limit 5)", [a.orgId]));
+    expect(await run()).toMatchObject({ sent: 0, failed: 0, held: 'daily_cap' });
+    expect(handed).toHaveLength(LEAD_TEXT_DAILY_CAP);
     // The three that were left out go out once the earlier ones are more than a day old.
     await withSystem((db) => db.run("update public.lead_outreach set created_at = created_at - interval '25 hours' where org_id = $1", [a.orgId]));
-    expect(await runLeadTexts(a.orgId, { now: NOON })).toEqual({ sent: 3, failed: 0, waiting: 0, blocked: null });
-    expect(numbers.every((n) => textsTo(n).length === 1)).toBe(true);
+    expect(await run()).toEqual({ sent: 3, failed: 0, waiting: 0, blocked: null });
+    expect(numbers.every((n) => texted(n) === 1)).toBe(true);
   });
 
   it('the whole service sends a bounded number of lead texts in any 24 hours, across every workspace', async () => {
@@ -1097,7 +1367,8 @@ describe('lead follow-up by text: only with a text consent from the enquiry form
     const b = await agency('LeadTextsPlatformB', TEXTS_ON());
     const [a1, a2, b1, b2] = [phone(), phone(), phone(), phone()];
     for (const [who, n] of [[a, a1], [a, a2], [b, b1], [b, b2]] as const) await enquire(who, { phone: n, smsConsent: true });
-    const already = await count("select count(*)::int as n from public.lead_outreach where step in ('text_welcome', 'text_followup') and status in ('sending', 'sent') and created_at > now() - interval '24 hours'", []);
+    // What every workspace in this database has claimed in the last 24 hours, whatever became of each text, plus three more.
+    const already = await count("select count(*)::int as n from public.lead_outreach where step in ('text_welcome', 'text_followup') and created_at > now() - interval '24 hours'", []);
     process.env.OUTREACH_PLATFORM_DAILY_TEXTS = String(already + 3);
     resetEnvCache();
     try {
@@ -1261,14 +1532,15 @@ describe('the scheduled job sends everything with no approval step', () => {
     const second = await runScheduledJobs({ onlyOrgIds: [a.orgId], now: when });
     expect(second).toMatchObject({ failures: 0, leadEmails: 0, leadTexts: 0, partnerEmails: 0 });
     expect(calls).toHaveLength(3);
-    // The same switches in a workspace the operator has not approved: the lead still gets the email they asked for
-    // (a reply to their own enquiry), and no text and no partner email leaves.
+    // The same switches in a workspace the operator has not approved: nothing leaves, not the lead email either. The
+    // form is public and takes any address, so the name of a workspace nobody has looked at reaches no inbox.
     const b = await agency('JobsNotApproved', { ...ON, lead_followup_enabled: true, lead_followup_since: new Date(Date.now() - 60_000).toISOString(), lead_text_followup: true }, false);
     await add(b, [P()]);
     const email2 = `lead-${uniq()}@example.test`;
     expect(await submitLead(b.slug, { fullName: 'Pat Lead', email: email2, phone: `+1512${2 + Math.floor(Math.random() * 7)}55${String(Math.floor(Math.random() * 10_000)).padStart(4, '0')}`, language: 'en', consent: true, smsConsent: true }, { ip: testIp(), defer: () => undefined })).toEqual({ ok: true });
-    expect(await runScheduledJobs({ onlyOrgIds: [b.orgId], now: when })).toMatchObject({ failures: 0, leadEmails: 1, leadTexts: 0, partnerEmails: 0 });
-    expect(calls).toHaveLength(4);
+    expect(await runScheduledJobs({ onlyOrgIds: [b.orgId], now: when })).toMatchObject({ failures: 0, leadEmails: 0, leadTexts: 0, partnerEmails: 0 });
+    expect(calls).toHaveLength(3);
+    expect(calls.some((c) => c.body.includes(email2))).toBe(false);
     expect(await count('select count(*)::int as n from public.sms_consents where org_id = $1', [b.orgId])).toBe(0); // the box was never offered, so no consent was recorded
   });
 });

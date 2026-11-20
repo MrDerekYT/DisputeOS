@@ -66,7 +66,7 @@ export default async function LettersPage({ searchParams }: { searchParams: Prom
         <div className="space-y-10">
           <section>
             <h2 className="mb-1 text-lg font-semibold">Standard templates</h2>
-            <p className="mb-4 max-w-3xl text-sm text-muted">Written in English. Starting points that cite the statute behind each request. They are not legal advice and promise no result — have counsel review them for your business and state.</p>
+            <p className="mb-4 max-w-3xl text-sm text-muted">Written in English. Starting points: a letter cites a statute only where its request rests on one, and the letters to a creditor cite none. They are not legal advice and promise no result — have counsel review them for your business and state.</p>
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
               {TEMPLATES.map((t) => (
                 <article key={t.key} className="panel flex flex-col p-5">

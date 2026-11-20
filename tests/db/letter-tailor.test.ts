@@ -57,7 +57,7 @@ const fake = (fn: (masked: string) => string | Error = (m) => m) => {
 const LEAD_INS = VOICE_LINES.filter((l) => /details|specifics/.test(l));
 const CONTACTS = VOICE_LINES.filter((l) => /address above/.test(l));
 const THANKS = VOICE_LINES.filter((l) => /^(Thank you|I appreciate)/.test(l));
-const [NEW_LEAD_IN, NEW_CONTACT, NEW_THANKS] = ['I set out the particulars here.', 'I can be reached by mail at the address above.', 'Many thanks for reading this.'];
+const [NEW_LEAD_IN, NEW_CONTACT, NEW_THANKS] = ['The particulars follow.', 'You can write to me at the address above.', 'Many thanks for reading this.'];
 /** Like for like, as the checks require: each sentence it is shown becomes one other sentence of plain courtesy, on the same line. */
 const reword = (m: string) => [...LEAD_INS.map((l) => [l, NEW_LEAD_IN] as const), ...CONTACTS.map((l) => [l, NEW_CONTACT] as const), ...THANKS.map((l) => [l, NEW_THANKS] as const)]
   .reduce((t, [from, to]) => t.replace(from, to), m).replace('To whom it may concern:', 'Dear Sir or Madam:').replace('Sincerely,', 'Respectfully,');
@@ -156,6 +156,12 @@ describe('the letter brief, from real rows', () => {
 describe('AI tailoring is paid for once when it is accepted by the checks, and never when it is discarded', () => {
   const ask = (provider: AiProvider, letterId = jordanLetter) => asUser(owner.userId, (db) => loadTailorSubject(db, letterId)).then((s) =>
     suggestForLetter({ orgId: A.orgId, userId: owner.userId, letterId, version: s!.version, body: s!.body, protectedTerms: s!.protectedTerms, seed: s!.seed, specificity: s!.specificity }, tx(owner.userId), provider));
+  /** A draft letter for Jordan about an account of its own, so no test depends on how many disputes one account may have open. */
+  const letterOnNewAccount = async (creditor: string, last4: string) => {
+    const acct = await account(jordan, 'experian', { creditor_name: creditor, account_last4: last4 }, '2026-10-30');
+    const d = await asUser(owner.userId, (db) => createDispute(db, owner, { clientId: jordan, tradelineId: acct, category: 'incorrect_balance', reason: REASON, fields: ['Balance'] }));
+    return asUser(owner.userId, (db) => createLetter(db, owner, { clientId: jordan, disputeId: d }));
+  };
 
   it('with no credits the model is never called and nothing is written', async () => {
     const ai = fake(reword);
@@ -211,19 +217,74 @@ describe('AI tailoring is paid for once when it is accepted by the checks, and n
     expect(/<source>\n([\s\S]*)\n<\/source>/.exec(ai.calls[0]!.user)![1]!.replace(/\[\[LOCKED_\d+\]\]/g, '')).not.toMatch(/\d|\$|§/);
   });
 
-  it('a suggestion kept from earlier is offered again only while it still passes the checks', async () => {
-    const d = await asUser(owner.userId, (db) => createDispute(db, owner, { clientId: jordan, tradelineId: jordanAccount, category: 'incorrect_balance', reason: REASON, fields: ['Balance'] }));
-    const l = await asUser(owner.userId, (db) => createLetter(db, owner, { clientId: jordan, disputeId: d }));
-    // One stored for this version that changes an amount, as a suggestion made under looser rules could have.
-    await withSystem(async (db) => db.run("insert into public.letter_suggestions (letter_id, version, org_id, body, provider) values ($1, 1, $2, $3, 'earlier')", [l, A.orgId, (await body(l)).replace('balance of $900.00', 'balance of $90.00')]));
-    const ai = fake(reword);
-    const balance = await getBalance(A.orgId);
-    const r = await ask(ai.provider, l);
-    expect(r).toMatchObject({ ok: false, ai: { status: 'not_called', cost: 0 } });
-    expect(!r.ok && r.message).toMatch(/no longer passes the wording checks[\s\S]*No AI credits were used/);
-    expect(ai.calls).toEqual([]);
-    expect(await getBalance(A.orgId)).toBe(balance);
+  it('two requests for the same version that overlap are charged once, and both are shown the suggestion that was kept', async () => {
+    const l = await letterOnNewAccount('NORTH SHORE BANK', '6677');
+    await grant(A.orgId, 10);
+    const before = await getBalance(A.orgId);
+    // Neither request has a result before both have reached the model: the stand-in answers only once two are waiting.
+    let waiting = 0;
+    let release = () => {};
+    const bothWaiting = new Promise<void>((resolve) => { release = resolve; });
+    const answered: string[] = [];
+    const slow: AiProvider = {
+      name: 'fake',
+      async complete(req) {
+        const signOff = ['Respectfully,', 'Cordially,'][waiting]!;
+        if (++waiting === 2) release();
+        await bothWaiting;
+        answered.push(signOff);
+        return /<source>\n([\s\S]*)\n<\/source>/.exec(req.user)![1]!.replace('Sincerely,', signOff);
+      },
+    };
+    const [a, b] = await Promise.all([ask(slow, l), ask(slow, l)]);
+    expect(answered.sort()).toEqual(['Cordially,', 'Respectfully,']); // both were worded, each differently
+    expect([a.ok, b.ok]).toEqual([true, true]);
+    // One of them pays; the other finds a suggestion already kept for the version and is given its credits back.
+    expect([a, b].map((r) => (r.ok ? r.cost : null)).sort()).toEqual([0, AI_COSTS.letter_suggestion]);
+    expect(await getBalance(A.orgId)).toBe(before - AI_COSTS.letter_suggestion);
+    const kept = (await asUser(owner.userId, (db) => storedSuggestion(db, l, 1)))!;
+    expect(kept.body).toMatch(/\n(Respectfully|Cordially),\n/);
+    for (const r of [a, b]) expect(r.ok && r.text).toBe(kept.body); // what each person compares is the one that can be accepted later
+    expect(await withSystem((db) => db.rows('select count(*)::int as n from public.letter_suggestions where letter_id = $1', [l]))).toEqual([{ n: 1 }]);
+    // On the ledger: two charges and one refund. The refund carries no reference, which the ledger allows.
+    const rows = await withSystem((db) => db.rows<{ reason: string; delta: number; feature: string | null; ref_id: number | null; note: string | null; settled: boolean }>(
+      'select reason, delta, feature, ref_id, note, settled_at is not null as settled from public.ai_credit_ledger where org_id = $1 order by id desc limit 3', [A.orgId]));
+    expect(rows.reverse()).toEqual([
+      { reason: 'use', delta: -AI_COSTS.letter_suggestion, feature: 'letter_suggestion', ref_id: null, note: null, settled: true },
+      { reason: 'use', delta: -AI_COSTS.letter_suggestion, feature: 'letter_suggestion', ref_id: null, note: null, settled: true },
+      { reason: 'refund', delta: AI_COSTS.letter_suggestion, feature: 'letter_suggestion', ref_id: null, note: 'This letter version already had a suggestion', settled: false },
+    ]);
+    // Asking again is free and does not reach the model.
+    const again = fake(reword);
+    expect(await ask(again.provider, l)).toEqual({ ok: true, text: kept.body, provider: 'fake', cost: 0 });
+    expect(again.calls).toEqual([]);
+    expect(await getBalance(A.orgId)).toBe(before - AI_COSTS.letter_suggestion);
     await asUser(owner.userId, (db) => setLetterStatus(db, owner, l, 'void'));
+  });
+
+  it('a suggestion kept from earlier is offered again only while it still passes the checks', async () => {
+    const v = voiceFor(styleSeed(jordan));
+    const closing = [v.contact, v.thanks].filter(Boolean).join(' ');
+    // Stored for the version under looser rules: one changes an amount, the other says something nobody recorded in
+    // words that were all on the courtesy list when it was made.
+    const earlier: [string, string, (text: string) => string][] = [
+      ['LAKESIDE FINANCE', '5521', (text) => text.replace('balance of $900.00', 'balance of $90.00')],
+      ['RIVERBEND CREDIT', '5522', (text) => text.replace(closing, 'This is mine. I reached out to you by mail.')],
+    ];
+    for (const [creditor, last4, change] of earlier) {
+      const l = await letterOnNewAccount(creditor, last4);
+      const stored = change(await body(l));
+      expect(stored, creditor).not.toBe(await body(l));
+      await withSystem((db) => db.run("insert into public.letter_suggestions (letter_id, version, org_id, body, provider) values ($1, 1, $2, $3, 'earlier')", [l, A.orgId, stored]));
+      const ai = fake(reword);
+      const balance = await getBalance(A.orgId);
+      const r = await ask(ai.provider, l);
+      expect(r, creditor).toMatchObject({ ok: false, ai: { status: 'not_called', cost: 0 } });
+      expect(!r.ok && r.message, creditor).toMatch(/no longer passes the wording checks[\s\S]*No AI credits were used/);
+      expect(ai.calls, creditor).toEqual([]);
+      expect(await getBalance(A.orgId), creditor).toBe(balance);
+      await asUser(owner.userId, (db) => setLetterStatus(db, owner, l, 'void'));
+    }
   });
 
   it('a reason typed for a standalone letter is locked too, from a built-in template or the agency’s own', async () => {
@@ -256,8 +317,11 @@ describe('AI tailoring is paid for once when it is accepted by the checks, and n
 
 describe('“Tailor wording automatically when a letter is drafted”', () => {
   const STATUS_REASON = 'Experian reports this account as open. I closed it in March 2024 and have the closing letter.';
+  let drafts = 0;
+  /** Each draft is about an account of its own, so no test depends on how many disputes one account may have open. */
   const draft = async () => {
-    const d = await asUser(owner.userId, (db) => createDispute(db, owner, { clientId: jordan, tradelineId: jordanAccount, category: 'incorrect_status', reason: STATUS_REASON, fields: ['Account status'] }));
+    const acct = await account(jordan, 'experian', { creditor_name: `HARBOR CARD ${++drafts}`, account_last4: String(7000 + drafts) }, '2026-10-30');
+    const d = await asUser(owner.userId, (db) => createDispute(db, owner, { clientId: jordan, tradelineId: acct, category: 'incorrect_status', reason: STATUS_REASON, fields: ['Account status'] }));
     return asUser(owner.userId, (db) => createLetter(db, owner, { clientId: jordan, disputeId: d }));
   };
 

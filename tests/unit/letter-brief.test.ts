@@ -124,7 +124,7 @@ describe('letter brief: assembled from the record, with nothing added', () => {
     expect(recommendLetter(buildBrief(lateRecord)).reason).toMatch(/generally ended on December 2, 2026\. A request can still be sent; the collector is generally not required to answer it in the same way, so the letter asks without citing that right\./);
     // No notice on file: the letter does not say it answers one, and claims no right that depends on its date.
     const none = { ...collector, notices: [] };
-    expect(recommendLetter(buildBrief(none)).reason).toMatch(/No collector notice is recorded, so the letter disputes the debt and asks for validation without citing the 30-day right/);
+    expect(recommendLetter(buildBrief(none)).reason).toMatch(/No collector notice is recorded for this debt, so the letter disputes the debt and asks for validation without citing the 30-day right/);
     expect(draft(none).body).toContain('I am writing about the debt referenced above. I dispute this debt and ask that you provide validation of it, including:');
     expect(draft(none).body).not.toMatch(/in response to your|809\(b\)|as the statute provides/);
     // A collector that has written to the client is a collection even before it is on any report: the 30 days do not wait.
@@ -138,6 +138,42 @@ describe('letter brief: assembled from the record, with nothing added', () => {
     expect(recommendLetter(buildBrief(unknown)).missing.join(' ')).toMatch(/apply to collections only[\s\S]*record the collector’s notice/);
     // The same notices never reach a bureau letter.
     expect(buildBrief(record({ notices: collector.notices })).circumstances.notice).toBeNull();
+  });
+
+  it('never uses the notice of another debt held by the same collector', () => {
+    // One collector, two of the client's debts. This dispute is about account 7788; the newer notice is for 9911.
+    // 15 U.S.C. § 1692g(b) gives the 30-day right from the notice for the debt, so 9911's date must not reach this letter.
+    const midland = (notices: BriefRecord['notices'], over: Partial<BriefDisputeRow> = {}) => record({
+      dispute: dispute({ target_type: 'collector', bureau: null, workflow: 'validation', category: 'unverifiable_collection', recipient_name: 'Midland Credit', item_label: 'MIDLAND CREDIT ••7788', fields: [], reason: 'I do not recognize the amount of $412.50.', tradeline_id: 't-7788', ...over }),
+      tradeline: tradeline({ creditor_name: 'MIDLAND CREDIT', account_last4: '7788', item_type: 'collection', original_creditor: 'FIRST COAST BANK', balance_cents: 41250 }), identityDocs: [], evidence: [], notices,
+    });
+    const other = { collector_name: 'MIDLAND CREDIT', date_kind: 'received' as const, notice_date: '2026-11-15', tradeline_id: 't-9911' };
+    const own = { collector_name: 'MIDLAND CREDIT', date_kind: 'received' as const, notice_date: '2026-08-12', tradeline_id: 't-7788' };
+    // Newest first, as the loader returns them: the other debt's open notice comes before this debt's closed one.
+    const both = midland([other, own]);
+    expect(buildBrief(both).circumstances.notice).toMatchObject({ date: '2026-08-12', open: false });
+    expect(draft(both).body).toContain('I am writing in response to your written notice about the debt referenced above. I dispute this debt and ask that you provide validation of it, including:');
+    expect(draft(both).body).not.toMatch(/November 15|809\(b\)|1692g|as the statute provides|cease collection/);
+    expect(recommendLetter(buildBrief(both)).reason).toMatch(/^The validation period for the notice received on August 12, 2026 generally ended/);
+    // Only the other debt's notice is on file: this debt has none, and the letter does not say it answers one.
+    const onlyOther = midland([other]);
+    expect(buildBrief(onlyOther).circumstances.notice).toBeNull();
+    expect(buildBrief(onlyOther).context.facts).toMatchObject({ isCollection: true, notice: null }); // still a collection: the report says so
+    expect(draft(onlyOther).body).toContain('I am writing about the debt referenced above. I dispute this debt and ask that you provide validation of it, including:');
+    expect(draft(onlyOther).body).not.toMatch(/November 15|809\(b\)|in response to your written notice/);
+    expect(recommendLetter(buildBrief(onlyOther)).reason).toMatch(/No collector notice is recorded for this debt/);
+    // A notice recorded by the collector's name alone does not outrank this debt's own notice, and is not displaced by the other debt's.
+    const byName = { collector_name: 'Midland Credit', date_kind: 'received' as const, notice_date: '2026-11-10', tradeline_id: null };
+    expect(buildBrief(midland([other, byName, own])).circumstances.notice).toMatchObject({ date: '2026-08-12' });
+    expect(buildBrief(midland([other, byName])).circumstances.notice).toMatchObject({ date: '2026-11-10', open: true });
+    // The same debt on another report row (another bureau's report, or a later import): the loader marks it, and it counts.
+    const sameDebt = { ...other, notice_date: '2026-11-12', tradeline_id: 't-7788-on-equifax', same_account: true };
+    expect(buildBrief(midland([other, sameDebt])).circumstances.notice).toMatchObject({ date: '2026-11-12', open: true });
+    // A dispute typed by hand, with no report account: a notice linked to some account of that collector is not assumed to be about it.
+    const typed = { ...midland([other, own], { tradeline_id: null }), tradeline: null };
+    expect(buildBrief(typed).circumstances.notice).toBeNull();
+    expect(buildBrief(typed).context.facts).toMatchObject({ isCollection: false });
+    expect(recommendLetter(buildBrief(typed)).missing.join(' ')).toMatch(/a notice recorded for another account does not count/);
   });
 });
 
@@ -318,6 +354,9 @@ describe('recommend a letter', () => {
       .toMatchObject({ templateKey: 'bureau_dispute_en', name: 'General dispute', reason: expect.stringMatching(/no date of first delinquency/) });
     expect(rec(record({ dispute: dispute({ category: 'obsolete', fields: [] }), tradeline: tradeline({ item_type: 'collection', payment_status: 'Collection', date_of_first_delinquency: '2018-07-14' }) })))
       .toMatchObject({ templateKey: 'outdated_item_en', reason: 'By the reported date of first delinquency, the reporting period appears to have ended on January 10, 2026.' });
+    // An account that is only late: the reason says what has aged, and that the account itself stays.
+    expect(rec(record({ dispute: dispute({ category: 'obsolete', fields: [] }), tradeline: tradeline({ payment_status: '30 days late', date_of_first_delinquency: '2019-03-10' }) })))
+      .toMatchObject({ templateKey: 'outdated_item_en', reason: 'By the reported date of first delinquency, the reporting period for the late payment information from that date appears to have ended on March 10, 2026. The account itself stays reportable, so the letter is about that late payment information only.' });
     expect(rec(record({ dispute: dispute({ category: 'other' }) }))).toMatchObject({ templateKey: 'bureau_dispute_en', reason: 'No letter is written for this kind of dispute, so the general dispute carries the reason as entered.' });
   });
 

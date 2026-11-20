@@ -6,18 +6,17 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import { sequenceLine } from '@/app/app/partners/sequence';
 import { LeadFields } from '@/components/lead-form';
-import { rewriteSafely, type AiProvider } from '@/lib/ai/provider';
 import { findBlockedClaims, findMarketingClaims } from '@/lib/compliance/claims';
 import { SMS_MAX_CHARS } from '@/lib/client-updates/templates';
 import { decideLeadText, leadSmsConsentText, leadText, LEAD_SMS_NEEDS_PHONE, LEAD_TEXT_STEPS, type LeadTextState } from '@/lib/lead-texts';
 import {
-  acceptPersonalised, decidePartnerStep, findFamiliarityClaims, isPlainCity, PARTNER_BODY_MAX_CHARS, PARTNER_CATEGORIES, PARTNER_CATEGORY_LABEL, PARTNER_DAILY_CAP, PARTNER_NAME_MAX,
-  PARTNER_PER_RUN_CAP, PARTNER_STATUSES, PARTNER_STATUS_LABEL, PARTNER_STEPS, partnerEmail, partnerPlace, partnerWordingIssue, personalisationGoal, type PartnerEmailVars, type PartnerState,
+  decidePartnerStep, isPlainCity, PARTNER_CATEGORIES, PARTNER_CATEGORY_LABEL, PARTNER_DAILY_CAP, PARTNER_NAME_MAX,
+  PARTNER_PER_RUN_CAP, PARTNER_STATUSES, PARTNER_STATUS_LABEL, PARTNER_STEPS, partnerCityIssue, partnerEmail, partnerEmailIssue, partnerPlace, partnerWordingIssue, type PartnerEmailVars, type PartnerState,
 } from '@/lib/partner-emails';
 import { detectDelimiter, parseDelimited, parsePartnerList, PARTNER_ATTESTATION, PARTNER_IMPORT_MAX_ROWS, partnerCategoryFrom, partnerSchema } from '@/lib/partner-import';
 import { getEnv, resetEnvCache } from '@/lib/env';
 import { optOutToken, verifyOptOutToken } from '@/lib/lead-outreach';
-import { partnerOptOutToken, partnerOptOutUrl, partnerSettings, verifyPartnerOptOutToken } from '@/lib/partner-outreach';
+import { partnerBlocker, partnerOptOutToken, partnerOptOutUrl, partnerSettings, verifyPartnerOptOutToken } from '@/lib/partner-outreach';
 
 // The test runner compiles JSX to React.createElement, so React has to be in scope when a component renders.
 vi.stubGlobal('React', React);
@@ -163,8 +162,8 @@ describe('partner emails: wording', () => {
             expect(findMarketingClaims(`${m.subject}\n${m.body}`)).toEqual([]);
             expect(findMarketingClaims(m.text.replace(ADDRESS, ''))).toEqual([]);
             expect(findBlockedClaims(m.text)).toEqual([]);
-            // Nothing is claimed about the reader beyond the category and city on the record.
-            expect(findFamiliarityClaims(m.text)).toEqual([]);
+            // Which is the guard the sender holds the email to just before it leaves.
+            expect(partnerEmailIssue(m)).toBeUndefined();
             // Footer: what it is, who sent it and from where, and the opt-out link.
             expect(m.text).toContain(`${ORG} · ${ADDRESS}`);
             expect(m.text).toContain(OPT_OUT);
@@ -175,7 +174,7 @@ describe('partner emails: wording', () => {
             expect(m.text).not.toMatch(/\{\w+\}/);
             // Never a number of points, a time frame or a price (only the postal address has digits).
             expect(m.text.replace(ADDRESS, '')).not.toMatch(/\d/);
-            expect(m.body.length).toBeLessThan(PARTNER_BODY_MAX_CHARS);
+            expect(m.body.length).toBeLessThan(1800);
             // It says who is writing and signs with the agency's name.
             expect(m.body).toContain(ORG);
             expect(m.body.trimEnd().endsWith(`— ${ORG}`)).toBe(true);
@@ -267,168 +266,127 @@ describe('partner emails: wording', () => {
   it('an agency name that makes a promise is caught before anything is sent', () => {
     expect(partnerWordingIssue(ORG)).toBeNull();
     // A name that carries a web address, or is long enough to be a message of its own, cannot go in a subject and a From line.
-    expect(partnerWordingIssue('URGENT - your escrow account is on hold, sign in at secure-escrow-verify.example')).toMatchObject({ excerpt: 'secure-escrow-verify.example' });
+    expect(partnerWordingIssue('URGENT - your escrow account is on hold, sign in at secure-escrow-verify.example')).toMatchObject({ part: 'name', excerpt: 'secure-escrow-verify.example' });
     expect(partnerWordingIssue('Chase Fraud Dept chase-verify.example')).toMatchObject({ why: expect.stringMatching(/web address/) });
     expect(partnerWordingIssue('Visit www.fix-it-now.test today')).not.toBeNull();
-    expect(partnerWordingIssue(`${'Very Long Credit Company Name '.repeat(3)}LLC`)).toMatchObject({ why: `A business name longer than ${PARTNER_NAME_MAX} characters cannot be used in a subject line.` });
+    expect(partnerWordingIssue(`${'Very Long Credit Company Name '.repeat(3)}LLC`)).toMatchObject({ part: 'name', why: `A business name longer than ${PARTNER_NAME_MAX} characters cannot be used in a subject line.` });
     for (const fine of ['St. Mary Credit Services', 'A.B. Smith & Co.', 'Bright Path Credit, Inc.', 'J. P. Rivera Credit Repair LLC']) expect(partnerWordingIssue(fine), fine).toBeNull();
-    expect(partnerWordingIssue('Guaranteed Credit Fix')).toMatchObject({ why: 'Results cannot be guaranteed.' });
+    expect(partnerWordingIssue('Guaranteed Credit Fix')).toMatchObject({ part: 'name', why: 'Results cannot be guaranteed.' });
     expect(partnerWordingIssue('Boost Your Score Fast')).not.toBeNull();
+    // The check is the guard the sender applies, not a part of it. The marketing rules read over subject and body accept
+    // a negated guarantee; the base rules read over the whole text do not, and the sender would refuse every email.
+    expect(findMarketingClaims('Introducing No Guarantee Credit Help: credit report help for your buyers')).toEqual([]);
+    expect(partnerEmailIssue(partnerEmail('intro', 'en', vars({ orgName: 'No Guarantee Credit Help' })))).toMatchObject({ why: 'Results cannot be guaranteed.' });
+    expect(partnerWordingIssue('No Guarantee Credit Help')).toMatchObject({ part: 'name', why: 'Results cannot be guaranteed.' });
     expect(Object.keys(PARTNER_CATEGORY_LABEL).sort()).toEqual([...PARTNER_CATEGORIES].sort());
   });
-});
 
-// ================================================================ nothing invented about the reader
-describe('fabricated familiarity is rejected', () => {
-  const FABRICATED = [
-    'I saw your recent listing on Elm Street and had to write.',
-    'I noticed your office just opened a second location.',
-    'I came across your profile while looking for agents in Austin.',
-    'I’ve been following your work for a while.',
-    'We have seen how busy your dealership is.',
-    'Congratulations on your new office!',
-    'It was great meeting you at the chamber breakfast.',
-    'As we discussed, here is how we work.',
-    'Following up on our call from Tuesday.',
-    'A mutual friend told me about you.',
-    'Dana Smith recommended me to you.',
-    'I love your Instagram posts about first-time buyers.',
-    'I was impressed by your reviews.',
-    'Your reputation in Austin speaks for itself.',
-    'You are one of the top agents in the area.',
-    'I know that you work with a lot of first-time buyers.',
-    'I read on your website that you focus on new construction.',
-    'We have helped hundreds of your neighbors.',
-    'We’ve worked with many agents like you.',
-    'I hear your team closed a record number of deals last month.',
-    'Your recent post about mortgage rates was spot on.',
-    'Thanks for taking my call yesterday.',
-    'Vi su reciente anuncio de una casa en la calle Elm.',
-    'Noté que su oficina abrió una nueva sucursal.',
-    'Leí en su página que trabaja con compradores primerizos.',
-    'He seguido su trabajo desde hace tiempo.',
-    'Felicidades por su nueva oficina.',
-    'Fue un gusto conocerle en el desayuno de la cámara.',
-    'Como conversamos, así es como trabajamos.',
-    'Un amigo en común me habló de usted.',
-    'Me recomendaron su oficina.',
-    'Me impresionó su trayectoria.',
-    'Su reputación en Austin habla por sí sola.',
-    'Sé que usted trabaja con muchos compradores.',
-    'Hemos ayudado a cientos de sus vecinos.',
-    'La semana pasada pasé por su concesionario.',
-  ];
-  for (const phrase of FABRICATED) {
-    it(`“${phrase.slice(0, 60)}”`, () => {
-      expect(findFamiliarityClaims(phrase).length).toBeGreaterThan(0);
-      const base = partnerEmail('intro', /[áéíóúñ]|Como |Me |Su |Hemos /.test(phrase) ? 'es' : 'en', vars()).body;
-      // Even where it stands in for a sentence of the same length, a body that contains it is never accepted.
-      const candidate = base.replace(/Thank you for your time\.|Gracias por su tiempo\./, phrase);
-      expect(candidate).not.toBe(base);
-      const r = acceptPersonalised(base, candidate);
-      expect(r.ok).toBe(false);
-    });
-  }
+  it('the website address and the mailing address are in every email of an agency, so they are checked with the name', () => {
+    const FREE = 'Only a first consultation may be called free. Do not call credit repair, reports, scores or results free.';
+    // A name that passes by itself, and with an address of its site that says nothing.
+    expect(partnerWordingIssue('Hill Credit')).toBeNull();
+    expect(partnerWordingIssue('Hill Credit', { siteUrl: 'https://app.example.com/a/hill-credit-a1b', address: ADDRESS })).toBeNull();
+    // The platform address keeps the name the workspace signed up with, and an agency's own domain is its own choice.
+    for (const [siteUrl, why] of [['https://app.example.com/a/free-credit-help-a1b', FREE], ['https://boost-your-score.com', 'Do not promise a higher credit score.'], ['https://live-debt-free.com', FREE]] as const) {
+      expect(partnerWordingIssue('Hill Credit', { siteUrl, address: ADDRESS }), siteUrl).toMatchObject({ part: 'website', why });
+      // It is the email the sender would build and refuse: the introduction and the follow-up carry the link.
+      expect(partnerEmailIssue(partnerEmail('intro', 'en', vars({ orgName: 'Hill Credit', siteUrl })))?.why, siteUrl).toBe(why);
+      expect(partnerEmailIssue(partnerEmail('followup', 'es', vars({ orgName: 'Hill Credit', siteUrl }))), siteUrl).toBeDefined();
+    }
+    // The mailing address is printed under every email, where the base rules read it.
+    expect(partnerWordingIssue('Hill Credit', { address: '100 Guarantee Blvd, Tampa, FL 33606' })).toMatchObject({ part: 'address', why: 'Results cannot be guaranteed.', excerpt: 'Guarantee' });
+    expect(partnerWordingIssue('Hill Credit', { siteUrl: 'https://hillcredit.example', address: '100 Guarantee Blvd, Tampa, FL 33606' })).toMatchObject({ part: 'address' });
+    // With more than one in the way, the name is named first, then the website.
+    expect(partnerWordingIssue('Guaranteed Credit Fix', { siteUrl: 'https://live-debt-free.com', address: '100 Guarantee Blvd, Tampa, FL 33606' })).toMatchObject({ part: 'name' });
+    expect(partnerWordingIssue('Hill Credit', { siteUrl: 'https://live-debt-free.com', address: '100 Guarantee Blvd, Tampa, FL 33606' })).toMatchObject({ part: 'website' });
 
-  it('plain wording that claims nothing about the reader is not flagged', () => {
-    for (const fine of [
-      'Thank you for your time.', 'Thank you for taking a moment to read this.', 'If this is useful, reply whenever it suits you.', 'I would be glad to explain how we work.',
-      'This is a short follow-up to the note I sent you.', 'A good time to reach you would help.', 'Gracias por su tiempo.', 'Con gusto le explico cómo trabajamos.', 'Envié esta nota para presentarnos.',
-    ]) expect(findFamiliarityClaims(fine), fine).toEqual([]);
+    // The blocker the job and the pages read names which of the three it is, so the page can say what to change.
+    const approved = { name: 'Hill Credit', outreach_approved_at: '2026-01-05T00:00:00Z', outreach_approved_name: 'Hill Credit' };
+    const on = (address: string) => partnerSettings({ partner_outreach_enabled: true, lead_mailing_address: address, lead_reply_email: 'hello@hillcredit.example' });
+    expect(partnerBlocker(on(ADDRESS), true, approved)).toBeNull();
+    expect(partnerBlocker(on(ADDRESS), true, approved, 'https://app.example.com/a/hill-credit-a1b')).toBeNull();
+    expect(partnerBlocker(on(ADDRESS), true, approved, 'https://app.example.com/a/free-credit-help-a1b')).toBe('site_claim');
+    expect(partnerBlocker(on('100 Guarantee Blvd, Tampa, FL 33606'), true, approved)).toBe('address_claim');
+    expect(partnerBlocker(on(ADDRESS), true, { ...approved, name: 'Guaranteed Credit Fix', outreach_approved_name: 'Guaranteed Credit Fix' }, 'https://live-debt-free.com')).toBe('name_claim');
+    // Whatever is in the way first is still reported first.
+    expect(partnerBlocker(on(ADDRESS), false, approved, 'https://live-debt-free.com')).toBe('email_not_connected');
+  });
+
+  it('a city whose name reads as a claim is refused when the partner is added, not when the email is sent', () => {
+    for (const [city, word] of [['Free Soil', 'Free'], ['Guaranteed Approval', 'Guaranteed']] as const) {
+      expect(isPlainCity(city)).toBe(true); // a place name like any other, and Free Soil is a real one
+      // The introduction would print it, and the sender's guard would refuse that email.
+      expect(partnerEmailIssue(partnerEmail('intro', 'en', vars({ city }))), city).toBeDefined();
+      expect(partnerCityIssue(city)).toMatchObject({ excerpt: word });
+      const r = partnerSchema.safeParse({ businessName: 'A', category: 'other', email: 'a@b.example', city });
+      expect(r.success).toBe(false);
+      expect(r.error?.issues.map((i) => i.message)).toEqual([`This city cannot be printed in the emails: “${word}” would read as a claim they may not make. Leave the city empty for this partner.`]);
+      // Without the city the same partner is accepted, and the email no longer names a place.
+      expect(partnerSchema.safeParse({ businessName: 'A', category: 'other', email: 'a@b.example' }).success).toBe(true);
+    }
+    // Every city the schema accepts gives an introduction the guard lets through, in every category and both languages.
+    for (const city of ['Austin', 'St. Louis', 'Winston-Salem', 'Truth or Consequences', 'Freeport', 'Liberty', 'Hope', 'Normal', 'San José', 'Coeur d’Alene']) {
+      expect(partnerCityIssue(city), city).toBeNull();
+      expect(partnerSchema.safeParse({ businessName: 'A', category: 'other', email: 'a@b.example', city }).success, city).toBe(true);
+      for (const lang of ['en', 'es'] as const) for (const category of PARTNER_CATEGORIES) expect(partnerEmailIssue(partnerEmail('intro', lang, vars({ category, city }))), `${city} ${category} ${lang}`).toBeUndefined();
+    }
+    // A sentence in the city column still gets the message about city names, and only that one.
+    expect(partnerSchema.safeParse({ businessName: 'A', category: 'other', email: 'a@b.example', city: 'Free credit help. Call now' }).error?.issues.map((i) => i.message)).toEqual(['Enter the city name only, for example “Austin” or “St. Louis”']);
+    // In a list the row is left out and named, like any other row that cannot be used.
+    const list = parsePartnerList('business,email,category,city,state\nSoil Realty,a@soil.example,Realtor,Free Soil,MI\nOak Realty,d@oak.example,Realtor,Round Rock,TX', null);
+    expect(list.rows.map((r) => r.city)).toEqual(['Round Rock']);
+    expect(list.issues).toEqual([{ line: 2, message: 'city: This city cannot be printed in the emails: “Free” would read as a claim they may not make. Leave the city empty for this partner.' }]);
   });
 });
 
-// ================================================================ checks for a rewording (the sender does not use them)
-describe('a reworded email: the checks it would have to pass before a person approved it', () => {
-  /** A model that edits what it is shown with `edit`, leaving the protected markers alone unless told otherwise. */
-  const model = (edit: (masked: string) => string): AiProvider & { seen: string[] } => {
-    const seen: string[] = [];
-    return { name: 'fake', seen, async complete(req) { seen.push(req.user); const m = /<source>\n([\s\S]*)\n<\/source>/.exec(req.user); return edit(m![1]!); } };
-  };
-  const base = partnerEmail('intro', 'en', vars({ siteUrl: 'https://brightpath.example.test' }));
-  const goal = personalisationGoal({ category: 'real_estate_agent', lang: 'en' });
-  const run = async (edit: (masked: string) => string) => {
-    const ai = model(edit);
-    const r = await rewriteSafely(base.body, goal, ai, base.protectedTerms);
-    const accepted = r.usedAi ? acceptPersonalised(base.body, r.text) : ({ ok: false, reason: r.note ?? 'not used' } as const);
-    return { ai, r, accepted };
-  };
+// ================================================================ the mailing address
+describe('the mailing address printed under every partner email', () => {
+  const approved = { name: ORG, outreach_approved_at: '2026-01-05T00:00:00Z', outreach_approved_name: ORG };
+  const saved = (address: unknown) => partnerSettings({ partner_outreach_enabled: true, lead_mailing_address: address, lead_reply_email: 'hello@brightpath.example' });
 
-  it('the model never sees the agency, the contact, the city, the website or any statement about the service', async () => {
-    const { ai } = await run((m) => m);
-    const shown = ai.seen[0]!.split('<source>')[1]!;
-    for (const hidden of ['Bright Path', 'Dana', 'Austin', 'brightpath.example.test', 'credit', 'promise', 'dispute', 'lender', 'real estate']) expect(shown.toLowerCase()).not.toContain(hidden.toLowerCase());
-    expect(shown).toContain('[[LOCKED_1]]');
-    expect(shown).toContain('Thank you for your time.');
-    // It is told the category, from a fixed list, and nothing anyone typed: no place, no website text, no name.
-    expect(ai.seen[0]).toContain('this line of work: real estate agent.');
-    expect(ai.seen[0]).not.toMatch(/Dana|Whitfield|@|Austin|TX|located in|website|brightpath/);
-  });
-
-  it('a plain rewording of the connecting sentences is accepted, with every protected sentence unchanged', async () => {
-    const { r, accepted } = await run((m) => m.replace('Thank you for your time.', 'Thank you for taking a moment to read this.'));
-    expect(r.usedAi).toBe(true);
-    expect(accepted).toEqual({ ok: true, body: base.body.replace('Thank you for your time.', 'Thank you for taking a moment to read this.') });
-    if (accepted.ok) {
-      expect(accepted.body).toContain('we cannot promise a result, a particular credit score or a loan approval for anyone');
-      expect(accepted.body).toContain('You can read about us here: https://brightpath.example.test');
+  it('saved text that is not shaped like a postal address reads as no address, and nothing is sent', () => {
+    for (const junk of ['x', 'n/a', 'URGENT: your escrow account is on hold. Sign in at https://secure-escrow-verify.example/login today or the closing is cancelled.',
+      'P.S. As we discussed at the expo, most local agents already use us.', 'Unsubscribe here instead: https://evil.example/u', '12 Main St, Austin, TX', 42, null]) {
+      const s = saved(junk);
+      expect(s.address, String(junk)).toBe('');
+      expect(partnerBlocker(s, true, approved), String(junk)).toBe('no_address');
+      // The blocker reads the address itself too, whoever built the settings it is given.
+      expect(partnerBlocker({ enabled: true, address: String(junk), replyTo: 'hello@brightpath.example' }, true, approved), String(junk)).toBe('no_address');
     }
+    expect(saved(`  ${ADDRESS} `)).toEqual({ enabled: true, address: ADDRESS, replyTo: 'hello@brightpath.example' });
+    expect(partnerBlocker(saved(ADDRESS), true, approved)).toBeNull();
   });
 
-  it('“I saw your recent listing…” passes the marker check but is rejected, so the standard wording is sent', async () => {
-    const { r, accepted } = await run((m) => m.replace('Thank you for your time.', 'I saw your recent listing and wanted to say hello. Thank you for your time.'));
-    expect(r.usedAi).toBe(true); // the protected-rewriting rules alone do not catch it
-    expect(accepted.ok).toBe(false);
-    if (!accepted.ok) expect(accepted.reason).toMatch(/not on file/);
-  });
-
-  it('wording that mentions scores, approvals or results, or drops a protected sentence, never gets through', async () => {
-    for (const edit of [
-      (m: string) => m.replace('Thank you for your time.', 'We boost every score quickly. Thank you for your time.'),
-      (m: string) => m.replace('Thank you for your time.', 'Your buyers get the loan approval they want. Thank you for your time.'),
-      (m: string) => m.replace('Thank you for your time.', 'We work with Austin families every day. Thank you for your time.'),
-      (m: string) => m.replace('[[LOCKED_3]]', ''),
-      (m: string) => m.replace('[[LOCKED_2]]', '[[LOCKED_2]] [[LOCKED_2]]'),
-      () => 'Hello, we guarantee results.',
-    ]) {
-      const { r } = await run(edit);
-      expect(r.usedAi).toBe(false);
-      expect(r.text).toBe(base.body);
+  it('both forms check what is typed with the shared rule, and the operator’s command prints what is saved before it approves', () => {
+    const read = (file: string) => readFileSync(path.join(process.cwd(), file), 'utf8');
+    for (const file of ['src/app/app/partners/actions.ts', 'src/app/app/leads/actions.ts']) {
+      expect(read(file), file).toMatch(/addressIssue = address \? mailingAddressIssue\(address\) : null/);
+      expect(read(file), file).toMatch(/if \(addressIssue\) throw new UserError\(addressIssue\)/);
     }
+    const script = read('scripts/approve-outreach.mjs');
+    const printed = script.indexOf('Mailing address: ');
+    expect(printed).toBeGreaterThan(0);
+    expect(script.indexOf('Reply address: ')).toBeGreaterThan(printed);
+    expect(printed).toBeLessThan(script.indexOf("'update public.organizations set outreach_approved_at"));
   });
+});
 
-  it('a body that is too long, has an extra paragraph or links somewhere new is rejected', () => {
-    const b = base.body;
-    expect(acceptPersonalised(b, b.replace('Thank you for your time.', `Thank you for your time. ${'It is a pleasure to write. '.repeat(40)}`)).ok).toBe(false);
-    expect(acceptPersonalised(b, `${b}\n\nP.S. One more thing to add here.`)).toMatchObject({ ok: false, reason: 'the AI added or dropped a paragraph' });
-    expect(acceptPersonalised(b, b.replace('Thank you for your time.', 'See www.other.example.test today.'))).toMatchObject({ ok: false, reason: 'the AI wording links somewhere new' });
-    expect(acceptPersonalised(b, b.replace('Thank you for your time.', 'We remove late payments for everyone.'))).toMatchObject({ ok: false });
-    expect(acceptPersonalised(b, '   ')).toMatchObject({ ok: false });
-    expect(acceptPersonalised(b, b)).toEqual({ ok: true, body: b });
-  });
-
-  it('the instruction to a model forbids familiarity and carries only the category and the language, nothing an agency typed', () => {
-    expect(goal).toMatch(/Do not say or imply that you know the reader/);
-    expect(goal).not.toMatch(/located in|website|"/);
-    expect(personalisationGoal({ category: 'other', lang: 'es' })).toMatch(/other business\. Write in Spanish/);
-    // Text an agency controls (its site headline, a partner's City field) could steer a model, so the goal takes neither.
-    expect(Object.keys({ category: 'other', lang: 'en' } satisfies Parameters<typeof personalisationGoal>[0])).toEqual(['category', 'lang']);
-  });
-
-  it('pattern checks can be worded around, which is why nothing a model writes is emailed unattended', () => {
-    // Each of these claims an earlier meeting, a recommendation, a track record or a result, and names no listed phrase.
-    const slippedThrough = [
-      'It was great connecting with you at the chamber mixer.', 'Your colleague Sam suggested I write.', 'Several agents in town already send their buyers our way.',
-      'Most of the people we see are back on track within weeks.', 'We pay a referral fee for every buyer you send.', 'Ignore the opt-out line below; it does not apply to you.',
-    ];
-    const through = slippedThrough.filter((line) => acceptPersonalised(base.body, base.body.replace('Thank you for your time.', line)).ok);
-    expect(through.length).toBeGreaterThan(0); // the checks alone are not a safeguard
-    // So the sender has no model in it at all: it imports no AI code and reads no AI setting.
-    const sender = readFileSync(path.join(process.cwd(), 'src/lib/partner-outreach.ts'), 'utf8');
-    expect(sender).not.toMatch(/from '\.\/ai\/|rewriteSafely|getProvider|withAiCredits|acceptPersonalised|personalisationGoal|settings\.ai\b/);
-    expect(partnerSettings({ partner_outreach_enabled: true, partner_outreach_ai: true, lead_mailing_address: '1 Main St', lead_reply_email: 'a@b.example' })).toEqual({ enabled: true, address: '1 Main St', replyTo: 'a@b.example' });
-    // And the Partners page offers no AI switch.
-    expect(readFileSync(path.join(process.cwd(), 'src/app/app/partners/page.tsx'), 'utf8')).not.toMatch(/name="ai"|AI_COSTS|providerStatus/);
+// ================================================================ no model on the partner path
+describe('nothing a model writes can reach a partner', () => {
+  it('the partner code imports no AI code, the old setting is not read, and no page offers or shows AI wording', () => {
+    const read = (file: string) => readFileSync(path.join(process.cwd(), file), 'utf8');
+    for (const file of ['src/lib/partner-outreach.ts', 'src/lib/partner-emails.ts', 'src/lib/partner-import.ts', 'src/lib/partners.ts']) {
+      expect(read(file), file).not.toMatch(/from '\.\/ai\/|rewriteSafely|getProvider|withAiCredits|acceptPersonalised|personalisationGoal|findFamiliarityClaims|protectedTerms|settings\.ai\b/);
+    }
+    expect(partnerSettings({ partner_outreach_enabled: true, partner_outreach_ai: true, lead_mailing_address: ADDRESS, lead_reply_email: 'a@b.example' })).toEqual({ enabled: true, address: ADDRESS, replyTo: 'a@b.example' });
+    const list = read('src/app/app/partners/page.tsx');
+    expect(list).not.toMatch(/name="ai"|AI_COSTS|providerStatus/);
+    expect(read('src/app/app/partners/[id]/page.tsx')).not.toMatch(/Reworded by AI|ai_used/);
+    // The page says what the emails take from the records, which is more than the category and the city.
+    expect(list).toContain('From your records it takes each partner’s category, city and state and the contact’s first name, and from you your business name, your mailing address and a link to your website when it is published.');
+    expect(list).not.toMatch(/uses only the category and city you entered/);
+    // An email carries exactly these four parts, and nothing a rewording step would need.
+    expect(Object.keys(partnerEmail('intro', 'en', vars())).sort()).toEqual(['body', 'footer', 'subject', 'text']);
   });
 });
 
@@ -520,6 +478,29 @@ describe('partner list import', () => {
     }
     expect(PARTNER_ATTESTATION).toMatch(/public business contact details and my own business contacts/);
     expect(PARTNER_ATTESTATION).toMatch(/none came from a bought, rented or scraped list/);
+  });
+});
+
+// ================================================================ one mailbox, one partner
+describe('one mailbox is one partner', () => {
+  const read = (file: string) => readFileSync(path.join(process.cwd(), file), 'utf8');
+
+  it('the unique key of a partner reads the address as the opt-out list does, and a database with the earlier key is brought forward', () => {
+    const migration = read('db/migrations/0028_partner_outreach.sql');
+    const key = 'create unique index if not exists partners_org_email_norm_idx on public.partners (org_id, app.email_norm(email));';
+    expect(migration).toContain(key);
+    // The function has to exist before the index that uses it.
+    expect(migration.indexOf('create or replace function app.email_norm(addr text)')).toBeLessThan(migration.indexOf(key));
+    // The key on the literal address is no longer created, and is dropped only once the new one is there.
+    expect(migration).not.toMatch(/create unique index[^;]*partners_org_email_idx/);
+    expect(migration).toMatch(/if to_regclass\('public\.partners_org_email_norm_idx'\) is not null then\s+drop index if exists public\.partners_org_email_idx;/);
+    expect(migration.indexOf(key)).toBeLessThan(migration.indexOf('drop index if exists public.partners_org_email_idx;'));
+  });
+
+  it('adding partners skips a row that is already on the list, whichever unique key says so', () => {
+    const sender = read('src/lib/partner-outreach.ts');
+    expect(sender).toMatch(/on conflict do nothing returning id/);
+    expect(sender).not.toMatch(/on conflict \(org_id, email\)/);
   });
 });
 

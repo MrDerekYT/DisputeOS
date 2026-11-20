@@ -2,12 +2,14 @@ import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { runSweeps } from '@/lib/automation/engine';
 import { JOBS_DEADLINE_MS, runScheduledJobs } from '@/lib/automation/jobs';
 import { addDays, isBusinessDay } from '@/lib/business-days';
+import { queueClientUpdate } from '@/lib/client-updates/service';
 import { resetEnvCache } from '@/lib/env';
+import { submitLead } from '@/lib/leads';
 import { addPartners } from '@/lib/partner-outreach';
 import { transitionDispute } from '@/lib/disputes/service';
 import { businessToday, checkSentOn, markSent } from '@/lib/letters/service';
 import { recordConsentRows } from './consents';
-import { addClient, addDispute, addMember, addPortalClient, approveOutreach, asUser, closePool, makeOrg, uniq, withSystem } from './helpers';
+import { addClient, addDispute, addMember, addPortalClient, approveOutreach, asUser, closePool, makeOrg, testIp, uniq, withSystem } from './helpers';
 
 afterAll(closePool);
 
@@ -164,7 +166,7 @@ describe('delivery records', () => {
 // ================================================================ running out of time, fairly
 describe('scheduled jobs: a run that runs out of time', () => {
   const saved = { ...process.env };
-  afterEach(() => { vi.unstubAllGlobals(); process.env = { ...saved }; resetEnvCache(); });
+  afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); process.env = { ...saved }; resetEnvCache(); });
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
   it('stops starting work at its deadline, says who was not reached, still cleans up, and takes those organizations first next time', async () => {
@@ -239,5 +241,65 @@ describe('scheduled jobs: a run that runs out of time', () => {
     const second = await runScheduledJobs({ onlyOrgIds: ids, sweep, now: when });
     expect(second).toMatchObject({ failures: 0, partnerEmails: 2, outreachCutShort: false });
     expect(sentTo).toEqual([emails[0], emails[1], emails[2]]);
+  });
+
+  it('an organization’s own lead emails and client updates stop at the deadline too: the send in flight is finished, the rest waits for the next run, and the run says so', async () => {
+    // Email is "connected": the real driver, with the provider's HTTP API stood in for.
+    Object.assign(process.env, { EMAIL_DRIVER: 'resend', RESEND_API_KEY: 're_test_key_for_vitest' });
+    resetEnvCache();
+    // One organization with a queue of its own work: three leads waiting for their welcome email and four client
+    // updates by email. A second organization is behind it.
+    const [busy, next] = [await makeOrg('JobsOwnQueue'), await makeOrg('JobsOwnQueueNext')];
+    const { slug } = (await withSystem((db) => db.row<{ slug: string }>('update public.organizations set settings = settings || $2::jsonb where id = $1 returning slug', [busy.orgId, JSON.stringify({
+      lead_followup_enabled: true, lead_followup_since: new Date(Date.now() - 60_000).toISOString(), lead_mailing_address: '12 Main St, Austin, TX 78701', lead_reply_email: 'hello@agency.example.test',
+      client_updates: { switches: { team_message: { sms: false, email: true } }, window_since: null },
+    })])))!;
+    await approveOutreach(busy.orgId); // lead emails go out only for a workspace the platform operator has approved
+    // `defer` is given and never run: the welcome is left to the scheduled job, as when the after-response step is lost.
+    for (let i = 0; i < 3; i++) expect(await submitLead(slug, { fullName: 'Pat Lead', email: `lead-${uniq()}@example.test`, language: 'en', consent: true }, { ip: testIp(), defer: () => undefined })).toEqual({ ok: true });
+    for (let i = 0; i < 4; i++) {
+      const c = await addPortalClient(busy.orgId, `Client ${i}`);
+      expect(await withSystem((db) => queueClientUpdate(db, { orgId: busy.orgId, clientId: c.clientId, event: 'team_message', subjectId: `m-${i}`, defer: false }))).toBe(1);
+    }
+    const leadEmails = () => count("select count(*)::int as n from public.lead_outreach where org_id = $1 and status = 'sent'", [busy.orgId]);
+    const updates = (status: string) => count('select count(*)::int as n from public.client_updates where org_id = $1 and status = $2', [busy.orgId, status]);
+    const ids = [busy.orgId, next.orgId];
+    const swept: string[] = [];
+    const sweep = async (_: unknown, actor: { orgId: string }) => { swept.push(actor.orgId); return []; };
+
+    // The clock moves only when the test moves it: the run's deadline passes while the first email is with the email service.
+    let jump = true;
+    const sentTo: string[] = [];
+    vi.stubGlobal('fetch', async (url: string | URL, init?: RequestInit) => {
+      if (String(url) !== 'https://api.resend.com/emails') throw new Error(`unexpected request to ${String(url)}`);
+      sentTo.push((JSON.parse(String(init?.body ?? '{}')) as { to: string[] }).to[0]!);
+      if (jump) vi.setSystemTime(Date.now() + 60_000);
+      return new Response(JSON.stringify({ id: `re_${uniq()}` }), { status: 200 });
+    });
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const first = await runScheduledJobs({ onlyOrgIds: ids, sweep, deadlineMs: 5_000 });
+    vi.useRealTimers();
+    jump = false;
+    // One lead email was handed over before the deadline. Nothing was claimed after it: not the other two lead emails,
+    // not one client update. The second organization was not started, and the result says all of that.
+    expect(swept).toEqual([busy.orgId]);
+    expect(first).toMatchObject({ failures: 0, leadEmails: 1, clientUpdates: 0, unfinished: 1, notReached: 1 });
+    expect(sentTo).toHaveLength(1);
+    // The email that was in flight is recorded as sent, the rest is exactly as it was: nothing is left half-done.
+    expect(await leadEmails()).toBe(1);
+    expect(await count('select count(*)::int as n from public.lead_outreach where org_id = $1', [busy.orgId])).toBe(1);
+    expect([await updates('queued'), await updates('sending'), await updates('sent')]).toEqual([4, 0, 0]);
+    // The run was still written down for the organization it worked on, and the clean-up ran.
+    expect(await count("select count(*)::int as n from public.job_runs where org_id = $1 and status = 'ok'", [busy.orgId])).toBe(1);
+    expect(Object.keys(first.cleaned).sort()).toEqual(['invites', 'jobRuns', 'rateLimits', 'resets', 'sessions']);
+
+    // The next run, with time: the organization that went without is first, then the rest of the queue goes out.
+    swept.length = 0;
+    const second = await runScheduledJobs({ onlyOrgIds: ids, sweep });
+    expect(swept).toEqual([next.orgId, busy.orgId]);
+    expect(second).toMatchObject({ failures: 0, leadEmails: 2, clientUpdates: 4, unfinished: 0, notReached: 0 });
+    expect(sentTo).toHaveLength(7);
+    expect(new Set(sentTo).size).toBe(7); // nobody was written to twice
+    expect([await leadEmails(), await updates('queued'), await updates('sent')]).toEqual([3, 0, 4]);
   });
 });

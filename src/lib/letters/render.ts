@@ -115,13 +115,17 @@ function historyOrDates(d: NonNullable<LetterContext['dispute']> | null | undefi
   return history && dates ? 'the payment history and dates' : history ? 'the payment history' : dates ? 'the dates' : 'the payment history or dates';
 }
 
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 /**
  * The item as a letter names it. A dispute's label is written for a list on screen ("ACME BANK ••1234 (Experian)"); a
  * letter says "ACME BANK, account ending 1234": the masked digits are spelled out, and the bureau in brackets is left
- * off, because the letter is addressed to that bureau. A label with neither is used as it is.
+ * off, because the letter is addressed to that bureau. A specialty item's label ends with its agency the same way
+ * ("First Coast Bank · xxxx8841 (ChexSystems)"): pass that agency's short name and it is left off too. A label with
+ * neither is used as it is.
  */
-export function letterItem(label: string): string {
-  return label.replace(/\s*\((?:Experian|Equifax|TransUnion)\)\s*$/i, '').replace(/\s*•{2,}\s*([0-9A-Za-z]{2,})(?![0-9A-Za-z])/, ', account ending $1');
+export function letterItem(label: string, agencyShortName?: string | null): string {
+  const addressedTo = ['Experian', 'Equifax', 'TransUnion', ...(agencyShortName ? [escapeRe(agencyShortName)] : [])].join('|');
+  return label.replace(new RegExp(`\\s*\\((?:${addressedTo})\\)\\s*$`, 'i'), '').replace(/\s*•{2,}\s*([0-9A-Za-z]{2,})(?![0-9A-Za-z])/, ', account ending $1');
 }
 
 export function buildValues(c: LetterContext): Record<string, string> {
@@ -137,7 +141,9 @@ export function buildValues(c: LetterContext): Record<string, string> {
   // Identification under the sender's address. The three bureaus ask for the date of birth and the Social Security
   // number to find the file, so a letter to one of them states the date of birth and the last four digits of the SSN:
   // what is on the client's record, or a marked line a person completes or removes before approval. A letter to anyone
-  // else carries the SSN digits only when the person drafting asked for them, and never the date of birth.
+  // else carries the SSN digits only when the person drafting asked for them, and never the date of birth. (createLetter
+  // then takes the digits out of the letters written for a debt collector and of a letter to a specialty agency,
+  // whatever was asked.)
   const dob = c.client.dob ? say(c.client.dob) : null;
   const ssn = c.client.ssn_last4 || null;
   const identification = bureau
@@ -147,6 +153,7 @@ export function buildValues(c: LetterContext): Record<string, string> {
   // follow its notice (15 U.S.C. § 1692g(b)). So the statute is cited, and the notice date stated, only when a notice is
   // on file and its period is open today. Otherwise the letter disputes the debt and asks, without claiming that right.
   const n = f.notice ?? null;
+  const lateOnly = f.fallOff?.kind === 'date' && f.fallOff.rule === 'seven_years';
   const noticeDay = n ? (n.kind === 'received' ? `which I received on ${say(n.date)}` : `which was sent on ${say(n.date)}`) : '';
   return {
     ...Object.fromEntries(PARAGRAPH_FIELDS.map((k) => [k, c.paragraphs?.[k] ?? ''])),
@@ -156,7 +163,7 @@ export function buildValues(c: LetterContext): Record<string, string> {
     ssn_last4_text: identification,
     recipient_name: bureau?.name ?? d?.recipient_name ?? '[RECIPIENT NAME NEEDED]',
     recipient_address: bureau?.address ?? agencyAddress ?? c.recipientAddress ?? '[RECIPIENT ADDRESS NEEDED]',
-    item_label: d?.item_label ? letterItem(d.item_label) : '[ITEM NEEDED]',
+    item_label: d?.item_label ? letterItem(d.item_label, agency?.shortName) : '[ITEM NEEDED]',
     creditor: d?.tradeline?.creditor_name ?? d?.recipient_name ?? '',
     account_text: d?.tradeline?.account_last4 ? `account ending ${d.tradeline.account_last4}` : '',
     bureau: d?.bureau ?? '',
@@ -175,8 +182,14 @@ export function buildValues(c: LetterContext): Record<string, string> {
     org_name: c.orgName ?? '',
     // Situation facts. Each is a recorded fact said as it is, or a marked line a person has to resolve: never a guess.
     obsolete_text: f.fallOff?.kind === 'date'
-      ? `The date of first delinquency reported for this account is ${say(f.fallOff.from)}. The reporting period is ${RULE_SAYS[f.fallOff.rule] ?? 'generally 7 years from that date'}, so ${f.fallOff.rule === 'seven_years' ? 'the reporting period for the late payment information from that date' : 'the reporting period for this item'} appears to have ended on ${say(f.fallOff.date)}.`
+      ? `The date of first delinquency reported for this account is ${say(f.fallOff.from)}. The reporting period is ${RULE_SAYS[f.fallOff.rule] ?? 'generally 7 years from that date'}, so ${lateOnly ? 'the reporting period for the late payment information from that date' : 'the reporting period for this item'} appears to have ended on ${say(f.fallOff.date)}.`
       : '[DATE OF FIRST DELINQUENCY NEEDED]',
+    // What the outdated-item letter is about. A collection or a charge-off ages off as a whole. An account that is only
+    // late does not: the late payment information from the reported date ages off and the account stays reportable, so
+    // the letter never calls that account "an item past its reporting period".
+    outdated_subject: lateOnly ? 'Late payment information that appears to be past its reporting period' : 'Item that appears to be past the reporting period',
+    outdated_what: lateOnly ? 'late payment information' : 'an item',
+    outdated_period: lateOnly ? 'the reporting period for that late payment information' : 'its reporting period',
     bankruptcy_text: f.bankruptcy
       ? `I filed a Chapter ${f.bankruptcy.chapter} bankruptcy case on ${say(f.bankruptcy.filedOn)}${f.bankruptcy.dischargedOn ? `, and a discharge was entered on ${say(f.bankruptcy.dischargedOn)}` : ''}.`
       : '[BANKRUPTCY DETAILS NEEDED]',

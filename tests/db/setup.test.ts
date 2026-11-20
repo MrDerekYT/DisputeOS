@@ -1,12 +1,16 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { recordInboundSms } from '@/lib/client-updates/service';
 import { resetEnvCache } from '@/lib/env';
 import type { Email, SendResult } from '@/lib/mailer';
+import { PRODUCT } from '@/lib/product';
 import { PermissionError, type Role } from '@/lib/rbac';
 import { buildSetupChecklist } from '@/lib/setup/checklist';
 import { EMAIL_TEST_KEY, loadSetupSnapshot, SMS_TEST_KEY } from '@/lib/setup/snapshot';
-import { sendTestEmail, sendTestSms, TEST_EMAIL_LIMIT, TEST_EMAIL_ORG_LIMIT, TEST_SMS_ALL_LIMIT, TEST_SMS_LIMIT, TEST_SMS_ORG_LIMIT, type TestActor } from '@/lib/setup/test-send';
-import type { Sms, SmsResult } from '@/lib/sms';
-import { addClient, addMember, asUser, closePool, makeOrg, withSystem, type TestOrg } from './helpers';
+import {
+  sendTestEmail, sendTestSms, TEST_EMAIL_LIMIT, TEST_EMAIL_ORG_LIMIT, TEST_SMS_ALL_LIMIT, TEST_SMS_LIMIT, TEST_SMS_ORG_LIMIT, TEST_TEXT_NEEDS_APPROVAL, TEST_TEXT_NEEDS_US_NUMBER, TEST_TEXT_STOPPED, type TestActor,
+} from '@/lib/setup/test-send';
+import { toUsE164, type Sms, type SmsResult } from '@/lib/sms';
+import { addClient, addMember, approveOutreach, asUser, closePool, makeOrg, uniq, withSystem, type TestOrg } from './helpers';
 
 const saved = { ...process.env };
 function useEnv(env: Record<string, string>) { process.env = { ...saved, ...env }; resetEnvCache(); }
@@ -43,7 +47,7 @@ describe('setup test sends', () => {
       const mail = fakeEmail({ ok: true, provider: 'resend', providerRef: 'x' });
       const sms = fakeSms({ ok: true, provider: 'twilio', providerRef: 'SMx' });
       await expect(sendTestEmail(actor(o, m.id, role, m.email), mail)).rejects.toBeInstanceOf(PermissionError);
-      await expect(sendTestSms(actor(o, m.id, role, m.email), { phone: '+15552345679', confirmed: true }, sms)).rejects.toBeInstanceOf(PermissionError);
+      await expect(sendTestSms(actor(o, m.id, role, m.email), { phone: '+12125550142', confirmed: true }, sms)).rejects.toBeInstanceOf(PermissionError);
       expect([mail.sent.length, sms.sent.length]).toEqual([0, 0]);
     }
     const admin = await addMember(o.orgId, 'admin');
@@ -105,54 +109,121 @@ describe('setup test sends', () => {
 
   it('text: needs the person to confirm the number is theirs, reports the real provider answer, stores no number and no client record', async () => {
     const o = await makeOrg('SetupSms');
+    await approveOutreach(o.orgId); // the platform operator has approved this workspace for text messages
     await addClient(o.orgId, 'Someone Else');
     const before = await traces(o);
     useEnv(TWILIO);
     const sms = fakeSms({ ok: true, provider: 'twilio', providerRef: 'SM123' });
-    await expect(sendTestSms(actor(o), { phone: '(555) 234-5679', confirmed: false }, sms)).rejects.toThrow(/confirm this is your own/);
-    await expect(sendTestSms(actor(o), { phone: 'not a number', confirmed: true }, sms)).rejects.toThrow(/Enter a US or Canadian mobile number/);
-    // Only +1 numbers: the test is never sent abroad, however the number is written.
-    for (const abroad of ['+44 7700 900123', '+8613800138000', '+252 61 2345678']) await expect(sendTestSms(actor(o), { phone: abroad, confirmed: true }, sms)).rejects.toThrow(/not sent to other countries/);
+    await expect(sendTestSms(actor(o), { phone: '(212) 555-0142', confirmed: false }, sms)).rejects.toThrow(/confirm this is your own/);
+    await expect(sendTestSms(actor(o), { phone: 'not a number', confirmed: true }, sms)).rejects.toThrow(/Enter a US mobile number with its area code, for example \(212\) 555-0142/);
+    // US numbers only: the test is never sent abroad, however the number is written.
+    for (const abroad of ['+44 7700 900123', '+8613800138000', '+252 61 2345678']) await expect(sendTestSms(actor(o), { phone: abroad, confirmed: true }, sms)).rejects.toThrow(/sent to US numbers only/);
     expect(sms.sent).toHaveLength(0);
 
-    const yes = await sendTestSms(actor(o), { phone: '(555) 234-5679', confirmed: true }, sms);
+    const yes = await sendTestSms(actor(o), { phone: '(212) 555-0142', confirmed: true }, sms);
     expect(yes.ok).toBe(true);
     expect(yes.message).toMatch(/Twilio accepted it \(id SM123\)\. Accepted is not delivered/);
-    expect(sms.sent).toEqual([{ to: '+15552345679', body: expect.stringMatching(/test for Setup Agency: text messaging is connected\..*Reply STOP to opt out\.$/) }]);
+    expect(sms.sent).toEqual([{ to: '+12125550142', body: `${PRODUCT.name} test: text messaging is connected. You asked for this on the setup page. Reply STOP to opt out.` }]);
     expect(typeof (await settings(o))[SMS_TEST_KEY]).toBe('string');
 
-    const no = await sendTestSms(actor(o), { phone: '+15552345679', confirmed: true }, fakeSms({ ok: false, provider: 'twilio', error: 'The number +1555 is unverified (Twilio error 21608)' }));
-    expect(no).toEqual({ ok: false, message: 'Twilio refused it: “The number +1555 is unverified (Twilio error 21608)”.' });
+    const no = await sendTestSms(actor(o), { phone: '+12125550142', confirmed: true }, fakeSms({ ok: false, provider: 'twilio', error: 'The number +1212 is unverified (Twilio error 21608)' }));
+    expect(no).toEqual({ ok: false, message: 'Twilio refused it: “The number +1212 is unverified (Twilio error 21608)”.' });
     expect((await settings(o))[SMS_TEST_KEY]).toBeUndefined();
 
     expect(await traces(o)).toEqual(before);
     const log = await audits(o, 'setup.test_sms');
     expect(log.map((a) => a.metadata)).toEqual([{ provider: 'twilio', accepted: true }, { provider: 'twilio', accepted: false }]);
-    expect(JSON.stringify([log, await settings(o)])).not.toContain('5552345679');
+    expect(JSON.stringify([log, await settings(o)])).not.toContain('2125550142');
+  });
+
+  it('text: "+1" is not enough, and the text does not carry the workspace name', async () => {
+    const o = await makeOrg('SetupSmsUs');
+    await approveOutreach(o.orgId);
+    useEnv(TWILIO);
+    const sms = fakeSms({ ok: true, provider: 'twilio', providerRef: 'SM1' });
+    // Jamaica, the Dominican Republic, Canada, a premium line, toll-free, and a number that cannot exist: each is a
+    // "+1" number, and none is a US mobile number.
+    for (const no of ['+1 876 555 1234', '809 555 1234', '416 555 1234', '(900) 555-1234', '800 555 1234', '(212) 911-1234']) {
+      await expect(sendTestSms(actor(o), { phone: no, confirmed: true }, sms), no).rejects.toThrow(TEST_TEXT_NEEDS_US_NUMBER);
+    }
+    expect(sms.sent).toHaveLength(0);
+    // The name a workspace gave itself is not in the text, whatever it says: here it carries a web address.
+    const named: TestActor = { ...actor(o), orgName: 'Chase Fraud Dept chase-verify.example' };
+    expect((await sendTestSms(named, { phone: '(512) 555-0134', confirmed: true }, sms)).ok).toBe(true);
+    expect(sms.sent).toHaveLength(1);
+    expect(sms.sent[0]!.body).not.toMatch(/Chase|chase-verify|Setup Agency/);
+    expect(sms.sent[0]!.body.startsWith(`${PRODUCT.name} test: `)).toBe(true);
+  });
+
+  it('text: refused for a workspace the platform operator has not approved, or one renamed since, and nothing is sent or counted', async () => {
+    const o = await makeOrg('SetupSmsFresh'); // as sign-up leaves it
+    useEnv(TWILIO);
+    const sms = fakeSms({ ok: true, provider: 'twilio', providerRef: 'SM1' });
+    const attempt = () => sendTestSms(actor(o), { phone: '(212) 555-0142', confirmed: true }, sms);
+    for (let i = 0; i < TEST_SMS_LIMIT.max + 2; i++) expect(await attempt()).toEqual({ ok: false, message: TEST_TEXT_NEEDS_APPROVAL.not_approved });
+    expect(TEST_TEXT_NEEDS_APPROVAL.not_approved).toBe('Not sent: the platform operator has not approved this workspace for text messages yet. No text is sent from it until then, and that includes this test.');
+    // The owner cannot approve the workspace, and nothing in the settings stands in for the approval.
+    await expect(asUser(o.ownerId, (db) => db.run('update public.organizations set outreach_approved_at = now(), outreach_approved_name = name where id = $1', [o.orgId]))).rejects.toThrow(/permission denied/);
+    await asUser(o.ownerId, (db) => db.run(`update public.organizations set settings = settings || '{"outreach_approved_at": "2020-01-01T00:00:00Z", "outreach_approved": true}'::jsonb where id = $1`, [o.orgId]));
+    expect((await attempt()).ok).toBe(false);
+    expect(sms.sent).toHaveLength(0);
+    expect(await audits(o, 'setup.test_sms')).toEqual([]);
+    // Approved by the operator: it goes, and the refused attempts did not use up the day's allowance.
+    await approveOutreach(o.orgId);
+    for (let i = 0; i < TEST_SMS_LIMIT.max; i++) expect((await attempt()).ok).toBe(true);
+    expect(sms.sent).toHaveLength(TEST_SMS_LIMIT.max);
+    // Renamed after the approval: the approval was for the old name. It is read from the database, not from the session.
+    const other = await makeOrg('SetupSmsRenamed');
+    await approveOutreach(other.orgId);
+    await asUser(other.ownerId, (db) => db.run("update public.organizations set name = 'Chase Bank Fraud Dept' where id = $1", [other.orgId]));
+    expect(await sendTestSms(actor(other), { phone: '(212) 555-0142', confirmed: true }, sms)).toEqual({ ok: false, message: TEST_TEXT_NEEDS_APPROVAL.renamed });
+    expect(sms.sent).toHaveLength(TEST_SMS_LIMIT.max);
+  });
+
+  it('text: never sent to a number that replied STOP to this service', async () => {
+    const o = await makeOrg('SetupSmsStop');
+    await approveOutreach(o.orgId);
+    useEnv(TWILIO);
+    const sms = fakeSms({ ok: true, provider: 'twilio', providerRef: 'SM1' });
+    // A number nobody else in the (never truncated) test database has.
+    const number = (): string => { const n = `+1512${2 + Math.floor(Math.random() * 8)}${String(Math.floor(Math.random() * 100)).padStart(2, '0')}${String(Math.floor(Math.random() * 10_000)).padStart(4, '0')}`; return toUsE164(n) ? n : number(); };
+    const stopped = number();
+    // The STOP is on no record of this workspace: it was sent to the number every workspace texts from.
+    expect((await recordInboundSms({ sid: `SM${uniq()}${uniq()}`, from: stopped, body: 'STOP' })).kind).toBe('stop');
+    expect(await sendTestSms(actor(o), { phone: stopped, confirmed: true }, sms)).toEqual({ ok: false, message: TEST_TEXT_STOPPED });
+    expect(sms.sent).toHaveLength(0);
+    expect(await audits(o, 'setup.test_sms')).toEqual([]);
+    // A reply that is not a stop word does not block it.
+    const other = number();
+    await recordInboundSms({ sid: `SM${uniq()}${uniq()}`, from: other, body: 'hi' });
+    expect((await sendTestSms(actor(o), { phone: other, confirmed: true }, sms)).ok).toBe(true);
+    expect(sms.sent.map((m) => m.to)).toEqual([other]);
   });
 
   it('text: says what is missing when texting is not connected, and is limited to a few a day', async () => {
     const o = await makeOrg('SetupSmsLimit');
+    await approveOutreach(o.orgId);
     const sms = fakeSms({ ok: true, provider: 'twilio', providerRef: 'SM1' });
     useEnv({ SMS_DRIVER: 'disabled' });
-    expect(await sendTestSms(actor(o), { phone: '+15552345679', confirmed: true }, sms)).toEqual({ ok: false, message: 'Not sent: text messaging is not connected (SMS_DRIVER=disabled).' });
+    expect(await sendTestSms(actor(o), { phone: '+12125550142', confirmed: true }, sms)).toEqual({ ok: false, message: 'Not sent: text messaging is not connected (SMS_DRIVER=disabled).' });
     useEnv({ SMS_DRIVER: 'twilio', TWILIO_ACCOUNT_SID: 'ACtest' });
-    const partial = await sendTestSms(actor(o), { phone: '+15552345679', confirmed: true }, sms);
+    const partial = await sendTestSms(actor(o), { phone: '+12125550142', confirmed: true }, sms);
     expect(partial.message).toMatch(/Still to set: TWILIO_AUTH_TOKEN, TWILIO_MESSAGING_SERVICE_SID or TWILIO_FROM_NUMBER/);
     expect(partial.message).not.toContain('ACtest');
     expect(sms.sent).toHaveLength(0);
 
     useEnv(TWILIO);
-    for (let i = 0; i < TEST_SMS_LIMIT.max; i++) expect((await sendTestSms(actor(o), { phone: '+15552345679', confirmed: true }, sms)).ok).toBe(true);
-    await expect(sendTestSms(actor(o), { phone: '+15552345679', confirmed: true }, sms)).rejects.toThrow(/test texts today/);
+    for (let i = 0; i < TEST_SMS_LIMIT.max; i++) expect((await sendTestSms(actor(o), { phone: '+12125550142', confirmed: true }, sms)).ok).toBe(true);
+    await expect(sendTestSms(actor(o), { phone: '+12125550142', confirmed: true }, sms)).rejects.toThrow(/test texts today/);
     expect(sms.sent).toHaveLength(TEST_SMS_LIMIT.max);
   });
 
   it('the tests are also capped per workspace, and texts for the whole deployment, so new accounts cannot multiply them', async () => {
     const o = await makeOrg('SetupOrgLimit');
+    await approveOutreach(o.orgId);
     useEnv({ ...RESEND, ...TWILIO });
     const sms = fakeSms({ ok: true, provider: 'twilio', providerRef: 'SM1' });
-    const text = (a: TestActor) => sendTestSms(a, { phone: '+15552345679', confirmed: true }, sms);
+    const text = (a: TestActor) => sendTestSms(a, { phone: '+12125550142', confirmed: true }, sms);
     // Another admin of the same workspace does not get a fresh allowance.
     for (let i = 0; i < TEST_SMS_ORG_LIMIT.max; i++) expect((await text(actor(o))).ok).toBe(true);
     const admin = await addMember(o.orgId, 'admin');
@@ -166,10 +237,11 @@ describe('setup test sends', () => {
     await expect(sendTestEmail(actor(o, third.id, 'admin', third.email), mail)).rejects.toThrow(/Your workspace has sent 10 test emails/);
     expect(mail.sent).toHaveLength(TEST_EMAIL_ORG_LIMIT.max);
 
-    // Once the deployment's allowance for the day is used, a brand-new workspace is refused too.
+    // Once the deployment's allowance for the day is used, another approved workspace is refused too.
     const windowStart = new Date(Math.floor(Date.now() / 1000 / TEST_SMS_ALL_LIMIT.windowSec) * TEST_SMS_ALL_LIMIT.windowSec * 1000);
     await withSystem((db) => db.run('insert into public.rate_limits (key, window_start, hits) values ($1, $2, $3) on conflict (key, window_start) do update set hits = excluded.hits', [ALL_SMS, windowStart, TEST_SMS_ALL_LIMIT.max]));
     const fresh = await makeOrg('SetupAllLimit');
+    await approveOutreach(fresh.orgId);
     await expect(text(actor(fresh))).rejects.toThrow(/paused for today across the platform/);
     expect(sms.sent).toHaveLength(TEST_SMS_ORG_LIMIT.max);
   });

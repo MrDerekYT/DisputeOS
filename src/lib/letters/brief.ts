@@ -67,8 +67,12 @@ export interface BriefRecord {
   identityDocs: { key: string; label: string }[];
   /** Identity theft reports in the client's documents that a person has accepted, by what they are. */
   identityTheftReports: string[];
-  /** Collector notices recorded for the client, newest first. */
-  notices: { collector_name: string; date_kind: NoticeDateKind; notice_date: string; tradeline_id: string | null }[];
+  /**
+   * Collector notices recorded for the client, newest first. `same_account` is set by the loader when the notice is
+   * linked to the account this dispute is about on another report (the same creditor and account digits): each bureau's
+   * report, and each import, has its own row for one debt.
+   */
+  notices: { collector_name: string; date_kind: NoticeDateKind; notice_date: string; tradeline_id: string | null; same_account?: boolean }[];
   /** Letters already on this dispute that are not void. */
   letters: { template_key: string | null; kind: string; status: string }[];
 }
@@ -100,7 +104,7 @@ export interface LetterBrief {
   circumstances: {
     bankruptcy: SituationFacts['bankruptcy'] | null;
     identityTheftReports: string[];
-    /** The collector's notice recorded for this account or collector, with its validation period (12 CFR 1006.34(b)(5)). */
+    /** The collector's notice recorded for this account (or, with no account on it, for this collector by name), with its validation period (12 CFR 1006.34(b)(5)). */
     notice: { kind: NoticeDateKind; date: string; endsOn: string; daysLeft: number; open: boolean } | null;
     confirmedAccurate: boolean;
   };
@@ -158,9 +162,14 @@ export function buildBrief(r: BriefRecord, o: BriefOptions = {}): LetterBrief {
   const bankruptcy = r.client.bankruptcy_chapter && r.client.bankruptcy_filed_on
     ? { chapter: r.client.bankruptcy_chapter, filedOn: r.client.bankruptcy_filed_on, dischargedOn: r.client.bankruptcy_discharged_on } : null;
   const facts: SituationFacts = { today: r.today, bankruptcy, identityTheftReports: r.identityTheftReports, identityProof: r.identityDocs.map((x) => x.key) };
-  // A collector's notice belongs to this letter when it was recorded for the same account, or for the same collector by name.
+  // Which notice is this debt's. One collector can hold several of the client's debts, each with its own notice and its
+  // own 30 days, so a notice recorded for another account is never used: the letter would state that notice's date and
+  // claim the right that runs from it. The notice recorded for this dispute's account comes first; failing that, one
+  // recorded by the collector's name alone, with no account, when the name is the company this dispute goes to.
   const notice = d && d.target_type === 'collector'
-    ? r.notices.find((n) => (!!d.tradeline_id && n.tradeline_id === d.tradeline_id) || same(n.collector_name, d.recipient_name)) ?? null : null;
+    ? r.notices.find((n) => !!d.tradeline_id && !!n.tradeline_id && (n.tradeline_id === d.tradeline_id || n.same_account === true))
+      ?? r.notices.find((n) => !n.tradeline_id && same(n.collector_name, d.recipient_name)) ?? null
+    : null;
   const period = notice ? validationPeriod({ kind: notice.date_kind, date: notice.notice_date }, r.today) : null;
   let dispute: LetterContext['dispute'] = null;
   if (d) {
@@ -356,7 +365,12 @@ function whyThisLetter(b: LetterBrief, key: string): string {
     case 'inaccurate_history_dates_en': return `The dispute is about the payment history or dates${bureau ? ` ${bureau} reports` : ''}.`;
     case 'inaccurate_status_en': return `The dispute is about the status${bureau ? ` ${bureau} reports` : ''}${shown('account_status') ? ` (${shown('account_status')})` : ''}.`;
     case 'duplicate_account_en': return 'The dispute says the same debt is reported more than once.';
-    case 'outdated_item_en': return f.fallOff?.kind === 'date' ? `By the reported date of first delinquency, the reporting period appears to have ended on ${say(f.fallOff.date)}.` : 'The dispute says the item is past its reporting period.';
+    case 'outdated_item_en':
+      if (f.fallOff?.kind !== 'date') return 'The dispute says the item is past its reporting period.';
+      // An account that is only late stays reportable: what has aged is the late payment information from that date.
+      return f.fallOff.rule === 'seven_years'
+        ? `By the reported date of first delinquency, the reporting period for the late payment information from that date appears to have ended on ${say(f.fallOff.date)}. The account itself stays reportable, so the letter is about that late payment information only.`
+        : `By the reported date of first delinquency, the reporting period appears to have ended on ${say(f.fallOff.date)}.`;
     case 'bankruptcy_included_en': return f.bankruptcy ? `A Chapter ${f.bankruptcy.chapter} bankruptcy filed on ${say(f.bankruptcy.filedOn)} is recorded for this client.` : 'The dispute says the account was part of the client’s bankruptcy.';
     case 'identity_theft_block_en': return f.identityTheftReports?.length ? `An identity theft report is on file (${f.identityTheftReports.join(', ')}).` : 'The dispute is entered as identity theft.';
     case 'payment_update_en': return 'The client paid this account and asks that the reporting show it.';
@@ -364,7 +378,7 @@ function whyThisLetter(b: LetterBrief, key: string): string {
     case 'personal_info_correction_en': return 'The dispute lists personal information entries for the bureau to review.';
     case 'goodwill_en': return 'A courtesy request about reporting the client accepts as accurate. It is not a dispute.';
     case 'validation_request_en':
-      if (!n) return 'A collection account. No collector notice is recorded, so the letter disputes the debt and asks for validation without citing the 30-day right. Record the notice first if the client has one.';
+      if (!n) return 'A collection account. No collector notice is recorded for this debt, so the letter disputes the debt and asks for validation without citing the 30-day right. Record the notice first if the client has one.';
       return n.open ? `A collector notice ${n.kind === 'received' ? 'received' : 'sent'} on ${say(n.date)} is recorded. The validation period generally ends on ${say(n.endsOn)}.`
         : `The validation period for the notice ${n.kind === 'received' ? 'received' : 'sent'} on ${say(n.date)} generally ended on ${say(n.endsOn)}. A request can still be sent; the collector is generally not required to answer it in the same way, so the letter asks without citing that right.`;
     case 'bureau_dispute_en': {

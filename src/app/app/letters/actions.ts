@@ -75,9 +75,10 @@ export async function restoreVersionAction(fd: FormData) {
   let error = '';
   try {
     await ctx.tx(async (db) => {
-      const v = await db.row<{ body: string }>('select body from public.letter_versions where letter_id = $1 and version = $2', [d.id, d.version]);
+      const v = await db.row<{ body: string; source: string }>('select body, source from public.letter_versions where letter_id = $1 and version = $2', [d.id, d.version]);
       if (!v) throw new UserError('Version not found.');
-      await saveVersion(db, actorOf(ctx), d.id, v.body, 'manual_edit', `Restored version ${d.version}`);
+      // A restored AI-worded version is still AI wording: it keeps that mark until a person approves the new version.
+      await saveVersion(db, actorOf(ctx), d.id, v.body, v.source === 'ai_draft' ? 'ai_draft' : 'manual_edit', `Restored version ${d.version}`);
     });
   } catch (e) {
     if (!(e instanceof UserError)) throw e;

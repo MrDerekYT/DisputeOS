@@ -172,9 +172,10 @@ export function DefinitionList({ items }: { items: [string, ReactNode][] }) {
   return (
     <dl className="grid gap-x-6 gap-y-3 sm:grid-cols-2">
       {items.map(([k, v]) => (
-        <div key={k}>
+        <div key={k} className="min-w-0">
           <dt className="text-[0.8125rem] font-medium text-muted">{k}</dt>
-          <dd className="mt-0.5 text-sm">{v || <span className="text-faint">—</span>}</dd>
+          {/* A long value with nowhere to break (an email address) wraps inside its own column. */}
+          <dd className="mt-0.5 text-sm [overflow-wrap:anywhere]">{v || <span className="text-faint">—</span>}</dd>
         </div>
       ))}
     </dl>

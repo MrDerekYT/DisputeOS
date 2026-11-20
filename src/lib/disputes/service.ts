@@ -7,12 +7,12 @@ import { logEvent } from '../crm';
 import { can, PermissionError, type Role } from '../rbac';
 import { BUREAU_LABEL, type Bureau } from '../util';
 import {
-  BUREAU_ADDRESSES, CATEGORIES, canTransition, FINDING_TO_CATEGORY, permissionFor, responseDueDate, SPECIALTY_CATEGORY, STATUS_LABEL, type DisputeStatus, type Outcome,
+  BUREAU_ADDRESSES, CATEGORIES, canTransition, categoryForFinding, permissionFor, responseDueDate, SPECIALTY_CATEGORY, STATUS_LABEL, type DisputeStatus, type Outcome,
 } from './workflow';
 import { parseAgencyItem, specialtyAgency, type AgencyItem } from '../credit/agencies';
 import { findBlockedClaims } from '../compliance/claims';
 import type { Evidence } from '../reports/analysis';
-import { draftReason, reasonIsClientsOwn } from './reasons';
+import { draftReason, reasonIsClientsOwn, type ReportedRow } from './reasons';
 import { businessToday, checkSentOn } from '../letters/service';
 import { queueClientUpdate } from '../client-updates/service';
 
@@ -38,13 +38,16 @@ export async function createDispute(db: Db, actor: DActor, d: NewDispute): Promi
   const client = await db.row<{ id: string; assigned_to: string | null }>('select id, assigned_to from public.clients where id = $1', [d.clientId]);
   if (!client) throw new DisputeError('Client not found.');
 
-  let label = d.itemLabel?.trim().slice(0, 120) ?? '';
+  const typedName = d.itemLabel?.trim().slice(0, 120) ?? '';
+  let label = typedName;
   let bureau: Bureau | null = d.bureau ?? null;
   let recipient = d.recipientName?.trim() ?? '';
+  let matchKey = '';
   if (d.tradelineId) {
-    const t = await db.row<{ creditor_name: string; account_last4: string | null; bureau: Bureau; client_id: string }>('select creditor_name, account_last4, bureau, client_id from public.tradelines where id = $1', [d.tradelineId]);
+    const t = await db.row<{ creditor_name: string; account_last4: string | null; bureau: Bureau; client_id: string; match_key: string }>('select creditor_name, account_last4, bureau, client_id, match_key from public.tradelines where id = $1', [d.tradelineId]);
     if (!t || t.client_id !== d.clientId) throw new DisputeError('That account does not belong to this client.');
     label = `${t.creditor_name}${t.account_last4 ? ` ••${t.account_last4}` : ''}`;
+    matchKey = t.match_key;
     if (cat.target === 'bureau') bureau = bureau ?? t.bureau;
     if (cat.target !== 'bureau' && !recipient) recipient = t.creditor_name;
   }
@@ -52,6 +55,10 @@ export async function createDispute(db: Db, actor: DActor, d: NewDispute): Promi
     if (!bureau) throw new DisputeError('Choose which bureau this dispute is for.');
     recipient = BUREAU_ADDRESSES[bureau]?.name ?? BUREAU_LABEL[bureau];
     label = `${label || 'Item'} (${BUREAU_LABEL[bureau]})`;
+    if (!d.parentId) {
+      const earlier = await earlierDispute(db, { clientId: d.clientId, category: d.category, bureau, tradelineId: d.tradelineId ?? null, matchKey, typedLabel: !d.tradelineId && typedName && d.category !== 'personal_info' ? label : null });
+      if (earlier) throw new DisputeError(repeatRefusal(cat.label, BUREAU_LABEL[bureau], earlier));
+    }
   } else {
     if (!recipient) throw new DisputeError('Enter the name of the company this goes to.');
     label = label || recipient;
@@ -69,6 +76,44 @@ export async function createDispute(db: Db, actor: DActor, d: NewDispute): Promi
   await logEvent(db, actor, d.clientId, 'dispute_created', `Dispute drafted: ${label}`, { dispute_id: row!.id });
   await audit(db, { orgId: actor.orgId, actorId: actor.userId, action: 'dispute.created', entityType: 'dispute', entityId: row!.id, ip: actor.meta?.ip, meta: { category: d.category, round: d.round ?? 1 } });
   return row!.id;
+}
+
+interface EarlierDispute { round: number; status: DisputeStatus; client_confirmed_accurate: boolean }
+
+/**
+ * The dispute that stands in the way of a fresh first-round dispute, if one does: the most recent dispute of the same
+ * kind, about the same account, with the same bureau, unless it was cancelled or its result was “deleted” or
+ * “updated” (an item that was taken off or corrected and has come back is a new matter). Without this check a second
+ * first-round dispute could be started beside an open one, or after a “verified” result, and would go out as a first
+ * letter that says nothing of the earlier round: a way round the rule that another round needs something new
+ * (startNextRound).
+ *
+ * The same account is the same report row, or the row with the same creditor and account digits on another report of
+ * that bureau (each import adds new rows). An account typed by staff is the same when its name and digits were typed
+ * the same way. A dispute that names no account, and personal information, are never matched.
+ */
+async function earlierDispute(db: Db, x: { clientId: string; category: string; bureau: Bureau; tradelineId: string | null; matchKey: string; typedLabel: string | null }): Promise<EarlierDispute | null> {
+  if (!x.tradelineId && !x.typedLabel) return null;
+  const sameAccount = x.tradelineId
+    ? "(d.tradeline_id = $4 or ($5 ~ '^[^|]+[|][^|]+$' and t.match_key = $5))"
+    : 'd.tradeline_id is null and lower(btrim(d.item_label)) = lower(btrim($4))';
+  const latest = await db.row<EarlierDispute & { outcome: string | null }>(
+    `select d.round, d.status, d.outcome, d.client_confirmed_accurate
+       from public.disputes d left join public.tradelines t on t.id = d.tradeline_id
+      where d.client_id = $1 and d.category = $2 and d.bureau = $3 and d.status <> 'cancelled' and ${sameAccount}
+      order by d.created_at desc, d.round desc limit 1`,
+    x.tradelineId ? [x.clientId, x.category, x.bureau, x.tradelineId, x.matchKey] : [x.clientId, x.category, x.bureau, x.typedLabel]);
+  return latest && latest.outcome !== 'deleted' && latest.outcome !== 'updated' ? latest : null;
+}
+
+/** Why a second first-round dispute is not started, and what to do instead. */
+function repeatRefusal(kind: string, bureau: string, e: EarlierDispute): string {
+  // 15 U.S.C. § 1679b(a)(1): an item the client confirmed is reported accurately is not disputed again, by any route.
+  if (e.client_confirmed_accurate) return CONFIRMED_ACCURATE_STOP;
+  const other = 'A different issue with this account can be started as its own dispute.';
+  return e.status === 'resolved'
+    ? `A “${kind}” dispute about this account with ${bureau} has already been resolved (round ${e.round}). To dispute the same thing again, open that dispute and start the next round, which asks for what is new. ${other}`
+    : `A “${kind}” dispute about this account with ${bureau} is already open (round ${e.round}, ${STATUS_LABEL[e.status].toLowerCase()}). Continue with that one. Once it is resolved, the same thing is disputed again by starting the next round from it. ${other}`;
 }
 
 export interface NewSpecialtyDispute {
@@ -196,8 +241,8 @@ export async function recordResponse(db: Db, actor: DActor, id: string, r: { out
  */
 export async function startNextRound(db: Db, actor: DActor, id: string, input: { reason: string; newInformation: string }): Promise<string> {
   if (!can(actor.role, 'disputes:write')) throw new PermissionError('disputes:write');
-  const prev = await db.row<{ client_id: string; tradeline_id: string | null; category: string; reason: string; bureau: Bureau | null; fields: string[]; round: number; status: DisputeStatus; recipient_name: string; assigned_to: string | null; agency: string | null; agency_item: unknown; recipient_address: string | null; client_confirmed_accurate: boolean }>(
-    'select client_id, tradeline_id, category, reason, bureau, fields, round, status, recipient_name, assigned_to, agency, agency_item, recipient_address, client_confirmed_accurate from public.disputes where id = $1', [id]);
+  const prev = await db.row<{ client_id: string; tradeline_id: string | null; item_label: string; category: string; reason: string; bureau: Bureau | null; fields: string[]; round: number; status: DisputeStatus; recipient_name: string; assigned_to: string | null; agency: string | null; agency_item: unknown; recipient_address: string | null; client_confirmed_accurate: boolean }>(
+    'select client_id, tradeline_id, item_label, category, reason, bureau, fields, round, status, recipient_name, assigned_to, agency, agency_item, recipient_address, client_confirmed_accurate from public.disputes where id = $1', [id]);
   if (!prev) throw new DisputeError('Dispute not found.');
   if (prev.status !== 'resolved') throw new DisputeError('Resolve the current round before starting the next one.');
   // 15 U.S.C. § 1679b(a)(1): once the client has confirmed the item is reported accurately, it is not disputed again.
@@ -206,11 +251,15 @@ export async function startNextRound(db: Db, actor: DActor, id: string, input: {
   if (input.reason.trim().toLowerCase() === prev.reason.trim().toLowerCase()) throw new DisputeError('The reason is identical to the previous round. Explain what is different this time.');
   const reason = `${input.reason.trim()}\n\nNew information since my previous request: ${input.newInformation.trim()}`;
   const item = prev.agency ? parseAgencyItem(prev.agency_item) : null;
+  // An account that is on no report (typed by staff, or "Personal information") has only its label to be known by.
+  // It is carried into the next round, without the bureau in brackets, which createDispute adds again.
+  const itemLabel = prev.tradeline_id ? undefined
+    : prev.bureau ? prev.item_label.replace(new RegExp(`\\s*\\(${BUREAU_LABEL[prev.bureau]}\\)\\s*$`), '') : prev.item_label;
   const newId = prev.agency && item
     ? await createSpecialtyDispute(db, actor, { clientId: prev.client_id, agency: prev.agency, item, reason, recipientAddress: prev.recipient_address, parentId: id, round: prev.round + 1, assignedTo: prev.assigned_to })
     : await createDispute(db, actor, {
       clientId: prev.client_id, tradelineId: prev.tradeline_id, category: prev.category, bureau: prev.bureau, recipientName: prev.recipient_name, fields: prev.fields,
-      reason, parentId: id, round: prev.round + 1, assignedTo: prev.assigned_to,
+      reason, parentId: id, round: prev.round + 1, assignedTo: prev.assigned_to, itemLabel,
     });
   await db.run('insert into public.dispute_events (org_id, dispute_id, actor_id, kind, note) values ($1, $2, $3, $4, $5)', [actor.orgId, newId, actor.userId, 'round_started', `Round ${prev.round + 1} started from the previous dispute`]);
   return newId;
@@ -228,6 +277,21 @@ export async function addEvidence(db: Db, actor: DActor, disputeId: string, e: {
   await db.run('insert into public.dispute_events (org_id, dispute_id, actor_id, kind, note) values ($1, $2, $3, $4, $5)', [actor.orgId, disputeId, actor.userId, 'evidence', `Evidence added: ${e.label.slice(0, 120)}`]);
 }
 
+/**
+ * The accounts the new dispute form offers for one client: every account on an approved report, each marked with
+ * whether its report is the newest approved one of its bureau (the same rule as the comparison: loadAnalysisInput in
+ * src/lib/reports/service.ts). The reason drafted for an account compares only rows from those newest reports.
+ */
+export async function loadReportedRows(db: Db, clientId: string): Promise<(ReportedRow & { item_type: string })[]> {
+  return db.rows<ReportedRow & { item_type: string }>(
+    `select t.id, t.bureau, t.creditor_name, t.account_last4, t.item_type, t.balance_cents, t.date_opened::text, t.date_of_first_delinquency::text,
+            t.report_id in (select distinct on (bureau) id from public.credit_reports where client_id = $1 and status = 'approved'
+                             order by bureau, coalesce(report_date, created_at::date) desc, created_at desc) as newest
+       from public.tradelines t
+      where t.client_id = $1 and exists (select 1 from public.credit_reports r where r.id = t.report_id and r.status = 'approved')
+      order by t.creditor_name, t.bureau`, [clientId]);
+}
+
 export interface BulkDraftResult { created: { id: string; findingId: string }[]; skipped: { findingId: string; title: string; why: string }[] }
 export const BULK_DRAFT_LIMIT = 25;
 
@@ -235,15 +299,16 @@ export const BULK_DRAFT_LIMIT = 25;
  * Drafts one dispute per selected finding, with the reason written from that finding's own evidence.
  * These are DRAFTS only: each one still has to be read, sent for review, approved and have an approved letter
  * before it can be submitted — the same gates as a dispute started by hand. Findings that cannot be drafted
- * automatically (already disputed, dismissed, or missing an account) are skipped and reported, never guessed at.
+ * automatically (already disputed, dismissed, missing an account, needing the client's own words for the reason, or
+ * repeating a dispute of the same kind already on file for the account) are skipped and reported, never guessed at.
  */
 export async function draftDisputesFromFindings(db: Db, actor: DActor, clientId: string, findingIds: string[]): Promise<BulkDraftResult> {
   if (!can(actor.role, 'disputes:write')) throw new PermissionError('disputes:write');
   const ids = [...new Set(findingIds)];
   if (ids.length === 0) throw new DisputeError('Select at least one finding.');
   if (ids.length > BULK_DRAFT_LIMIT) throw new DisputeError(`Select up to ${BULK_DRAFT_LIMIT} findings at a time.`);
-  const findings = await db.rows<{ id: string; category: string; title: string; status: string; evidence: Evidence[]; tradeline_ids: string[] }>(
-    'select id, category, title, status, evidence, tradeline_ids from public.findings where client_id = $1 and id = any($2) order by created_at', [clientId, ids]);
+  const findings = await db.rows<{ id: string; category: string; dedupe_key: string; title: string; status: string; evidence: Evidence[]; tradeline_ids: string[] }>(
+    'select id, category, dedupe_key, title, status, evidence, tradeline_ids from public.findings where client_id = $1 and id = any($2) order by created_at', [clientId, ids]);
   const tradelines = await db.rows<{ id: string; creditor_name: string; account_last4: string | null; bureau: Bureau }>(
     "select t.id, t.creditor_name, t.account_last4, t.bureau from public.tradelines t where t.client_id = $1 and exists (select 1 from public.credit_reports r where r.id = t.report_id and r.status = 'approved')", [clientId]);
   const out: BulkDraftResult = { created: [], skipped: [] };
@@ -252,12 +317,13 @@ export async function draftDisputesFromFindings(db: Db, actor: DActor, clientId:
     const skip = (why: string) => out.skipped.push({ findingId: f.id, title: f.title, why });
     if (f.status === 'disputed') { skip('A dispute was already started for it.'); continue; }
     if (f.status === 'dismissed') { skip('It was dismissed.'); continue; }
-    const category = FINDING_TO_CATEGORY[f.category];
+    const category = categoryForFinding(f);
     const cat = category ? CATEGORIES[category] : undefined;
     if (!category || !cat) { skip('This kind of finding needs a dispute type chosen by hand.'); continue; }
     const tl = tradelines.find((t) => f.tradeline_ids.includes(t.id));
     if (!tl) { skip('No account from an approved report is linked to it — start this one by hand.'); continue; }
-    // No reason is drafted where it can only be the client's own account (a debt a collector asks about, personal information).
+    // No reason is drafted where it can only be the client's own account (a debt a collector asks about, personal
+    // information, a late payment the client says was on time).
     if (reasonIsClientsOwn(category)) { skip('This kind of dispute needs the client’s own words for its reason. Start it by hand.'); continue; }
     const reason = draftReason({ category, creditor: tl.creditor_name, last4: tl.account_last4, bureau: tl.bureau, evidence: f.evidence });
     if (findBlockedClaims(reason).length) { skip('The drafted wording needs a person to write it.'); continue; }

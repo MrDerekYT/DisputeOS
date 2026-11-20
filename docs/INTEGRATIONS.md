@@ -11,14 +11,14 @@ third-party service from this codebase. None of the paid third-party integration
 | Email — none (`EMAIL_DRIVER=disabled`) | **Manual**, verified by tests | The explicit way to run staging/production without an email provider. Nothing is sent or logged; invitations show a one-time link to pass on; client emails are recorded as not delivered; lead follow-up stays off; **password reset by email is unavailable** and the reset page says so. |
 | AI — Anthropic / OpenAI-compatible | Implemented, **verified against a mocked API only** | `AI_PROVIDER=anthropic` + `ANTHROPIC_API_KEY` (model via `AI_MODEL`, default `claude-sonnet-5-5`), or `AI_PROVIDER=openai` + `AI_BASE_URL` + `AI_API_KEY` + `AI_MODEL`. The deterministic engine is complete without them. |
 | AI credits (metering) | **Works, tested; buying online is not connected** | Every AI result that is returned costs credits from the workspace's balance (`src/lib/ai/credits.ts` holds the price list; ledger in `ai_credit_ledger`, migration 0012). A workspace with no credits, or with no AI provider, gets the standard non-AI wording. There is no checkout: the platform operator adds credits with `npm run credits:grant -- <org-slug> <amount> [note]`. Selling credits in the app needs a payment processor (e.g. Stripe), a checkout and a webhook that writes `purchase` rows. |
-| Text messages — Twilio | Implemented, **verified against a mocked API only**; off by default (`SMS_DRIVER=disabled`) | Short “there is an update, sign in to see it” texts to clients who agreed to them, for the events an agency switches on under Settings → Client updates. Needs `SMS_DRIVER=twilio`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` and `TWILIO_MESSAGING_SERVICE_SID` or `TWILIO_FROM_NUMBER`, plus the provider-side registration. See “Client updates by text message and email” below. The same driver sends the two follow-up texts to leads who ticked the text-message box on the enquiry form (“Referral partners and lead text follow-up”). Until then Settings shows “Not connected” and staff log calls and texts by hand. |
+| Text messages — Twilio | Implemented, **verified against a mocked API only**; off by default (`SMS_DRIVER=disabled`) | Short “there is an update, sign in to see it” texts to clients who agreed to them, for the events an agency switches on under Settings → Client updates. Needs `SMS_DRIVER=twilio`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` and `TWILIO_MESSAGING_SERVICE_SID` or `TWILIO_FROM_NUMBER`, plus the provider-side registration. See “Client updates by text message and email” below. The same driver sends the two follow-up texts to leads who ticked the text-message box on the enquiry form (“Referral partners and lead text follow-up”). Every text goes to a US number only, and none leaves for a workspace the platform operator has not approved (`npm run outreach:approve`). Until then Settings shows “Not connected” and staff log calls and texts by hand. |
 | Payment processing (Stripe etc.) | **Manual** (no processor integration) | Payments are recorded manually; there are no Stripe settings. Also constrained by the CROA advance-fee rule. |
 | Credit Connect (consent-gated import pipeline) | **Pipeline works, tested; no live provider** | Upload, inbound REST API, and an adapter framework with a dev-only sandbox. Nothing is imported automatically from a real provider, so Settings shows "Test stand-in only" in development and "Manual path in use" in staging/production. See `docs/CREDIT_CONNECT.md` |
 | Public REST API + API keys | **Works, tested** | `/api/v1/*`, OpenAPI at `/api/v1/openapi.json` |
 | Live provider adapters (Array, IDIQ, bureaus) | **Manual** (no adapter; needs partner approval) | Provider APIs are partner-gated and require a permissible purpose and client authorization; there is no legitimate unauthenticated access. Import by upload/CSV today. |
 | Electronic signatures (external provider) | **Manual** (no provider integration) | Typed-name e-signature in the portal with timestamp/IP/text hash is provided. |
 | Certified mail (Lob, etc.) | **Manual** (no provider integration) | The approved PDF is produced; a person mails it and records tracking. |
-| Custom domains for agency websites | **Automatic** with `VERCEL_API_TOKEN` + `VERCEL_PROJECT_ID` (`VERCEL_TEAM_ID` for a team project); otherwise **manual** | An agency connects a domain it already owns on its Website page; its `/a/<workspace-slug>` address keeps working. With the Vercel variables set, the app adds the domain to the project, shows the DNS records and marks it connected only when Vercel reports it verified and correctly configured. Without them the domain stays "not connected yet" until the platform operator adds it in Vercel and runs `npm run domain:verify -- <domain>`. Buying a domain is not built in. Steps: docs/DEPLOY-VERCEL.md. Tested against a mocked API only. |
+| Custom domains for agency websites | **Automatic** with `VERCEL_API_TOKEN` + `VERCEL_PROJECT_ID` (`VERCEL_TEAM_ID` for a team project); otherwise **manual** | An agency connects a domain it already owns on its Website page; its `/a/<workspace-slug>` address keeps working. With the Vercel variables set, the app adds the domain to the project, shows the DNS records and marks it connected only when Vercel reports it verified and correctly configured and the workspace's own TXT record (`_disputeos.<domain>`) is in the domain's DNS: that record is what shows the workspace controls the domain. Without the variables the domain stays "not connected yet" until the platform operator adds it in Vercel and runs `npm run domain:verify -- <domain>`, which checks the same TXT record and needs `PII_ENCRYPTION_KEY` in its environment. Buying a domain is not built in. Steps: docs/DEPLOY-VERCEL.md. Tested against a mocked API only. |
 | Specialty reporting agencies (ChexSystems, Early Warning, LexisNexis, Innovis, NCTUE, TeleCheck, Clarity) | **Manual** (no data feed, no integration) | Disputes with these agencies go through the normal pipeline, but nothing is connected to them. See "Specialty reporting agencies" below. |
 | External CRM sync | **Manual** (no sync integration) | Per-client JSON export exists. |
 | Error monitoring (Sentry) | **Not wired** | A PII scrubber is ready (`src/lib/scrub.ts`). |
@@ -70,7 +70,7 @@ Settings → Integrations labels every integration by what happens **in the conf
 | Live credit pulls | Development/test: sandbox with SYNTHETIC data only. Staging/production: manual | Upload the report (PDF, HTML, text, CSV template) or push it through `POST /api/v1/clients/{id}/reports`. Needs the client's FCRA authorization; a person approves every report | Signed partner/reseller agreement and issued API credentials from a report provider; then one adapter file (docs/CREDIT_CONNECT.md) |
 | Certified mail | Manual | Download the approved PDF, mail it, record method + date sent + optional tracking. Stored as `delivery_source = staff_recorded` and shown as "Recorded by staff" | A print-and-mail account (e.g. Lob), API key, sender address, and an integration that sends approved letters and reads delivery events. Only that integration may set `carrier_confirmed` |
 | Payments | Manual | Record payments collected elsewhere on the client's Billing tab (requires the CROA "service already performed" confirmation) | Stripe (or similar) account, API keys, webhook secret, Checkout + webhook integration |
-| SMS | Manual until Twilio is connected (the default) | Text/call from your own phone and log it on the client's Messages tab ("nothing is sent") | A Twilio account with a sending number registered for US messaging and the four variables in “Client updates by text message and email”; each client's own agreement to texts. Two-way texting from the Messages tab is not built: the integration only sends the automatic client updates and the consented lead follow-up texts, and records replies |
+| SMS | Manual until Twilio is connected (the default) | Text/call from your own phone and log it on the client's Messages tab ("nothing is sent") | A Twilio account with a sending number registered for US messaging and the four variables in “Client updates by text message and email”; the operator's approval of the workspace (`npm run outreach:approve`); each client's own agreement to texts, for a US number. Two-way texting from the Messages tab is not built: the integration only sends the automatic client updates and the consented lead follow-up texts, and records replies |
 | External e-signature | Manual | Typed-name signature in the portal (name, time, IP, hash of the text shown), or staff record a paper consent | Only if counsel requires a third-party signing service: an account with it and the integration |
 
 ## Leads follow-up and the credit guide: what they need
@@ -78,9 +78,9 @@ Settings → Integrations labels every integration by what happens **in the conf
 | Feature | Works with nothing connected | Needs | What is not there |
 | --- | --- | --- | --- |
 | Leads page, enquiry form, tagged links, counts | Yes | Nothing | — |
-| Automatic follow-up email to leads | **No.** With the `log` driver nothing is sent and nothing is recorded as sent; the Leads page says "Email is not connected" | `EMAIL_DRIVER=resend` + `RESEND_API_KEY` + a verified sending domain for `EMAIL_FROM`; the agency's postal address and reply address saved on the Leads page; the switch on. The welcome is sent right after the enquiry; the follow-up and last note need the scheduled job below to be running | **Replies are not read.** They go to the agency's reply address; staff press "They replied" or "Asked to stop". Reading them needs an inbound-email webhook, which does not exist. The From line is `"<Agency name>" <address from EMAIL_FROM>`; the Resend driver, including this, is not verified against the live service. A step whose result was never recorded stays "not confirmed" and is not re-sent |
+| Automatic follow-up email to leads | **No.** With the `log` driver nothing is sent and nothing is recorded as sent; the Leads page says "Email is not connected" | `EMAIL_DRIVER=resend` + `RESEND_API_KEY` + a verified sending domain for `EMAIL_FROM`; the platform operator's approval of the workspace (`npm run outreach:approve`); the agency's postal address and reply address saved on the Leads page; the switch on. The welcome is sent right after the enquiry; the follow-up and last note need the scheduled job below to be running | **Replies are not read.** They go to the agency's reply address; staff press "They replied" or "Asked to stop". Reading them needs an inbound-email webhook, which does not exist. The From line is `"<Agency name>" <address from EMAIL_FROM>`; the Resend driver, including this, is not verified against the live service. A step whose result was never recorded stays "not confirmed" and is not re-sent |
 | Text follow-up to leads | **No.** Off by default, and nothing is texted or offered on the form until a text service is connected | The lead follow-up switch on, the text switch on (Leads page), `SMS_DRIVER=twilio` with its credentials, and **the lead's own tick** in the separate text-message box on the enquiry form. See “Referral partners and lead text follow-up” | No tick, no text: that lead gets email only. Two texts at most (welcome, follow-up after 3 days). Not verified against live Twilio |
-| Referral partner email sequence | **No.** Off by default; with the `log` driver nothing is sent and nothing is recorded as sent | The switch on (Partners page), the same postal and reply addresses as the lead follow-up, `EMAIL_DRIVER=resend`, and the scheduled job running on business days | **Email only: partners are never texted or called.** Replies and bounces are not read: staff press “They replied”, “Interested”, “Not interested” or “Bounced”. No scraping, bought lists or directory import: the agency adds partners itself. Not verified against live Resend |
+| Referral partner email sequence | **No.** Off by default; with the `log` driver nothing is sent and nothing is recorded as sent | The platform operator's approval of the workspace (`npm run outreach:approve`), the switch on (Partners page), the same postal and reply addresses as the lead follow-up, `EMAIL_DRIVER=resend`, and the scheduled job running on business days | **Email only: partners are never texted or called.** Replies are not read: staff press “They replied”, “Interested” or “Not interested”. Bounces and spam complaints are read only when the Resend webhook is set up; without it staff press “Bounced”. No scraping, bought lists or directory import: the agency adds partners itself. Not verified against live Resend |
 | Credit guide (chat box) | Yes — answers come from the vetted knowledge base by keyword match | Nothing. Optional: `AI_PROVIDER` (same settings as the AI row above) lets a model re-phrase the retrieved entries | With AI on, the question (names, numbers, amounts and addresses masked) is sent to the provider. Output is discarded and the vetted text shown when a pattern rule matches a promise, an unknown number or web address, or a prompt marker; the rules are patterns, not a proof. Tested against a fake provider only |
 
 ## Referral partners and lead text follow-up
@@ -94,25 +94,35 @@ Code: `src/lib/partner-emails.ts` (wording, timing), `src/lib/partner-import.ts`
 **Who is on the list.** Businesses that can refer clients (real estate agents, loan officers, mortgage brokers, car
 dealerships, tax preparers, property managers), added by the agency itself: one at a time, or as a list pasted or
 uploaded as CSV (a header line with an `email` column; up to 200 rows per import; invalid rows are left out and named;
-an address repeated in the list or already on file is skipped). The person adding them confirms the contacts came from
-public business contact details or the agency's own contacts, and who confirmed it and when is stored on every row.
+an address repeated in the list or already on file is skipped). One mailbox is one partner: the unique key of a partner
+within an agency reads the address as the opt-out list does (lower case, without a "+tag", and for Gmail without dots),
+so `dana+1@` next to `dana@` is skipped as already listed and nobody gets the sequence once per spelling. A city is
+printed in the introduction, so it has to be a plain place name, and one whose name reads as a claim to the claims guard
+("Free Soil") is refused with a message that says to leave the city out. The person adding partners confirms the
+contacts came from public business contact details or the agency's own contacts: who confirmed it and when is stored on
+every row, and the sentence they ticked is kept on the audit entry of the addition.
 Nothing is scraped, bought, looked up or imported from a directory.
 
 **What is sent.** Three plain-text emails per partner: an introduction, a follow-up 4 business days later and a last
 note 9 business days after the introduction, in English or Spanish, with wording per category. They say what the agency
 does (helps consumers review their credit reports and dispute inaccurate information), say plainly that no result, score
-or loan approval can be promised, state nothing about the partner beyond the category and city on the record, and link to
-the agency's published website when there is one. Every email says it is a business solicitation from the agency,
-shows the agency's name and postal address and carries a one-click opt-out link (CAN-SPAM, 15 U.S.C. § 7704). Subject
-lines name the agency and say what the email is. All of it passes the marketing claims guard.
+or loan approval can be promised, greet the contact by first name, state nothing about the partner beyond the category
+and city on the record, and link to the agency's published website when there is one (the introduction and the
+follow-up do). Every email says it is a business solicitation from the agency, shows the agency's name and postal
+address, and carries an opt-out link (it opens a page with one button) and one-click unsubscribe headers (CAN-SPAM,
+15 U.S.C. § 7704). Subject lines name the agency and say what the email is. All of it passes the marketing claims guard.
 
 **What has to be true before anything goes out.** The platform operator has approved the workspace for outreach (see
 "Operator approval" below); an owner or admin switched the sequence on (Partners page; off by default); the mailing
-address and reply address are saved (the same two the lead follow-up uses); email is really connected; and the agency's
-own name does not read as a prohibited claim, carry a web address or run past 80 characters (it is in every subject and
-From line). Then the scheduled job sends with **no approval of each message**: on business days in the workspace's time
-zone, at most 10 per run and 40 per agency in any 24 hours (10 during the first 14 days after approval), and at most
-`OUTREACH_PLATFORM_DAILY_EMAILS` (default 500) across every workspace of the deployment. Each (partner, step) goes once.
+address and reply address are saved (the same two the lead follow-up uses; see "The mailing address" below); email is
+really connected; and the emails as they would leave pass the claims guard with the agency's own details in them: its
+name (which also may not carry a web address or run past 80 characters: it is in every subject and From line), the
+address of its published website, and its mailing address. When one of these is in the way the Partners page says which
+one and why, and nothing is claimed or sent. Then the scheduled job sends with **no approval of each message**: on
+business days in the workspace's time zone, at most 10 per run and 40 per agency in any 24 hours (10 during the first 14
+days after approval), and at most `OUTREACH_PLATFORM_DAILY_EMAILS` (default 500) across every workspace of the
+deployment. Each (partner, step) is handed to the email service once; only a step the service refused can be tried
+again, and only when a person asks.
 A step is claimed through a unique key before the email is handed over, under one lock for the deployment that makes
 all of these limits exact when runs overlap. With the two runs a day scheduled in `vercel.json` that is at most 20
 emails a day per agency (one run is in the early morning, US time); schedule more runs during the day to reach the limit.
@@ -120,13 +130,20 @@ emails a day per agency (one run is in the early morning, US time); schedule mor
 **The wording is fixed.** No model writes any part of a partner email. An earlier option to let an AI provider reword
 the connecting sentences was removed: its only safeguard on free text was a list of phrases, which can always be worded
 around, and nobody read the result before it was sent. The setting `partner_outreach_ai` is no longer read and is
-deleted when the Partners form is saved. The checks that were written for it (`acceptPersonalised` and
-`findFamiliarityClaims` in `src/lib/partner-emails.ts`) are kept, with their tests, for a future version in which a
-person approves each reworded email; the sender does not import them.
+deleted when the Partners form is saved. The code that was written for the rewording, and its tests, have been removed.
+
+**The mailing address.** It is printed under every partner email (and under the lead follow-up emails, which read the
+same setting). It is the one line of those emails an agency types freely, and the operator's approval does not cover
+it. So it is held to the shape of a US postal address (`src/lib/mailing-address.ts`): 12 to 160 characters on one
+line, only letters, digits and the punctuation addresses use, starting with a street number or a box and ending with
+the two-letter state and the ZIP code, no web address, and no part between commas longer than six words. The Partners form and the Leads form refuse anything else with a sentence that says what to enter. A value
+saved before this rule that does not pass it reads as "no address": the Partners page asks for one and nothing is sent
+until it is corrected. The rule cannot tell whether an address is real.
 
 **Operator approval.** Sign-up is open and unverified, and every workspace sends through the deployment's one email
-service and one text number. So nothing unattended (partner emails, lead follow-up texts) goes out for a workspace until
-a person at the operator has looked at it and run
+service and one text number. So nothing unattended to a person who is not yet a client (lead follow-up emails and texts,
+partner emails), and no text of any kind (client updates by text, the test text on the Get set up page), goes out for a
+workspace until a person at the operator has looked at it and run
 
     npm run outreach:approve -- <org-slug>          # approve under the business name it has now
     npm run outreach:approve -- <org-slug> --revoke # withdraw
@@ -136,24 +153,46 @@ no tenant request can write. It is for the business name the workspace had at th
 sent until it is approved again. What to look at before approving: is it a real credit repair business, is the name its
 own (the code refuses a name with a link in it; it cannot tell that "Wells Fargo Home Mortgage" is not theirs), and
 where does its partner list come from. The Partners and Leads pages tell the agency plainly when it is waiting for this.
+The lead follow-up emails need the approval for the same reason as the rest: the enquiry form is public and takes any
+address, and the business name is the From name and part of the subject of every such email, so without the gate a
+workspace nobody has looked at could put a name of its choice in a stranger's inbox. The approval, the switch and both
+addresses are read again with every email that is claimed. What does not need the approval: emails to the workspace's
+own team and clients (invitations, sign-in emails, client updates by email).
+Before it records an approval the command prints the mailing address and the reply address the workspace has saved:
+besides the name they are what its automatic emails carry, and the workspace can change both later without a new approval.
 
 **When it stops.** An opt-out (at once, and for good: the database refuses to undo it, to change the address, or to add
 that address to the agency's list again); staff recording a reply, "interested", "not interested" or a bounce; a manual
-pause; and a message the email service refuses (that partner stops until someone presses "Try again", three attempts
-at most). Two refusals in a row mean the sending side is probably broken, so the whole sequence then holds for 24
-hours, or until someone presses "Try again" on one of them, and the owners and admins get an in-app notification with
-the reason: a domain that is not verified stops two partners, not the list. A send whose result was never recorded is
-never repeated.
+pause; and an email that does not go through, of which there are three kinds.
+
+- *The email service refuses it.* That partner stops until someone presses "Try again", three attempts at most. Two
+  refusals in a row mean the sending side is probably broken, so the whole sequence then holds for 24 hours, or until
+  someone presses "Try again" on one of them, and the owners and admins get an in-app notification with the reason: a
+  domain that is not verified stops two partners, not the list. A request that never reached the service because no
+  connection could be made (the name did not resolve, the connection was refused) counts as a refusal: nothing can
+  have been sent.
+- *The email service does not answer* (a timeout, a connection that drops). The email may or may not have gone out, so
+  the step stays "not confirmed": it is never sent again, nobody is offered "Try again", it does not count towards the
+  hold, and the run hands nothing more to the service. The partner's page shows the email and says to contact the
+  partner yourself. A send whose result was never recorded (a crash) is treated the same way.
+- *The app's own claims guard refuses it*, because something on that partner's record reads as a claim (a city or a
+  first name; what is the same in every email was checked before the run). That partner stops and its page says why.
+  It is not a refusal by the email service: no hold and no notification follow.
 
 **How a partner opts out.** The link in every email opens a page that asks "Stop emails from <agency>?" with one
 button; pressing it is the opt-out, with no sign-in. Opening the page changes nothing, because mail security gateways
 fetch the links in incoming mail: if a fetch were the opt-out, the first email would opt out every partner behind such
 a gateway for good. Every email also carries `List-Unsubscribe` and `List-Unsubscribe-Post: List-Unsubscribe=One-Click`
 (RFC 8058), pointing at `POST /api/unsubscribe/partner/<token>`, so the "unsubscribe" button of a mail program does the
-same. An opt-out goes on one list for the whole deployment, read by normalised address (lower case, without a "+tag",
-and for Gmail without dots): an address that stopped these emails is not written to through another workspace or as
-`dana+1@` either. Staff can still record that an opted-out partner replied or is interested (they may telephone); that
-sends nothing and does not lift the stop.
+same. An opt-out the recipient made (the link, the mail program's button, a spam complaint) goes on one list for the
+whole deployment, read by normalised address (lower case, without a "+tag", and for Gmail without dots): an address
+that stopped these emails is not written to through another workspace or as `dana+1@` either. In the other workspace
+that partner is paused, with the reason on its timeline; it is not stamped as opted out there, because that stamp can
+never be lifted. "Asked to stop" pressed by staff is different: it stops that workspace's own emails to the address for
+good and no other workspace's, so one workspace cannot switch off another's partner emails by listing its addresses.
+Staff can still record that an opted-out partner replied or is interested (they may telephone); that sends nothing and
+does not lift the stop. Where a partner stands in the sequence (new, in sequence, finished) is written by the scheduled
+job only: a signed-in person cannot put an address that bounced, or one whose sequence is over, back in line.
 
 **Bounces and complaints.** A reply goes to the agency's reply address; this app does not read that mailbox, so staff
 record replies on the partner's page. Bounces and spam complaints can be reported by the email service: add a webhook
@@ -161,7 +200,8 @@ in Resend for `email.bounced` and `email.complained` pointing at `POST /api/webh
 secret in `RESEND_WEBHOOK_SECRET` (the route answers 404 until then, and trusts a request only when its Svix signature
 verifies; `src/lib/resend-webhook.ts`). A bounce stops that partner; a complaint opts the address out for good. With
 three or more bounces since the workspace was approved, and more than one in ten of what was sent, the whole sequence
-holds until the list is cleaned and the operator approves the workspace again. Without the webhook, staff press
+holds until the list is cleaned and the operator approves the workspace again. Both numbers are counted from the
+approval date with no time limit, so the hold does not end by itself after a month. Without the webhook, staff press
 "Bounced" themselves, and the same hold applies. **Not verified:** the webhook is written to Resend's and Svix's
 published documentation and tested against signatures computed the same way; it has not received a live event.
 
@@ -185,16 +225,19 @@ What keeps the public form from being a way to text anyone:
 
 - **US numbers only.** The number has to be a "+1" number whose area code belongs to a state, DC or Puerto Rico
   (`src/lib/us-phone.ts`). Another country, Canada, the Caribbean, toll-free, 900 and 976 numbers are refused with a
-  message that asks for a US mobile number. The area-code list is an allowlist written from the numbering plan as known
-  in 2026; **it was not checked against NANPA's published list from the build environment**, so compare it with
-  nationalnanpa.com before relying on it. A code missing from it only means that number gets no text. Guam, the Northern
-  Marianas, American Samoa and the US Virgin Islands are not texted.
+  message that asks for a US mobile number, and so is a number that cannot exist (an exchange that starts with 0 or 1,
+  or a service code such as 911), typed with or without its "+". The area-code list is an allowlist written from the
+  numbering plan as known in 2026; **it was not checked against NANPA's published list from the build environment**,
+  so compare it with nationalnanpa.com before relying on it. A code missing from it only means that number gets no
+  text. Guam, the Northern Marianas, American Samoa and the US Virgin Islands are not texted.
 - **The person's own hours.** These are marketing texts, so they go out between 9:00 and 20:00 only, judged in the
   workspace's zone, in Eastern and Pacific, and in the zones of the state the number's area code belongs to. A text
   held for the night goes out with the 20:00 UTC run, which is inside that window in every US time zone.
-- **Limits.** One text consent per number per agency; at most 40 lead texts per agency and
+- **Limits.** One text consent per number per agency, also when the form is sent several times at the same moment (the
+  check runs under a lock on the agency and the number); at most 40 lead texts per agency and
   `OUTREACH_PLATFORM_DAILY_TEXTS` (default 300) for the deployment in any 24 hours, counted under a lock when a text is
-  claimed.
+  claimed. A text counts from the moment it is claimed, whatever becomes of it: one the text service refused, or the
+  carrier later reported undelivered, still counts. Texts to a lead that has since been deleted are no longer counted.
 - **The business name.** It starts every text, so a name that carries a web address sends nothing.
 - **Stopping.** STOP withdraws the consent for good. "Asked to stop" on a lead does the same (and ends the emails), so
   the consent cannot carry over if the lead becomes a client. Neither the public form nor staff can switch texts back
@@ -203,7 +246,9 @@ What keeps the public form from being a way to text anyone:
 - **Replies and delivery reports.** A reply goes to the record of the workspace that texted the number last, counts as
   "replied" and ends the automatic follow-up there. When that cannot be told (the same person agreed to texts from two
   workspaces and neither was texted more recently), each record is told that a reply arrived and texts to it pause, but
-  the wording is shown to neither; the message itself is kept with no workspace and counted in the job's result. A
+  the wording is shown to neither; the message itself is kept with no workspace and counted in the job's result. Every
+  record that carries the number is looked at, however many there are, so another workspace cannot push the lead who was
+  texted out of the match, or keep a STOP from reaching their consent, by typing the number onto records of its own. A
   carrier failure report marks the step failed, so no second text goes to a number that does not take them.
 
 Have your attorney review the consent wording, and note that a carrier registration made for account notifications
@@ -231,6 +276,20 @@ itself makes a promise blocks the send and the failure is recorded.
 2. An owner or admin switched that event on for that channel. Everything is off by default.
 3. The client has a portal sign-in (every message says “sign in”), and for email an address on file.
 4. For a text: the client's SMS consent is in force **for the number on their record**. No consent, no text, ever.
+5. For a text: **the platform operator has approved the workspace** under the name it has now (“Operator approval”
+   above; `npm run outreach:approve -- <org-slug>`). Sign-up is open and every text leaves through the deployment's one
+   number, so a workspace nobody has looked at texts no one, whatever it switched on and whatever consents it recorded.
+   The approval is read from the database when a text is queued and again when it is about to leave, and the text
+   carries the name that was approved; after a rename nothing is texted until the operator approves again. Emails of
+   client updates do not need the approval.
+6. For a text: **the number is a US one** (the rule lead texts are held to, `src/lib/us-phone.ts`). A consent cannot be
+   recorded for any other number, in the portal or by staff; a consent already on file for one sends nothing; and the
+   sender itself (`sendSms`) hands no other number to the provider.
+
+Where a text service is connected and the approval is missing, the consent block on each client's page and the
+test-text step of the Get set up page say so, and a consent in force shows as “Paused”. The same block says when a
+consent on file is for a number that is not a US one. A text that was already queued is dropped with the reason and
+listed under Settings → Client updates → “Not sent or not confirmed”.
 
 **Consent (TCPA).** A client turns texts on or off in Portal → Profile. The wording they see says that message
 frequency varies, message and data rates may apply, reply STOP to stop, HELP for help, and that consent is not a
@@ -271,10 +330,13 @@ and sends its standard reply; this app still sends nothing until there is a new 
 an inbound text on the client, and **texts to that client pause** until a staff member has read it on the client's
 profile and said whether it asks to stop (a request to stop counts however it is worded). When several client records
 carry the number, the reply goes to the one whose consent is in force for that number, then to the one texted most
-recently; if that still does not settle it, it is kept unmatched (Settings → Client updates). One sending number is
-shared by all workspaces of a deployment, so a reply that matches clients in two workspaces equally belongs to neither
-and is visible only in the database (`sms_inbound` where `org_id` is null); the scheduled job reports how many such
-rows are unreviewed (`unmatchedInboundTexts`) and logs a warning.
+recently. If that still does not settle it, it is filed on every record that holds a consent in force for the number;
+records of different workspaces are told that a reply arrived, not its wording. With no such record nothing is guessed:
+the message is kept with no workspace, also when every record that carries the number is in one workspace, because
+carrying a number is not a reason to be shown what its owner wrote. Such a message is visible only in the database
+(`sms_inbound` where `org_id` is null); the scheduled job reports how many are unreviewed (`unmatchedInboundTexts`) and
+logs a warning. Every record that carries the number is looked at, however many there are, and a STOP ends all their
+consents in three statements: a workspace cannot crowd a reply or a STOP out by typing the number onto records of its own.
 
 ### The Get set up page
 
@@ -283,6 +345,11 @@ real configuration, names the environment variables still missing (names only, n
 address to paste into Twilio and whether Twilio has reached it, and has "Send a test email to me" and "Send a test
 text to me" buttons that show the provider's own answer. A step is ticked only when its check passes; A2P 10DLC
 registration cannot be checked from the app and is never ticked.
+
+The test text is held to the rules of every other text, because it goes to a number somebody typed: it is refused for a
+workspace the operator has not approved (or one renamed since), it goes to a US number only, never to a number that has
+replied STOP to this deployment, and it does not carry the workspace's name. At most 3 a day per person and per
+workspace, and 50 a day for the whole deployment.
 
 ### Twilio setup
 
@@ -313,10 +380,11 @@ registration cannot be checked from the app and is never ticked.
    | `TWILIO_MESSAGING_SERVICE_SID` | `MG…` from step 4 (recommended) | No |
    | `TWILIO_FROM_NUMBER` | only without a Messaging Service: the number as `+15551234567` | No |
 
-8. Open Settings → Client updates. “Text messages: Connected” means the variables are present, not that Twilio accepted
-   a message. Turn on one event, agree to texts as a test client with your own phone, trigger the event, and check the
-   client's Messages tab. If you rotate the Auth Token, update `TWILIO_AUTH_TOKEN` at the same time or every webhook is
-   refused (403).
+8. Approve your own workspace for text messages (`npm run outreach:approve -- <org-slug>`): until then it sends no
+   text, the test included. Then open Settings → Client updates. “Text messages: Connected” means the variables are
+   present, not that Twilio accepted a message. Turn on one event, agree to texts as a test client with your own phone
+   (a US number), trigger the event, and check the client's Messages tab. If you rotate the Auth Token, update
+   `TWILIO_AUTH_TOKEN` at the same time or every webhook is refused (403).
 
 Not verified: nothing here has been run against the live Twilio service. The request format, the signature (checked
 against the worked example in Twilio's documentation) and the keyword list follow Twilio's documentation as read on
@@ -350,7 +418,7 @@ Not built, on purpose:
 
 - **Calls of any kind, auto-dialling and voicemail drops.** A dialled, prerecorded or AI-voice call generally needs the called person's prior express consent under the TCPA, in writing when it is marketing, and nothing here records one.
 - **Texts to partners.** A marketing text needs the recipient's prior express written consent, and a business found through public contact details has given none; partners are emailed only and their phone number is kept for the agency's own use.
-- **Texts to anyone else without a recorded consent.** The only automatic texts go to a client who agreed in the portal (file updates) or a lead who ticked the text box on the enquiry form (follow-up), at the number that consent names, until they reply STOP.
+- **Texts to anyone else without a recorded consent.** The only automatic texts go to a client who agreed in the portal (file updates) or a lead who ticked the text box on the enquiry form (follow-up), at the number that consent names, until they reply STOP. Every text goes to a US number, from a workspace the operator has approved.
 
 ## Scheduled jobs
 

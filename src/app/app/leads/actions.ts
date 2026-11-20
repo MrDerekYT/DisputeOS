@@ -8,6 +8,7 @@ import { audit } from '@/lib/audit';
 import { requireStaff } from '@/lib/auth/context';
 import { revokeSmsConsent } from '@/lib/client-updates/service';
 import { logEvent } from '@/lib/crm';
+import { mailingAddressIssue } from '@/lib/mailing-address';
 
 /** "Convert to client" (→ onboarding) and "Mark not interested" (→ cancelled). Only ever moves a record that is still a lead. */
 export async function setLeadStatusAction(fd: FormData) {
@@ -70,11 +71,14 @@ export async function saveLeadFollowUpAction(_: ActionState, fd: FormData): Prom
       enabled: zBool,
       // Text follow-up, for leads who tick the separate text-message box on the form. Off unless ticked here.
       texts: zBool,
-      address: z.string().trim().max(300).regex(/^[^<>]*$/, 'Use plain text').optional(),
+      address: z.string().trim().max(300).optional(),
       replyTo: z.union([z.string().trim().toLowerCase().email('Enter a valid reply email address').max(254), z.literal('')]).optional(),
     }), fd);
     const address = (d.address ?? '').replace(/\s+/g, ' ').trim();
     const replyTo = d.replyTo ?? '';
+    // The address is printed in every automatic email, so only text shaped like a postal address is saved. Blank clears it.
+    const addressIssue = address ? mailingAddressIssue(address) : null;
+    if (addressIssue) throw new UserError(addressIssue);
     if (d.enabled && (!address || !replyTo)) throw new UserError('To switch automatic follow-up on, enter your mailing address and a reply email address. Marketing email must show a postal address, and people need a way to answer.');
     await ctx.tx(async (db) => {
       // `lead_followup_since` is set when the switch goes from off to on: only enquiries received after that are emailed.

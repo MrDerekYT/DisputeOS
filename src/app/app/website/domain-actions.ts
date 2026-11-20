@@ -16,7 +16,7 @@ function outcome(d: AgencyDomain, saved: boolean): ActionState {
   if (d.status === 'failed') return { error: d.details.error ?? 'The domain could not be connected.' };
   const waiting = d.details.source === 'manual' ? 'The platform operator still has to add this domain at the hosting provider; it is not live yet.'
     : d.details.error ? `It could not be checked: ${d.details.error}`
-    : 'It is not connected yet. Create the DNS records shown, then check again. DNS changes can take a few hours.';
+    : 'It is not connected yet. Create the DNS records shown, including the TXT record, then check again. DNS changes can take a few hours.';
   return saved ? { ok: `Saved. ${waiting}` } : { error: waiting };
 }
 
@@ -31,7 +31,7 @@ export async function connectDomainAction(_: ActionState, fd: FormData): Promise
   });
 }
 
-/** "Check now": re-reads the status from the hosting provider. Never marks a domain connected on its own word. */
+/** "Check now": re-reads the status from the hosting provider and looks for the workspace's TXT record in the domain's DNS. Never marks a domain connected on its own word. */
 export async function checkDomainAction(): Promise<ActionState> {
   const ctx = await requireStaff('settings:manage');
   return run(async () => {

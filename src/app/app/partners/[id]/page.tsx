@@ -12,7 +12,7 @@ import {
   decidePartnerStep, isPartnerCategory, PARTNER_CATEGORIES, PARTNER_CATEGORY_LABEL, PARTNER_MAX_ATTEMPTS, PARTNER_STATUS_LABEL, PARTNER_STEPS, partnerEmail,
   type PartnerStatus,
 } from '@/lib/partner-emails';
-import { partnerBlocker, partnerBounceHealth, partnerFailureHold, partnerSettings, partnerState, partnerTimezone } from '@/lib/partner-outreach';
+import { PARTNER_GUARD_REFUSAL, partnerBlocker, partnerBounceHealth, partnerFailureHold, partnerSettings, partnerState, partnerTimezone } from '@/lib/partner-outreach';
 import { dayInZone, fmtDate, isUuid, relTime } from '@/lib/util';
 import { markPartnerAction, partnerAskedToStopAction, pausePartnerAction, removePartnerAction, retryPartnerAction, updatePartnerAction } from '../actions';
 import { PARTNER_STATUS_TONE, sequenceLine } from '../sequence';
@@ -39,8 +39,8 @@ export default async function PartnerPage({ params }: { params: Promise<{ id: st
     return {
       p,
       org,
-      sends: await db.rows<{ step: string; status: string; attempts: number; subject: string | null; body: string | null; ai_used: boolean; error: string | null; at: string }>(
-        'select step, status, attempts, subject, body, ai_used, error, coalesce(sent_at, claimed_at) as at from public.partner_outreach where partner_id = $1 order by created_at', [id]),
+      sends: await db.rows<{ step: string; status: string; attempts: number; subject: string | null; body: string | null; error: string | null; at: string }>(
+        'select step, status, attempts, subject, body, error, coalesce(sent_at, claimed_at) as at from public.partner_outreach where partner_id = $1 order by created_at', [id]),
       events: await db.rows<{ id: string; summary: string; created_at: string; actor: string | null }>(
         'select e.id, e.summary, e.created_at, u.full_name as actor from public.partner_events e left join public.users u on u.id = e.actor_id where e.partner_id = $1 order by e.created_at desc limit 100', [id]),
       referred: await db.rows<{ id: string; full_name: string; status: string }>(
@@ -52,11 +52,15 @@ export default async function PartnerPage({ params }: { params: Promise<{ id: st
   const { p, org, sends, events, referred, hold } = data;
 
   const settings = partnerSettings(org.settings);
-  // Not sending: the sequence is off or missing something, or it is holding after the email service refused messages.
-  const blocker = partnerBlocker(settings, emailIsLive(), org) ?? (hold ? 'holding' : null);
   const tz = partnerTimezone(org.settings);
   const today = dayInZone(tz, new Date());
   const decision = decidePartnerStep(partnerState({ status: p.status, paused: p.paused, opted_out: !!p.opted_out_at, outreach: sends.map((s) => ({ step: s.step, status: s.status, attempts: s.attempts, at: s.at })) }, tz), today);
+  // The agency's published website is linked from the emails, so its address is part of the next one and of the check on the wording.
+  const nextStep = decision.kind === 'stop' ? null : decision.step;
+  const site = nextStep ? await publicSiteBySlug(org.slug) : null;
+  const siteUrl = site ? siteHome(site) : null;
+  // Not sending: the sequence is off or missing something, or it is holding (the email service refused messages, or too many addresses bounced).
+  const blocker = partnerBlocker(settings, emailIsLive(), org, siteUrl) ?? (hold ? 'holding' : null);
   const sentCount = sends.filter((s) => s.status === 'sent').length;
   const line = sequenceLine(decision, !blocker, sentCount);
   const canWrite = ctx.can('clients:write');
@@ -67,11 +71,9 @@ export default async function PartnerPage({ params }: { params: Promise<{ id: st
   const canRetry = sends.some((s) => s.status === 'failed' && s.attempts < PARTNER_MAX_ATTEMPTS);
   const canRemove = p.status === 'new' && sends.length === 0 && referred.length === 0;
   // The next email exactly as the standard wording would send it for this partner, with the opt-out link blanked.
-  const nextStep = decision.kind === 'stop' ? null : decision.step;
-  const site = nextStep ? await publicSiteBySlug(org.slug) : null;
   const preview = nextStep ? partnerEmail(nextStep, p.language, {
     contactName: p.contact_name, category, city: p.city, state: p.state, orgName: org.name, address: settings.address || '(your mailing address)',
-    optOutUrl: '(this partner’s own opt-out link)', siteUrl: site ? siteHome(site) : null,
+    optOutUrl: '(this partner’s own opt-out link)', siteUrl,
   }) : null;
 
   const mark = (value: string, label: string, title: string) => p.status !== value && (
@@ -105,7 +107,7 @@ export default async function PartnerPage({ params }: { params: Promise<{ id: st
                 return (
                   <li key={st.key} className="py-3 first:pt-0 last:pb-0">
                     <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-sm">
-                      <span className="flex flex-wrap items-center gap-2 font-medium">{st.label}{s?.ai_used && <Badge tone="neutral">Reworded by AI</Badge>}</span>
+                      <span className="font-medium">{st.label}</span>
                       <span className="text-[0.8125rem] text-muted">
                         {s?.status === 'sent' ? `Sent ${fmtDate(s.at)}`
                           : s?.status === 'failed' ? <span className="text-bad">Not sent</span>
@@ -116,8 +118,10 @@ export default async function PartnerPage({ params }: { params: Promise<{ id: st
                           : decision.kind === 'stop' ? (decision.reason === 'paused' ? 'Paused' : 'Not sent') : 'Not yet due'}
                       </span>
                     </div>
-                    {s?.status === 'failed' && <p className="mt-1 text-[0.8125rem] text-bad [overflow-wrap:anywhere]">The email service did not accept it: {s.error ?? 'no reason given'}. Nothing further is sent to this partner until you ask for another try.</p>}
-                    {s?.status === 'sending' && <p className="mt-1 text-[0.8125rem] text-muted">It was handed to the email service and the result was never recorded, so it may or may not have arrived. It is not sent again. Contact this partner yourself.</p>}
+                    {s?.status === 'failed' && (s.error?.startsWith(PARTNER_GUARD_REFUSAL)
+                      ? <p className="mt-1 text-[0.8125rem] text-bad [overflow-wrap:anywhere]">This app did not send it, and the email service was never asked: {s.error}. Something on this record reads as a claim. Check the city and the contact name under “Edit details”, then ask for another try. Nothing further is sent to this partner until then.</p>
+                      : <p className="mt-1 text-[0.8125rem] text-bad [overflow-wrap:anywhere]">The email service did not accept it: {s.error ?? 'no reason given'}. Nothing further is sent to this partner until you ask for another try.</p>)}
+                    {s?.status === 'sending' && <p className="mt-1 text-[0.8125rem] text-muted [overflow-wrap:anywhere]">It was handed to the email service, and it is not known whether the service accepted it{s.error ? ` (${s.error})` : ''}. It may or may not have arrived, so it is not sent again. Contact this partner yourself.</p>}
                     {s?.body && (
                       <details className="mt-1.5">
                         <summary className="link cursor-pointer text-[0.8125rem]">{s.status === 'sent' ? 'Read the email as it was sent' : 'Read the email'}</summary>

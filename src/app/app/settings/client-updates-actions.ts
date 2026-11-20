@@ -1,9 +1,8 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
-import { z } from 'zod';
 import type { ActionState } from '@/components/forms';
-import { parseForm, run, zUuid } from '@/lib/action';
+import { run } from '@/lib/action';
 import { audit } from '@/lib/audit';
 import { requireStaff } from '@/lib/auth/context';
 import { channelUsable } from '@/lib/client-updates/service';
@@ -36,12 +35,4 @@ export async function saveClientUpdatesAction(_: ActionState, fd: FormData): Pro
     revalidatePath('/app/settings');
     return { ok: on ? `Saved. ${on} update${on === 1 ? ' is' : 's are'} switched on.` : 'Saved. No client updates are switched on.' };
   });
-}
-
-/** A text that could not be matched to one client has been looked at by a person. */
-export async function reviewInboundSmsAction(fd: FormData) {
-  const ctx = await requireStaff('settings:manage');
-  const d = parseForm(z.object({ id: zUuid }), fd);
-  await ctx.tx((db) => db.run('update public.sms_inbound set reviewed_at = now() where id = $1 and reviewed_at is null', [d.id]));
-  revalidatePath('/app/settings');
 }

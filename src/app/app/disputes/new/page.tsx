@@ -5,33 +5,16 @@ import { Avatar, Badge, EmptyState, Notice, PageHeader, Section } from '@/compon
 import { ActionForm, Check, Field, Select, SubmitButton, TextArea } from '@/components/forms';
 import { requireStaff } from '@/lib/auth/context';
 import { consentStatus } from '@/lib/compliance/disclosures';
-import { draftReason, REASON_PROMPT } from '@/lib/disputes/reasons';
-import { CATEGORIES, FIELD_OPTIONS, FINDING_TO_CATEGORY } from '@/lib/disputes/workflow';
+import { draftReason, REASON_PROMPT, reportedFor } from '@/lib/disputes/reasons';
+import { loadReportedRows } from '@/lib/disputes/service';
+import { CATEGORIES, categoryForFinding, FIELD_OPTIONS, mustNameAccount } from '@/lib/disputes/workflow';
 import { letterForCategory } from '@/lib/letters/brief';
 import type { Evidence } from '@/lib/reports/analysis';
-import { longDate } from '@/lib/letters/render';
-import { BUREAU_LABEL, BUREAUS, isUuid, money, type Bureau } from '@/lib/util';
+import { BUREAU_LABEL, BUREAUS, isUuid } from '@/lib/util';
 import { createDisputeAction } from '../actions';
 import { SpecialtySteps } from './specialty';
 
 export const metadata: Metadata = { title: 'New dispute' };
-
-interface TL { id: string; bureau: Bureau; creditor_name: string; account_last4: string | null; item_type: string; balance_cents: number | null; date_opened: string | null; date_of_first_delinquency: string | null }
-
-const sayDay = (day: string) => longDate(new Date(`${day}T00:00:00Z`));
-/** The values the approved reports show for one account, for the reason of a dispute started from the account itself. */
-function reportedFor(category: string, tl: TL | undefined, all: TL[]): Evidence[] {
-  if (!tl) return [];
-  const same = tl.account_last4 ? all.filter((t) => t.creditor_name === tl.creditor_name && t.account_last4 === tl.account_last4) : [tl];
-  const of = (field: string, value: (t: TL) => string | null, from: TL[] = same): Evidence[] =>
-    from.flatMap((t) => { const v = value(t); return v ? [{ bureau: t.bureau, field, value: v, source: 'reported' as const, tradeline_id: t.id }] : []; });
-  switch (category) {
-    case 'incorrect_balance': return of('Balance', (t) => (t.balance_cents == null ? null : money(t.balance_cents)));
-    case 'incorrect_dates': return of('Date opened', (t) => (t.date_opened ? sayDay(t.date_opened) : null));
-    case 'obsolete': return of('Date of first delinquency', (t) => (t.date_of_first_delinquency ? sayDay(t.date_of_first_delinquency) : null), [tl]);
-    default: return [];
-  }
-}
 
 export default async function NewDisputePage({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
   const sp = await searchParams;
@@ -72,9 +55,9 @@ export default async function NewDisputePage({ searchParams }: { searchParams: P
   const data = await ctx.tx(async (db) => {
     const client = await db.row<{ id: string; full_name: string; assigned_to: string | null }>('select id, full_name, assigned_to from public.clients where id = $1', [sp.clientId]);
     if (!client) return null;
-    const tradelines = await db.rows<TL>("select id, bureau, creditor_name, account_last4, item_type, balance_cents, date_opened::text, date_of_first_delinquency::text from public.tradelines t where client_id = $1 and exists (select 1 from public.credit_reports r where r.id = t.report_id and r.status = 'approved') order by creditor_name, bureau", [sp.clientId]);
+    const tradelines = await loadReportedRows(db, client.id);
     const finding = sp.findingId && isUuid(sp.findingId)
-      ? await db.row<{ id: string; category: string; title: string; explanation: string; evidence: Evidence[]; tradeline_ids: string[]; basis: string }>('select id, category, title, explanation, evidence, tradeline_ids, basis from public.findings where id = $1 and client_id = $2', [sp.findingId, sp.clientId])
+      ? await db.row<{ id: string; category: string; dedupe_key: string; title: string; explanation: string; evidence: Evidence[]; tradeline_ids: string[]; basis: string }>('select id, category, dedupe_key, title, explanation, evidence, tradeline_ids, basis from public.findings where id = $1 and client_id = $2', [sp.findingId, sp.clientId])
       : null;
     const consents = await db.rows<{ kind: string; signed_at: string; revoked_at: string | null }>('select kind, signed_at, revoked_at from public.client_consents where client_id = $1', [sp.clientId]);
     return { client, tradelines, finding, consents };
@@ -87,7 +70,7 @@ export default async function NewDisputePage({ searchParams }: { searchParams: P
   if (sp.specialty || sp.agency) return <SpecialtySteps client={client} agencyKey={sp.agency} />;
 
   const tradelineId = sp.tradelineId ?? (finding?.tradeline_ids.find((id) => tradelines.some((t) => t.id === id)) ?? '');
-  const category = sp.category ?? (finding ? FINDING_TO_CATEGORY[finding.category] : undefined);
+  const category = sp.category ?? (finding ? categoryForFinding(finding) : undefined);
   const tl = tradelines.find((t) => t.id === tradelineId);
 
   // ---- Step 2: what are we disputing?
@@ -114,9 +97,15 @@ export default async function NewDisputePage({ searchParams }: { searchParams: P
   // ---- Step 3: reason + details
   const cat = CATEGORIES[category]!;
   // What the reason is drafted from: the finding's evidence, or with no finding what the approved reports show for
-  // this account, exactly as reported (the same account on each bureau, matched by creditor name and last four digits).
+  // this account, exactly as reported: one value per bureau, from that bureau's newest approved report (reportedFor).
+  // With no report account the reason says "this account": the person names it in the field above the reason.
   const evidence: Evidence[] = finding?.evidence ?? reportedFor(category, tl, tradelines);
-  const reason = draftReason({ category, creditor: tl?.creditor_name ?? 'the account', last4: tl?.account_last4, bureau: tl?.bureau ?? null, evidence });
+  const reason = draftReason({ category, creditor: tl?.creditor_name ?? '', last4: tl?.account_last4, bureau: tl?.bureau ?? null, evidence });
+  const isInquiry = category === 'unauthorized_inquiry';
+  // What the hint under the reason says. A drafted reason either states a value read from a report, or is a starting
+  // point; a bare request to verify in a letter to a bureau is held by the specificity check until a person adds to it.
+  const fromReport = evidence.some((e) => e.source === 'reported' && reason.includes(e.value));
+  const held = !fromReport && cat.target === 'bureau' && reason.startsWith('Please verify ');
   // The letter a dispute of this kind starts with. Once the dispute exists, its page recommends from the whole file.
   const fits = letterForCategory(category);
 
@@ -130,11 +119,12 @@ export default async function NewDisputePage({ searchParams }: { searchParams: P
 
           {tl ? (
             <div className="rounded-xl bg-raised p-3.5 text-sm"><span className="text-muted">Item:</span> <strong>{tl.creditor_name}{tl.account_last4 && ` ••${tl.account_last4}`}</strong> <span className="text-muted">· reported by {BUREAU_LABEL[tl.bureau]}</span></div>
-          ) : category === 'personal_info' ? <p className="text-sm text-muted">No specific account selected.</p> : cat.target === 'bureau' ? (
-            // An account the client knows of that is on no imported report: it is named here, so the letter can say which one.
+          ) : category === 'personal_info' ? <p className="text-sm text-muted">No specific account selected.</p> : mustNameAccount(category, false) ? (
+            // An account the client knows of that is on no imported report: it has to be named here, or the letter
+            // could not say which one it is about.
             <div className="grid gap-4 sm:grid-cols-[1fr_12rem]">
-              <Field label="Account (creditor or collector)" name="accountName" maxLength={100} placeholder="As the client’s report or statement shows it" hint="No report account was selected, so name it here." />
-              <Field label="Account ending" name="accountLast4" maxLength={4} placeholder="1234" autoComplete="off" hint="Last digits only." />
+              <Field label={isInquiry ? 'Company that made the inquiry' : 'Account (creditor or collector)'} name="accountName" required maxLength={100} placeholder="As the client’s report or statement shows it" hint="No report account was selected, so name it here. The letter uses this name." />
+              <Field label="Account ending" name="accountLast4" maxLength={4} placeholder="1234" autoComplete="off" hint={isInquiry ? 'Leave empty for an inquiry.' : 'Last digits only.'} />
             </div>
           ) : null}
 
@@ -151,7 +141,7 @@ export default async function NewDisputePage({ searchParams }: { searchParams: P
 
           {reason ? (
             <TextArea label="Reason" name="reason" rows={8} required defaultValue={reason}
-              hint={`${evidence.length ? 'Drafted from the report data and phrased as a request to verify.' : 'A starting point, phrased as a request to verify. Add what the client told you: figures, dates, what their own records show.'} Edit it so it reflects what is true for this client — and only dispute what you believe is inaccurate or unverifiable.`} />
+              hint={`${fromReport ? 'Drafted from the report data and phrased as a request to verify.' : 'A starting point, phrased as a request to verify. Add what the client told you: figures, dates, what their own records show.'}${held ? ' A letter with only this text cannot be sent for approval.' : ''} Edit it so it reflects what is true for this client — and only dispute what you believe is inaccurate or unverifiable.`} />
           ) : (
             <TextArea label="Reason" name="reason" rows={8} required placeholder={REASON_PROMPT[category]}
               hint="Nothing is drafted for this kind of request: the letter states only what the client told you. Write it in the client’s words, as they would say it to the recipient." />

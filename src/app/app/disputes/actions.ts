@@ -9,7 +9,7 @@ import { requireStaff, type Ctx } from '@/lib/auth/context';
 import { classifyResponse } from '@/lib/ai/assistant';
 import { findBlockedClaims } from '@/lib/compliance/claims';
 import { createDispute, createSpecialtyDispute, draftDisputesFromFindings, recordResponse, startNextRound, transitionDispute, addEvidence, type DActor } from '@/lib/disputes/service';
-import { CATEGORIES, DISPUTE_STATUSES, FIELD_OPTIONS, OUTCOMES } from '@/lib/disputes/workflow';
+import { CATEGORIES, DISPUTE_STATUSES, FIELD_OPTIONS, mustNameAccount, OUTCOMES, typedItemLabel } from '@/lib/disputes/workflow';
 import { confirmIdentityDocs } from '@/lib/intake-load';
 import { createLetter, LetterError } from '@/lib/letters/service';
 import type { Db } from '@/lib/db';
@@ -56,6 +56,8 @@ export async function createDisputeAction(_: ActionState, fd: FormData): Promise
     if (warn.length) throw new UserError(`The reason contains a claim we cannot allow: “${warn[0]!.excerpt}” — ${warn[0]!.why}`);
     // The company the account is with: typed for a bureau dispute, and for a letter to a creditor or collector the company it goes to.
     const accountWith = d.accountName || (CATEGORIES[d.category]!.target !== 'bureau' ? d.recipientName : undefined);
+    // A bureau dispute about an account that is on no report has to name it: the letter would otherwise read “Item: Item”.
+    if (mustNameAccount(d.category, !!d.tradelineId) && !d.accountName) throw new UserError('Name the account: enter the creditor or collector as the client’s report or statement shows it.');
     if (d.accountLast4 && !accountWith) throw new UserError('Enter the name of the creditor or collector the account is with.');
     let newId = '';
     let letterId = '';
@@ -63,7 +65,7 @@ export async function createDisputeAction(_: ActionState, fd: FormData): Promise
       newId = await createDispute(db, actorOf(ctx), {
         clientId: d.clientId, tradelineId: d.tradelineId || null, findingId: d.findingId || null, category: d.category, reason: d.reason, fields: d.fields,
         bureau: d.bureau || null, recipientName: d.recipientName,
-        itemLabel: !d.tradelineId && accountWith && (d.accountName || d.accountLast4) ? `${accountWith}${d.accountLast4 ? ` ••${d.accountLast4}` : ''}` : undefined,
+        itemLabel: typedItemLabel({ category: d.category, hasReportAccount: !!d.tradelineId, accountName: d.accountName, accountLast4: d.accountLast4, recipientName: d.recipientName }),
       });
       if (d.makeLetter) letterId = await draftFirstLetter(db, ctx, d.clientId, newId);
     });
@@ -204,7 +206,10 @@ export async function bulkDraftAction(fd: FormData) {
   let q = '';
   try {
     const r = await ctx.tx((db) => draftDisputesFromFindings(db, actorOf(ctx), d.clientId, d.finding));
-    q = `drafted=${r.created.length}&skipped=${r.skipped.length}${r.skipped[0] ? `&why=${encodeURIComponent(r.skipped[0].why)}` : ''}`;
+    // Each different reason a finding was skipped for is shown, not only the first: one may say to start it by hand.
+    // (Up to four, so the address stays short; the count of skipped findings is always the full number.)
+    const reasons = [...new Set(r.skipped.map((x) => x.why))].slice(0, 4);
+    q = `drafted=${r.created.length}&skipped=${r.skipped.length}${reasons.length ? `&why=${encodeURIComponent(reasons.join(' '))}` : ''}`;
   } catch (e) {
     if (!(e instanceof UserError)) throw e;
     q = `bulk=error&why=${encodeURIComponent(e.message)}`;

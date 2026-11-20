@@ -16,7 +16,7 @@ export function middleware(req: NextRequest) {
   // app, staff sign-in, sign-up, the product's pages) lives on the platform host. Decided from Host and path only;
   // which agency a host belongs to is resolved on the server (src/lib/request-host.ts).
   const route = hostRoute(host, path, process.env.APP_URL);
-  if (route.kind === 'redirect') return NextResponse.redirect(new URL(`${path}${req.nextUrl.search}`, route.origin));
+  if (route.kind === 'redirect') return NextResponse.redirect(new URL(route.origin + path + req.nextUrl.search));
   const rewritten = () => { const url = req.nextUrl.clone(); url.pathname = (route as { path: string }).path; return url; };
 
   // A link prefetch gets the host decision and nothing else: it renders no document, so it needs no nonce.

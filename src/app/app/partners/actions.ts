@@ -7,8 +7,9 @@ import type { ActionState } from '@/components/forms';
 import { parseForm, run, UserError, zBool, zUuid } from '@/lib/action';
 import { audit } from '@/lib/audit';
 import { requireStaff } from '@/lib/auth/context';
+import { mailingAddressIssue } from '@/lib/mailing-address';
 import { isPartnerCategory, PARTNER_CATEGORIES } from '@/lib/partner-emails';
-import { parsePartnerList, PARTNER_IMPORT_MAX_CHARS, partnerSchema } from '@/lib/partner-import';
+import { parsePartnerList, PARTNER_ATTESTATION, PARTNER_IMPORT_MAX_CHARS, partnerSchema } from '@/lib/partner-import';
 import { addPartners } from '@/lib/partner-outreach';
 import { markPartner, PARTNER_MARKS, partnerAskedToStop, pausePartner, removePartner, resumePartner, retryPartnerStep, setReferredBy, updatePartner } from '@/lib/partners';
 
@@ -19,7 +20,10 @@ const fields = (fd: FormData) => ({
 });
 const firstIssue = (e: z.ZodError) => e.issues[0]?.message ?? 'Please check the form.';
 
-/** Adds one partner. The person confirms where the contact came from; who confirmed it is stored on the row. */
+/**
+ * Adds one partner. The person confirms where the contact came from: who confirmed it is stored on the row, and the
+ * sentence they ticked on the audit entry.
+ */
 export async function addPartnerAction(_: ActionState, fd: FormData): Promise<ActionState> {
   const ctx = await requireStaff('clients:write');
   return run(async () => {
@@ -28,10 +32,10 @@ export async function addPartnerAction(_: ActionState, fd: FormData): Promise<Ac
     if (!r.success) throw new UserError(firstIssue(r.error));
     const out = await ctx.tx(async (db) => {
       const res = await addPartners(db, { orgId: ctx.orgId, userId: ctx.userId }, [r.data], 'Added by hand. The person who added it confirmed it is a public business contact or one of the agency’s own.');
-      if (res.added) await audit(db, { orgId: ctx.orgId, actorId: ctx.userId, action: 'partner.added', entityType: 'partner', entityId: res.ids[0], ip: ctx.meta.ip });
+      if (res.added) await audit(db, { orgId: ctx.orgId, actorId: ctx.userId, action: 'partner.added', entityType: 'partner', entityId: res.ids[0], ip: ctx.meta.ip, meta: { attestation: PARTNER_ATTESTATION } });
       return res;
     });
-    if (!out.added) throw new UserError('That email address is already on your partner list. An address is only ever listed once, and one that opted out stays opted out.');
+    if (!out.added) throw new UserError('That email address is already on your partner list, perhaps in another spelling: a “+tag”, and for Gmail the dots, do not make a different mailbox. A mailbox is only ever listed once, and one that opted out stays opted out.');
     revalidatePath('/app/partners');
     return { ok: `${r.data.businessName} was added. Nothing is sent until the email sequence is switched on.` };
   });
@@ -39,7 +43,8 @@ export async function addPartnerAction(_: ActionState, fd: FormData): Promise<Ac
 
 /**
  * Adds a pasted or uploaded list. Rows that are not valid are left out and named; addresses repeated in the list or
- * already on file are skipped. Nothing is fetched or looked up: the list is whatever the agency compiled.
+ * already on file (in any spelling of the same mailbox) are skipped. Nothing is fetched or looked up: the list is
+ * whatever the agency compiled. The sentence the person ticked is kept on the audit entry.
  */
 export async function importPartnersAction(_: ActionState, fd: FormData): Promise<ActionState> {
   const ctx = await requireStaff('clients:write');
@@ -59,7 +64,7 @@ export async function importPartnersAction(_: ActionState, fd: FormData): Promis
     if (!parsed.rows.length) throw new UserError(`No row could be added.${problems}`);
     const out = await ctx.tx(async (db) => {
       const res = await addPartners(db, { orgId: ctx.orgId, userId: ctx.userId }, parsed.rows, 'Imported from a list. The person who imported it confirmed it was compiled from public business contact details and the agency’s own contacts.');
-      await audit(db, { orgId: ctx.orgId, actorId: ctx.userId, action: 'partners.imported', entityType: 'organization', entityId: ctx.orgId, ip: ctx.meta.ip, meta: { added: res.added, already_listed: res.existing, repeated: parsed.repeated, left_out: parsed.issues.length } });
+      await audit(db, { orgId: ctx.orgId, actorId: ctx.userId, action: 'partners.imported', entityType: 'organization', entityId: ctx.orgId, ip: ctx.meta.ip, meta: { added: res.added, already_listed: res.existing, repeated: parsed.repeated, left_out: parsed.issues.length, attestation: PARTNER_ATTESTATION } });
       return res;
     });
     revalidatePath('/app/partners');
@@ -132,18 +137,23 @@ export async function removePartnerAction(fd: FormData) {
  * The agency-level switch for the partner email sequence, and the postal and reply addresses every such email
  * carries. The two addresses are the same ones the lead follow-up uses; the lead switch is untouched. Switching it on
  * sends nothing by itself: the platform operator approves each workspace for outreach first (src/lib/outreach-approval.ts).
- * The earlier "let AI reword" option is gone, and its stored value is cleared: the wording is fixed.
+ * The postal address is printed in every email and no approval covers it, so only text shaped like a postal address
+ * is saved (src/lib/mailing-address.ts). The earlier "let AI reword" option is gone, and its stored value is cleared:
+ * the wording is fixed.
  */
 export async function savePartnerOutreachAction(_: ActionState, fd: FormData): Promise<ActionState> {
   const ctx = await requireStaff('settings:manage');
   return run(async () => {
     const d = parseForm(z.object({
       enabled: zBool,
-      address: z.string().trim().max(300).regex(/^[^<>]*$/, 'Use plain text').optional(),
+      address: z.string().trim().max(300).optional(),
       replyTo: z.union([z.string().trim().toLowerCase().email('Enter a valid reply email address').max(254), z.literal('')]).optional(),
     }), fd);
     const address = (d.address ?? '').replace(/\s+/g, ' ').trim();
     const replyTo = d.replyTo ?? '';
+    // Left blank, the saved address is kept; anything typed has to be shaped like a postal address.
+    const addressIssue = address ? mailingAddressIssue(address) : null;
+    if (addressIssue) throw new UserError(addressIssue);
     if (d.enabled && (!address || !replyTo)) throw new UserError('To switch the sequence on, enter your mailing address and a reply email address. Commercial email must show a postal address, and partners need a way to answer.');
     await ctx.tx(async (db) => {
       // A field left blank here keeps what is saved: the lead follow-up uses the same two addresses, and they are

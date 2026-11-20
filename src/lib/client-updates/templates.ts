@@ -40,6 +40,20 @@ export function updateSettings(orgSettings: Record<string, unknown> | null | und
 }
 export const anyChannelOn = (s: UpdateSettings, event: UpdateEvent) => s.switches[event].sms || s.switches[event].email;
 
+// ---------------------------------------------------------------- what a text needs beyond the switch and the consent
+/**
+ * Sign-up is open and every text leaves through the deployment's one sending number, so no client update is texted for
+ * a workspace until the platform operator has approved it under the name it has now (src/lib/outreach-approval.ts).
+ * Emails of client updates do not need the approval. This is what staff are told where the state of texts is shown.
+ */
+export const TEXTS_NEED_APPROVAL: Record<'not_approved' | 'renamed', string> = {
+  not_approved: 'No text is being sent from this workspace: the platform operator has not approved it for text messages yet. Client updates by email are not affected.',
+  renamed: 'No text is being sent from this workspace: your business name changed after the platform operator approved it for text messages. The name starts every text, so the operator has to approve it again. Client updates by email are not affected.',
+};
+/** Why a queued text was not sent, as recorded on its row and listed under Settings → Client updates. */
+export const TEXT_NOT_APPROVED = 'The workspace is not approved for text messages';
+export const TEXT_NOT_US_NUMBER = 'Not a US mobile number: texts are sent to US numbers only';
+
 // ---------------------------------------------------------------- limits
 /**
  * Texts go out between 8:00 and 21:00 and wait in the queue outside that.

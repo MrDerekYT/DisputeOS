@@ -1,4 +1,4 @@
-import { AI_OFF, notChargedNote, withAiCredits, type AiCharge } from '../ai/credits';
+import { AI_OFF, notChargedNote, refund, withAiCredits, type AiCharge } from '../ai/credits';
 import type { Db } from '../db';
 import { getProvider, type AiProvider, type Rewritten } from '../ai/provider';
 import { tailorIssue, tailorSafely, type TailorInput } from './tailor';
@@ -39,7 +39,9 @@ export function storedSuggestion(db: Db, letterId: string, version: number): Pro
 /**
  * suggestLetterWording for a saved letter, with the paid result kept on the server: a suggestion already paid for on
  * this version is returned again at no charge (`cost: 0`), and a new one is stored before it is returned, so a lost
- * response or a reload does not lose it. `tx` runs under the caller's own session (ctx.tx).
+ * response or a reload does not lose it. One letter version is charged once: when two requests for the same version
+ * overlap, the one that finds a suggestion already stored gets its credits back and returns the stored one. `tx` runs
+ * under the caller's own session (ctx.tx).
  */
 export async function suggestForLetter(
   x: { orgId: string; userId: string; letterId: string; version: number; body: string } & TailorInput, tx: Tx,
@@ -52,12 +54,25 @@ export async function suggestForLetter(
     return { ok: false, message: `${STALE_SUGGESTION} No AI credits were used.`, ai: { status: 'not_called', cost: 0 } };
   }
   const out = await suggestLetterWording(x, provider);
-  if (out.ok) {
-    await tx((db) => db.run(
+  if (!out.ok) return out;
+  // Nothing is written when another request stored a suggestion for this version first: that one is read back instead.
+  const first = await tx(async (db) => {
+    const wrote = await db.run(
       `insert into public.letter_suggestions (letter_id, version, org_id, body, provider, created_by)
        select l.id, $2, l.org_id, $3, $4, $5 from public.letters l where l.id = $1 on conflict do nothing`,
-      [x.letterId, x.version, out.text, out.provider, x.userId]))
-      .catch((e) => console.error('[ai-credits] paid letter suggestion could not be stored', x.letterId, (e as Error).message));
+      [x.letterId, x.version, out.text, out.provider, x.userId]);
+    return wrote ? null : storedSuggestion(db, x.letterId, x.version);
+  }).catch((e) => { console.error('[ai-credits] paid letter suggestion could not be stored', x.letterId, (e as Error).message); return null; });
+  // Like any stored suggestion, the one read back is offered only while it passes the checks.
+  if (!first || tailorIssue(x.body, first.body, x)) return out;
+  // The version already has its paid suggestion, so this request's charge is given back (tried twice). If the refund
+  // cannot be written, the cost is still reported, so staff are never told credits were returned when they were not.
+  let refunded = false;
+  for (let attempt = 1; attempt <= 2 && !refunded; attempt++) {
+    refunded = await refund(x.orgId, 'letter_suggestion', x.userId, 'This letter version already had a suggestion').then(() => true, (e) => {
+      console.error(`[ai-credits] REFUND FAILED (attempt ${attempt}) org=${x.orgId} letter=${x.letterId} version=${x.version}:`, (e as Error).message);
+      return false;
+    });
   }
-  return out;
+  return { ok: true, text: first.body, provider: first.provider, cost: refunded ? 0 : out.cost };
 }

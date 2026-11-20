@@ -28,14 +28,15 @@ export const KIND_LABEL: Record<LetterKind, string> = {
   specialty_dispute: 'Specialty agency dispute', method_of_verification: 'Request for the reinvestigation procedure',
 };
 
-export const MERGE_FIELDS = ['date', 'client_name', 'client_address', 'ssn_last4_text', 'recipient_name', 'recipient_address', 'item_label', 'creditor', 'account_text', 'bureau', 'reason', 'agency_identity_text', 'agency_item_text', 'fields_text', 'enclosures', 'round_text', 'prior_date', 'dispute_date', 'response_date', 'org_name', 'obsolete_text', 'bankruptcy_text', 'identity_theft_text', 'current_details_text', 'disputed_subject', 'validation_intro', 'validation_cease',
+export const MERGE_FIELDS = ['date', 'client_name', 'client_address', 'ssn_last4_text', 'recipient_name', 'recipient_address', 'item_label', 'creditor', 'account_text', 'bureau', 'reason', 'agency_identity_text', 'agency_item_text', 'fields_text', 'enclosures', 'round_text', 'prior_date', 'dispute_date', 'response_date', 'org_name', 'obsolete_text', 'outdated_subject', 'outdated_what', 'outdated_period', 'bankruptcy_text', 'identity_theft_text', 'current_details_text', 'disputed_subject', 'validation_intro', 'validation_cease',
   // Filled from the letter brief (./brief.ts); each is empty when nothing is on file for it.
   'reported_text', 'history_text', 'enclosed_text', 'notice_text', 'lead_in', 'courtesy'] as const;
 
 /**
  * The heading every letter starts with. {{ssn_last4_text}} is the identification under the sender's address: in a
  * letter to one of the three bureaus, the date of birth and the last four digits of the SSN (./render.ts); elsewhere
- * the SSN digits only when the person drafting asked for them.
+ * the SSN digits only when the person drafting asked for them, and never in the letters written for a debt collector
+ * or in a letter to a specialty agency (createLetter in ./service.ts).
  */
 const HEAD = `{{date}}
 
@@ -184,11 +185,14 @@ ${CLOSE}`,
     request: `of whether these entries are the same obligation and, if they are, update my file so that it is reported once. Please ${RESULTS}.`,
   }),
   bureauTemplate({
-    key: 'outdated_item_en', name: 'Outdated item', description: 'By the reported date of first delinquency, the item appears to be past its reporting period.',
-    subject: 'Item that appears to be past the reporting period',
-    opening: `I am writing under ${SECTION_611} about an item in my credit file that appears to be past the period in which it may be reported (15 U.S.C. § 1681c).`,
+    key: 'outdated_item_en', name: 'Outdated item', description: 'By the reported date of first delinquency, the item appears to be past its reporting period. For an account that is only late, the letter is about that late payment information: the account itself stays reportable.',
+    // {{outdated_subject}}, {{outdated_what}} and {{outdated_period}} (./render.ts) name the whole item for a collection
+    // or a charge-off. For an account that is only late they name the late payment information from the reported date
+    // and nothing more: 15 U.S.C. § 1681c(a)(5) ages each adverse item from its own date and the account stays reportable.
+    subject: '{{outdated_subject}}',
+    opening: `I am writing under ${SECTION_611} about {{outdated_what}} in my credit file that appears to be past the period in which it may be reported (15 U.S.C. § 1681c).`,
     extra: '{{obsolete_text}}',
-    request: `of the date of first delinquency reported for this item and, if its reporting period has ended, update my file accordingly. Please ${RESULTS}.`,
+    request: `of the date of first delinquency reported for this item and, if {{outdated_period}} has ended, update my file accordingly. Please ${RESULTS}.`,
   }),
   bureauTemplate({
     key: 'bankruptcy_included_en', name: 'Account included in bankruptcy', description: 'The client says the account was part of their recorded bankruptcy and it is not reported that way.',
@@ -229,14 +233,16 @@ Please conduct a review of these entries and send me written confirmation of the
 ${CLOSE}`,
   },
   {
+    // Also sent to a specialty agency, so it carries the identification that agency asks for (nothing more for the
+    // three bureaus) and asks for a copy of "my file": an agency such as ChexSystems keeps no credit report.
     key: 'follow_up_en', kind: 'follow_up', language: 'en', recipient: 'bureau', name: 'Follow-up — no response recorded',
     description: 'The reinvestigation period has ended and no response has been recorded.',
-    body: `${HEAD}
+    body: `${SPECIALTY_HEAD}
 Re: Status of my dispute dated {{dispute_date}} — {{item_label}}
 
 To whom it may concern:
 
-On {{dispute_date}} I sent you a dispute about the item above. I have no record of receiving the results of your reinvestigation. Please send me a written update on its status and the results, along with an updated copy of my credit report if my file changed.
+On {{dispute_date}} I sent you a dispute about the item above. I have no record of receiving the results of your reinvestigation. Please send me a written update on its status and the results, along with an updated copy of my file if it changed.
 
 For reference, my dispute stated:
 {{reason}}

@@ -68,9 +68,7 @@ create table if not exists public.partners (
 -- Safe to run again on a database that already has the table with the earlier, stricter check.
 alter table public.partners drop constraint if exists partners_opt_out_check;
 alter table public.partners add constraint partners_opt_out_check check (status <> 'opted_out' or opted_out_at is not null);
--- One row per address per agency: an import cannot add the same address twice, and an address that opted out cannot
--- come back as a new row.
-create unique index if not exists partners_org_email_idx on public.partners (org_id, email);
+-- (The unique key that allows one row per mailbox per agency is created below, once app.email_norm exists.)
 create index if not exists partners_org_status_idx on public.partners (org_id, status, created_at);
 
 -- An opt-out is honoured permanently for the address, for every connection (the system one included): the stamp cannot
@@ -90,6 +88,12 @@ begin
      and (new.id, new.attested_by, new.attested_at, new.created_at) is distinct from (old.id, old.attested_by, old.attested_at, old.created_at) then
     raise exception 'the record of who added a partner cannot be edited';
   end if;
+  -- Where a partner stands in the sequence is written by the scheduled job. A signed-in person records an answer
+  -- (replied, interested, not interested, bounced, asked to stop); none of them can put an address that bounced, or
+  -- one whose sequence is over, back in line for another email.
+  if current_user = 'disputeos_rls' and new.status is distinct from old.status and new.status in ('new', 'in_sequence', 'finished') then
+    raise exception 'where a partner stands in the email sequence is set by the scheduled job only';
+  end if;
   new.updated_at := now();
   return new;
 end $$;
@@ -107,6 +111,19 @@ revoke all on function app.email_norm(text) from public;
 grant execute on function app.email_norm(text) to disputeos_rls;
 -- Opt-outs by normalised address, across every workspace: the scheduled job reads it before each send.
 create index if not exists partners_opted_out_norm_idx on public.partners (app.email_norm(email)) where opted_out_at is not null;
+-- One row per mailbox per agency, read the same way. Every row gets the whole sequence, so dana@gmail.com,
+-- dana+1@gmail.com and d.ana@gmail.com as three rows would write to one person three times over. With this key an
+-- import cannot add the same mailbox twice, in any spelling, and an address that opted out cannot come back as a new row.
+-- A database that ran the earlier version of this file has the key on the literal address (partners_org_email_idx):
+-- running the file again creates the new key and then drops the old one. Should two rows of one agency already be the
+-- same mailbox, creating the new key fails and names them, and the old key stays: remove one row and run the file again.
+create unique index if not exists partners_org_email_norm_idx on public.partners (org_id, app.email_norm(email));
+do $$
+begin
+  if to_regclass('public.partners_org_email_norm_idx') is not null then
+    drop index if exists public.partners_org_email_idx;
+  end if;
+end $$;
 
 -- Which organization a partner belongs to, for the policies below (same shape as app.client_org in 0005).
 create or replace function app.partner_org(target_partner uuid) returns uuid
@@ -132,7 +149,6 @@ create table if not exists public.partner_outreach (
   attempts int not null default 1,
   subject text check (subject is null or char_length(subject) <= 200),
   body text check (body is null or char_length(body) <= 10000),
-  ai_used boolean not null default false,
   provider_ref text,
   error text check (error is null or char_length(error) <= 500),
   claimed_at timestamptz not null default now(),

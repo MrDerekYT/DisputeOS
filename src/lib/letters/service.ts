@@ -29,7 +29,8 @@ export const SPANISH_TEMPLATE = 'This template is written in Spanish. Letters go
  * template named, the letter written for the dispute's situation is used (disputeLetterKey), falling back to the
  * general letter of the dispute's kind when the facts that situation letter rests on are not on file. A template named
  * by the caller is never swapped that way: if its facts are missing, or it was not written for this dispute, the letter
- * is refused. An agency's own template is held to the same rules as the letter it was copied from.
+ * is refused. An agency's own template is held to the same rules as the letter it was copied from, and is refused
+ * while its own text still claims a right the built-in letters no longer claim (missingFactsForOwnTemplate).
  */
 export async function createLetter(
   db: Db, actor: LActor,
@@ -79,6 +80,10 @@ export async function createLetter(
   // A follow-up or a reply about a result is about THIS dispute. An agency's own copy made from the earlier wording
   // prints {{prior_date}}, which on a later round is the round before: it gets this dispute's sent date instead.
   if (tpl.kind === 'follow_up' || tpl.kind === 'investigation_response') values.prior_date = values.dispute_date!;
+  // The letters written for a debt collector (a validation request, a collector communication) never carry the last
+  // four digits of the SSN, whatever was ticked on the form. A specialty agency gets the identification lines its own
+  // page asks for ({{agency_identity_text}}) and not this line on top of them.
+  if (tpl.kind === 'validation_request' || tpl.kind === 'collector_communication' || tpl.kind === 'specialty_dispute' || agency) values.ssn_last4_text = '';
   let body = mergeTemplate(tpl.body, values);
   // An agency's own template may have no {{enclosures}} field. The section is added at the end rather than blocking the letter later.
   if (context.enclosuresNone && !statesEnclosures(body)) body = `${body.trimEnd()}\n\n${values.enclosures}`;

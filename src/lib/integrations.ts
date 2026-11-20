@@ -75,9 +75,9 @@ export function integrationStatus(): Integration[] {
     { key: 'custom_domain', name: 'Custom domains for agency websites', verified: false,
       status: domainsAuto ? 'active' : 'manual',
       detail: domainsAuto
-        ? 'An agency connects a domain it owns on its Website page: the app adds it to the hosting project (Vercel), shows the DNS records to create and marks it connected only when the provider reports it verified and correctly configured. Implemented to the documented API; not yet exercised against the live service from this codebase.'
+        ? 'An agency connects a domain it owns on its Website page: the app adds it to the hosting project (Vercel), shows the DNS records to create and marks it connected only when the provider reports it verified and correctly configured and the workspace’s own TXT record is in the domain’s DNS. Implemented to the documented API; not yet exercised against the live service from this codebase.'
         : `Not connected to the hosting provider (${vercelMissing().join(', ')} not set). An agency can save its domain on its Website page, and it stays “not connected yet” until the platform operator adds it by hand. Every agency website keeps working at its address on this app (/a/<workspace>).`,
-      ...(domainsAuto ? {} : { manualPath: 'The platform operator adds the domain to the hosting project, gives the agency the DNS records, then confirms it with: npm run domain:verify -- <domain>. Steps: docs/DEPLOY-VERCEL.md' }),
+      ...(domainsAuto ? {} : { manualPath: 'The platform operator adds the domain to the hosting project, gives the agency the DNS records (the TXT record shown on its Website page among them), then confirms it with: npm run domain:verify -- <domain> (needs PII_ENCRYPTION_KEY in its environment). Steps: docs/DEPLOY-VERCEL.md' }),
       needs: 'VERCEL_API_TOKEN and VERCEL_PROJECT_ID (plus VERCEL_TEAM_ID when the project belongs to a team). Buying a domain is not built in: the agency buys it from any registrar' },
     { key: 'crm', name: 'External CRM sync', status: 'manual', verified: false, detail: 'No CRM sync is connected.', manualPath: 'Export a client’s full record as JSON from their profile, or read clients and disputes through the API.', needs: 'A specific CRM to sync with, and the integration' },
   ];

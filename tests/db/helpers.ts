@@ -58,7 +58,7 @@ export async function giveIdentity(clientId: string, db?: Db): Promise<void> {
 }
 
 /**
- * The platform operator's approval for unattended outreach (partner emails, lead texts), as `npm run outreach:approve`
+ * The platform operator's approval for unattended outreach (lead emails and texts, partner emails), as `npm run outreach:approve`
  * records it. Dated well in the past by default, so the lower sending rate of a newly approved workspace does not apply.
  */
 export async function approveOutreach(orgId: string, at: Date = new Date(Date.now() - 60 * 86_400_000)): Promise<void> {

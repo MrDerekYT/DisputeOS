@@ -15,7 +15,8 @@ export const maxDuration = 60;
  * Running twice is safe: the jobs skip what is already done.
  * The run stops starting new work after 40 seconds (JOBS_DEADLINE_MS), well inside maxDuration, so the platform never
  * cuts it off in the middle of a send; what was not reached is reported (`notReached`, `outreachCutShort`) and comes
- * first in a later run.
+ * first in a later run. An organization whose own lead emails or client updates were still going out at that moment
+ * stops there too (`unfinished`); what it has left stays queued for a later run.
  * Answers 200 even when an organization's jobs failed; the body lists the failures and `failures` counts them.
  */
 async function handle(req: Request) {

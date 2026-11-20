@@ -5,6 +5,8 @@ import { ActionForm, Check, Field, SubmitButton } from '@/components/forms';
 import { CopyButton } from '@/components/shell-client';
 import { Badge, PageHeader, Section } from '@/components/ui';
 import { requireStaff } from '@/lib/auth/context';
+import { TEXTS_NEED_APPROVAL } from '@/lib/client-updates/templates';
+import { APPROVAL_COLS, outreachApproval, type ApprovalRow } from '@/lib/outreach-approval';
 import { buildSetupChecklist, HUMAN_ONLY, type SetupGroup, type SetupStep, type StepStatus } from '@/lib/setup/checklist';
 import { loadSetupSnapshot } from '@/lib/setup/snapshot';
 import { TEST_SMS_LIMIT } from '@/lib/setup/test-send';
@@ -47,6 +49,8 @@ export default async function SetupPage() {
   const list = buildSetupChecklist(snap);
   const emailReady = list.groups[0]!.steps[0]!.status === 'done' || snap.email.driver === 'log';
   const smsReady = snap.sms.state === 'connected' || snap.sms.state === 'test_only';
+  // No text leaves a workspace the platform operator has not approved under its current name: not to a client, and not this test.
+  const textApproval = outreachApproval(await ctx.tx((db) => db.row<ApprovalRow>(`select ${APPROVAL_COLS} from public.organizations where id = $1`, [ctx.orgId])));
   const HINT: Record<SetupGroup['key'], string> = {
     email: 'Invitations, password resets, client updates and lead follow-ups all go out by email.',
     texts: 'Short updates to clients who agreed to texts. Sent through Twilio.',
@@ -59,10 +63,11 @@ export default async function SetupPage() {
     </ActionForm>
   ) : key === 'sms_test' ? (
     <ActionForm action={sendTestSmsAction} className="mt-3 max-w-sm space-y-3">
-      <Field label="Your mobile number" name="phone" type="tel" inputMode="tel" autoComplete="tel" required placeholder="(555) 234-5678" />
+      <Field label="Your mobile number" name="phone" type="tel" inputMode="tel" autoComplete="tel" required placeholder="(212) 555-0142" />
       <Check name="own" required>This is my own number and I want a test text sent to it</Check>
       <SubmitButton variant="secondary" pendingText="Sending…">Send a test text to me</SubmitButton>
-      <p className="hint">Up to {TEST_SMS_LIMIT.max} a day, to US and Canadian numbers. The number is not saved.{smsReady ? '' : ' Text messaging is not connected yet, so this will say so.'}</p>
+      <p className="hint">Up to {TEST_SMS_LIMIT.max} a day, to US mobile numbers only. The number is not saved.{smsReady ? '' : ' Text messaging is not connected yet, so this will say so.'}</p>
+      {smsReady && textApproval !== 'approved' && <p className="hint">{TEXTS_NEED_APPROVAL[textApproval]} The test text is refused until then too.</p>}
     </ActionForm>
   ) : null;
 

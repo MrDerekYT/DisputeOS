@@ -36,7 +36,18 @@ export interface SendResult {
   provider: 'log' | 'resend' | 'disabled';
   providerRef?: string;
   error?: string;
+  /**
+   * The email service gave no answer (a timeout, a connection that dropped), so it is not known whether it accepted
+   * the email. A sender that must never write to someone twice treats this as "outcome unknown", not as a refusal.
+   */
+  unconfirmed?: boolean;
 }
+
+/**
+ * Failures that can only happen before a connection exists (the name did not resolve, the connection was refused or
+ * never completed), so no part of the request can have reached the email service. Anything else counts as unknown.
+ */
+const NEVER_CONNECTED = new Set(['ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED', 'UND_ERR_CONNECT_TIMEOUT']);
 
 /** In-process record of what the `log` driver "sent" — lets tests assert on emails without a mail server. */
 export const sentLog: Email[] = [];
@@ -56,6 +67,7 @@ export const emailDisabled = (): boolean => getEnv().EMAIL_DRIVER === 'disabled'
  *  - `disabled`: an explicit "no email provider". Nothing is sent and nothing is written anywhere; the result says so,
  *    and callers show the person what to do instead (for example, hand over an invitation link themselves).
  * Only `resend` delivers. Callers must treat any other provider as "not delivered": see `delivers()`.
+ * A result with `unconfirmed` means the service did not answer: the email may or may not have gone out.
  */
 export async function sendEmail(mail: Email): Promise<SendResult> {
   const env = getEnv();
@@ -74,7 +86,10 @@ export async function sendEmail(mail: Email): Promise<SendResult> {
       if (!res.ok) return { ok: false, provider: 'resend', error: body.message ?? `HTTP ${res.status}` };
       return { ok: true, provider: 'resend', providerRef: body.id };
     } catch (e) {
-      return { ok: false, provider: 'resend', error: (e as Error).message };
+      // No answer arrived. Unless no connection was ever made, the service may still have accepted the email.
+      const code = (e as { cause?: { code?: unknown } }).cause?.code;
+      const neverConnected = typeof code === 'string' && NEVER_CONNECTED.has(code);
+      return { ok: false, provider: 'resend', error: (e as Error).message, ...(neverConnected ? {} : { unconfirmed: true }) };
     }
   }
   if (env.EMAIL_DRIVER === 'disabled') return { ok: false, provider: 'disabled', error: EMAIL_NOT_CONNECTED };
