@@ -7,6 +7,7 @@ import { decryptPII } from '../crypto';
 import type { Db } from '../db';
 import { getEnv } from '../env';
 import { INTAKE_REQUIRED, intakeStatus } from '../intake';
+import { isRealDay } from '../real-day';
 import { loadIntakeDocs } from '../intake-load';
 import type { Evidence } from '../reports/analysis';
 import { dayInZone } from '../util';
@@ -15,13 +16,14 @@ import { buildBrief, sameName, type BriefDisputeRow, type BriefOptions, type Bri
 /**
  * The date of birth on the client's record as a day, or null. It is kept encrypted and is read here only to be stated
  * in a letter to a reporting agency, which asks for it to find the file. A value that cannot be read (a key that is no
- * longer configured, or something that is not a date) is treated as not on file: the letter then carries a marked line.
+ * longer configured, or something that is not a real date, such as 2000-02-31) is treated as not on file: the letter
+ * then carries the marked "[DATE OF BIRTH NEEDED]" line instead of a rolled-over date nobody gave.
  */
-function storedDob(encrypted: string | null): string | null {
+export function storedDob(encrypted: string | null): string | null {
   if (!encrypted) return null;
   try {
     const day = decryptPII(encrypted).trim();
-    return /^\d{4}-\d{2}-\d{2}$/.test(day) && !Number.isNaN(new Date(`${day}T00:00:00Z`).getTime()) ? day : null;
+    return isRealDay(day) ? day : null;
   } catch {
     return null;
   }

@@ -244,6 +244,8 @@ describe('invitations', () => {
     const o = await makeOrg('Portal');
     const clientId = await addClient(o.orgId, 'Casey Client', { status: 'lead' });
     const email = `casey-${uniq()}@client.dev`;
+    // A client's invitation is made for the client's own email (it stops working if that email changes).
+    await withSystem((db) => db.run('update public.clients set email = $2 where id = $1', [clientId, email]));
     const token = await asUser(o.ownerId, (db) => createInviteToken(db, { orgId: o.orgId, email, role: 'client', clientId, invitedBy: o.ownerId }));
     const r = await acceptInvite(token, { fullName: 'Casey Client', password: PASSWORD }, { ip: testIp() });
     if (!r.ok) throw new Error(r.error);

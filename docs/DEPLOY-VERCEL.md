@@ -104,9 +104,11 @@ checks.
 | `TRUSTED_PROXY_HOPS` | `1` | Leave at 1 on Vercel | No |
 | `MAX_UPLOAD_MB` | `4` on Vercel (10 elsewhere) | Largest upload. On Vercel it cannot be set above 4 | No |
 | `DB_POOL_MAX` | `3` on Vercel (10 elsewhere) | Database connections one function instance may hold (1–50) | No |
-| `AI_PROVIDER` | `rules` | `rules` (built-in, no AI service), `anthropic` or `openai` | No |
-| `ANTHROPIC_API_KEY` | unset | With `AI_PROVIDER=anthropic` | **Yes** |
-| `AI_BASE_URL`, `AI_API_KEY`, `AI_MODEL` | unset | With `AI_PROVIDER=openai` (any OpenAI-compatible endpoint); `AI_MODEL` also overrides the Anthropic model | `AI_API_KEY`: **Yes** |
+| `AI_PROVIDER` | `rules` | `rules` (built-in, no AI service), `anthropic` or `openai`. See [Connect AI](#8-connect-ai-optional-and-grant-ai-credits) | No |
+| `ANTHROPIC_API_KEY` | unset | With `AI_PROVIDER=anthropic`. Mark it **Sensitive** | **Yes** |
+| `AI_MODEL` | `claude-opus-5-5` with `anthropic` | The Claude model. Cheaper: `claude-sonnet-5-5` or `claude-haiku-5-5`. Required with `openai` | No |
+| `AI_EFFORT` | `low` | With `anthropic`: how hard the model thinks, `low`, `medium` or `high`. Higher costs more and takes longer | No |
+| `AI_BASE_URL`, `AI_API_KEY` | unset | With `AI_PROVIDER=openai` (any OpenAI-compatible endpoint, with `AI_MODEL`) | `AI_API_KEY`: **Yes** |
 | `STORAGE_DIR` | `.storage` | Not used on Vercel (`STORAGE_DRIVER=db`) | No |
 | `SMS_DRIVER` | `disabled` | `twilio` to send client updates by text. See [Text messages](#text-messages-twilio). `log` is refused in production | No |
 | `TWILIO_ACCOUNT_SID` | unset | With `SMS_DRIVER=twilio`: `AC…` from the Twilio Console | No |
@@ -232,10 +234,37 @@ page. A workspace you have not approved emails no lead and no partner and texts 
 to the workspace's own team and clients (invitations, sign-in emails, client updates by email). Details:
 docs/INTEGRATIONS.md.
 
-## 8. Grant AI credits
+## 8. Connect AI (optional) and grant AI credits
 
-AI wording is optional and metered. With `AI_PROVIDER=rules` (the default) nothing needs credits. If you connect an AI
-provider, add credits to a workspace from your own computer, with the repository checked out and `npm install` done:
+AI wording is optional and metered. With `AI_PROVIDER=rules` (the default) no AI service is called and nothing needs
+credits. The Claude connection is built to the current Anthropic API with the official SDK; it is proven live only once
+`npm run ai:prove` has passed with a real key (docs/INTEGRATIONS.md, "AI provider (Claude)"). To connect it:
+
+1. Create an API key in the Anthropic Console (console.anthropic.com → API keys). Setting a monthly spend limit on the
+   Anthropic side is wise: the provider's bill is not reconciled against the app's credits. Once the account reaches a
+   monthly spending limit, every AI call is refused until the limit resets or is raised in the Anthropic Console: the
+   app keeps its standard wording, gives the credits back, and says "the AI account has reached its monthly spending
+   limit" (the `[ai]` log line shows `code=enforced_spend_limit_reached`).
+2. Vercel → the project → Settings → Environment Variables, for Production (and Preview if you test there):
+   - `AI_PROVIDER` = `anthropic`
+   - `ANTHROPIC_API_KEY` = the key, marked **Sensitive** (it can then not be read back from the dashboard)
+   - optional `AI_MODEL`: `claude-opus-5-5` is the default; `claude-sonnet-5-5` ($2 / $10 per million input / output
+     tokens) and `claude-haiku-5-5` ($0.10 / $0.50) are cheaper than Opus 5.5 ($4 / $20). Write the id exactly so.
+   - optional `AI_EFFORT`: `low` (default), `medium` or `high`.
+
+   Do not set `ANTHROPIC_LOG`; `AI_BASE_URL` and `AI_API_KEY` are only for the OpenAI-compatible option.
+3. Redeploy (Deployments → the latest → Redeploy): environment variables are read when the app starts.
+4. Sign in as an owner or admin, open **Get set up** (Settings → Get set up) and press **Test the AI connection** under
+   "Agency basics". It sends one fixed request with no client data, costs no credits, and shows what the provider
+   answered. The AI step is ticked only after it passes. If it fails, the message says why and what to check ("the AI
+   key was refused", "the AI model … was not found", "the AI service rejected the request (HTTP 400)", "the AI account
+   has reached its monthly spending limit…", "the AI service is busy, try again in a minute"); the Vercel function logs
+   show a line starting with `[ai]` for every call, with the request id and any error code, never the text. For a
+   rejected request, the live proof below prints the service's own explanation.
+5. Grant credits to each workspace that should use AI (below). Every workspace starts at 0, and with 0 credits the
+   model is not called.
+
+Add credits to a workspace from your own computer, with the repository checked out and `npm install` done:
 
 ```bash
 DATABASE_URL='postgresql://postgres.<ref>:<password>@aws-0-<region>.pooler.supabase.com:6543/postgres' \
@@ -247,6 +276,17 @@ The workspace slug is the `org=` part of the client-portal sign-in link shown in
 (`/portal/login?org=<slug>`), or `select name, slug from public.organizations;` in the Supabase SQL editor. The command
 adds one row to the credit ledger and one to the audit log and prints the new balance. It takes no payment; no payment
 processor is connected.
+
+To prove the connection with real calls before relying on it, run the live proof once from your own computer (it
+needs the local test database, `npm run env:setup`, and costs a few cents):
+
+```bash
+AI_PROVIDER=anthropic ANTHROPIC_API_KEY=<key> AI_MODEL=claude-opus-5-5 npm run ai:prove
+```
+
+It makes one real call per AI feature on a made-up client and prints each request and reply (and, for a call that
+failed, the service's own explanation); it fails if any call does not finish or if any of that client's personal
+details appear in a request.
 
 ## 9. Known limits on Vercel
 
@@ -328,7 +368,7 @@ To run the jobs by hand: `curl -H "Authorization: Bearer $CRON_SECRET" https://<
 
 ### Function duration
 Pages and actions that parse reports or call an AI provider allow up to 60 seconds (`maxDuration = 60`), as does the
-jobs route. A very large workspace count could outgrow one 60-second jobs run; the response lists what ran.
+jobs route. One AI call is stopped after 45 seconds, its retry included, so its credits are settled or refunded in time. A very large workspace count could outgrow one 60-second jobs run; the response lists what ran.
 
 ### Connections
 Each function instance holds at most 3 database connections (`DB_POOL_MAX`) and releases idle ones after 5 seconds.
@@ -470,6 +510,9 @@ Not verified, because it needs the real services:
   the cron frequency allowed on your plan, and that multi-line `DATABASE_CA_CERT` survives the dashboard unchanged
   (a single line with `\n` in place of line breaks is also accepted).
 - Resend delivery.
+- The Claude connection: built to the current Anthropic API with the official SDK and tested against a mocked API and
+  a local stand-in only. It is proven live once `npm run ai:prove` has passed with a real key, and from a deployment by
+  the Get set up page's "Test the AI connection".
 - Custom domains: the Vercel domains API (adding, verifying, removing) is implemented to its documentation and tested
   against a mocked API only; routing by `Host` is tested as a pure function and against the database, not behind
   Vercel's edge with a real domain. Check the first agency domain by hand after connecting it.

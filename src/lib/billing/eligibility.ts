@@ -17,7 +17,7 @@
  * count. Whether one sent letter is the whole of "the service … fully performed" under the agency's own contract is a
  * question for the agency and its attorney; this check only refuses the cases where no completed work is on record.
  */
-import { cancellationEndsOn, holidayTableCovers, HOLIDAYS_THROUGH, sayDay, type Day } from '../business-days';
+import { cancellationEndsOn, sayDay, type Day } from '../business-days';
 
 export type HoldCode = 'no_contract' | 'contract_revoked' | 'cancellation_window' | 'client_cancelled' | 'no_completed_work' | 'sold_by_phone';
 
@@ -28,6 +28,13 @@ export interface ChargeInput {
   period: { from: Day; to: Day };
   /** The day the service agreement now in force was signed (the latest one that has not been revoked), or null. */
   contractSignedOn: Day | null;
+  /**
+   * The last day of that agreement's cancellation period as the agreement itself counts it (contractPeriod in
+   * src/lib/compliance/disclosures.ts: the day stored when it was signed, counted from the day the client signed, the
+   * date on the paper for a paper agreement). When given, the later of it and the day counted from contractSignedOn is
+   * used, so the hold never lifts before the day the client's Notice of Cancellation states.
+   */
+  contractCancellationEndsOn?: Day | null;
   /** When there is no agreement in force: the day the last one was revoked, if one was. */
   contractRevokedOn?: Day | null;
   /** clients.status */
@@ -73,11 +80,12 @@ export function chargeEligibility(i: ChargeInput): ChargeEligibility {
       ? { code: 'contract_revoked', text: `The service agreement was revoked on ${sayDay(i.contractRevokedOn)} and no agreement is in force.` }
       : { code: 'no_contract', text: 'No signed service agreement is on record.' });
   } else {
-    ends = cancellationEndsOn(i.contractSignedOn);
+    const counted = cancellationEndsOn(i.contractSignedOn);
+    ends = i.contractCancellationEndsOn && i.contractCancellationEndsOn > counted ? i.contractCancellationEndsOn : counted;
     if (i.chargeDate <= ends) {
       reasons.push({
         code: 'cancellation_window',
-        text: `The service agreement was signed on ${sayDay(i.contractSignedOn)}. The client can cancel through ${sayDay(ends)} (3 business days after signing)${holidayTableCovers(ends) ? '' : `; federal holidays after ${HOLIDAYS_THROUGH} are not counted`}.`,
+        text: `The service agreement was signed on ${sayDay(i.contractSignedOn)}. The client can cancel through ${sayDay(ends)} (3 business days after signing).`,
       });
     }
   }

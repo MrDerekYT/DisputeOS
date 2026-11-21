@@ -53,7 +53,7 @@ const GROUPS: { title: string; lede: string; items: [string, string][] }[] = [
     lede: 'Standard web protections, and a narrow path for anything sent to an AI provider.',
     items: [
       ['Strict content security policy', 'Scripts run only with a per-request nonce, pages cannot be framed by other sites, and connections are upgraded to HTTPS.'],
-      ['Identifiers stripped before AI', 'Personal identifiers are removed before any text leaves the server for an AI provider. AI is optional, and the product works without it.'],
+      ['What reaches an AI provider', 'Letters and progress notes are sent as their connective wording only: every name, address, account, amount, date and dispute statement is replaced by a marker, and the client’s name is never sent. A credit-guide question is sent with the client’s own address, city, ZIP code, SSN last four and date of birth as they are on file, the names the app knows, and, in their common written forms, email addresses, phone numbers, Social Security, card and account numbers, dates, street addresses and amounts masked. Masking works by matching, so anything written another way, such as an address with no street type, is sent as typed, like every other word of the question. AI is optional, and the product works without it.'],
       ['AI output is checked', 'A suggestion is discarded if it changes a number or a date, or contains a guarantee or other blocked claim.'],
     ],
   },

@@ -8,6 +8,7 @@ import { createLetter, currentBody, markSent, setLetterStatus } from '@/lib/lett
 import { decideReport, storeParsedReport } from '@/lib/reports/service';
 import type { ParsedReport, ParsedTradeline } from '@/lib/reports/types';
 import type { Bureau } from '@/lib/util';
+import { recordConsentRows } from './consents';
 import { addClient, asUser, closePool, makeOrg, uniq, withSystem, type TestOrg } from './helpers';
 
 /**
@@ -175,6 +176,8 @@ describe('the facts a letter rests on are checked again when it is sent for appr
     await move(l.id, 'pending_approval');
     await move(l.id, 'approved');
     await ageNotice(n, daysAgo(40));
+    // Recording a letter as sent is a service to the client: it needs the agreements in force (src/lib/agreements.ts).
+    await recordConsentRows(A.orgId, c);
     await asUser(owner.userId, (db) => markSent(db, owner, l.id, 'certified_mail', 'CM-1', daysAgo(10)));
     expect((await letterRow(l.id))!.status).toBe('sent');
   });

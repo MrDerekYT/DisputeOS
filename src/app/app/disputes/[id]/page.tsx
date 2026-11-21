@@ -5,7 +5,8 @@ import { CalendarClock, Check as CheckIcon, FileText, Lightbulb } from 'lucide-r
 import { ActionForm, Check, ConfirmButton, Field, Select, SubmitButton, TextArea } from '@/components/forms';
 import { Badge, DayMeter, DeliveryRecord, EmptyState, Notice, PageHeader, Section, StatusBadge } from '@/components/ui';
 import { requireStaff } from '@/lib/auth/context';
-import { consentStatus } from '@/lib/compliance/disclosures';
+import { loadServiceStatus } from '@/lib/agreements';
+import { sayDay } from '@/lib/business-days';
 import { CATEGORIES, deadlineState, nextSteps, OUTCOME_LABEL, OUTCOMES, PIPELINE, STATUS_LABEL, type DisputeStatus, type Outcome } from '@/lib/disputes/workflow';
 import { staffMembers, memberLabel, DOC_KIND_LABEL } from '@/lib/crm';
 import { businessToday } from '@/lib/letters/service';
@@ -52,14 +53,16 @@ export default async function DisputePage({ params }: { params: Promise<{ id: st
     const d = await db.row<D>(
       `select d.*, c.full_name as client_name, c.preferred_language as client_language, ab.full_name as approved_by_name from public.disputes d join public.clients c on c.id = d.client_id left join public.users ab on ab.id = d.approved_by where d.id = $1`, [id]);
     if (!d) return null;
-    const [events, evidence, letters, docs, consents, tasks, children, team] = await Promise.all([
+    const [events, evidence, letters, docs, service, tasks, children, team] = await Promise.all([
       db.rows<{ id: string; kind: string; from_status: string | null; to_status: string | null; note: string | null; created_at: string; actor: string | null }>(
         `select e.id, e.kind, e.from_status, e.to_status, e.note, e.created_at, u.full_name as actor from public.dispute_events e left join public.users u on u.id = e.actor_id where e.dispute_id = $1 order by e.created_at desc, e.id`, [id]),
       db.rows<{ id: string; label: string; note: string | null; file_name: string | null; document_id: string | null; created_at: string }>(
         `select ev.id, ev.label, ev.note, ev.document_id, ev.created_at, doc.file_name from public.dispute_evidence ev left join public.documents doc on doc.id = ev.document_id where ev.dispute_id = $1 order by ev.created_at`, [id]),
       db.rows<{ id: string; title: string; status: string; current_version: number; created_at: string; sent_at: string | null; sent_on: string | null; sent_method: string | null; tracking_number: string | null; delivery_source: string; carrier_delivered_at: string | null; recorder: string | null; kind: string; received_on: string | null; reply_due_on: string | null; reply_received_on: string | null }>('select l.id, l.title, l.status, l.current_version, l.created_at, l.sent_at, l.sent_on, l.sent_method, l.tracking_number, l.delivery_source, l.carrier_delivered_at, sr.full_name as recorder, l.kind, l.received_on, l.reply_due_on, l.reply_received_on from public.letters l left join public.users sr on sr.id = l.sent_recorded_by where l.dispute_id = $1 order by l.created_at desc', [id]),
       db.rows<{ id: string; file_name: string; kind: string }>('select id, file_name, kind from public.documents where client_id = $1 order by created_at desc limit 50', [d.client_id]),
-      db.rows<{ kind: string; signed_at: string; revoked_at: string | null }>('select kind, signed_at, revoked_at from public.client_consents where client_id = $1', [d.client_id]),
+      // The same gate transitionDispute applies (src/lib/agreements.ts): documents in force, the cancellation period over
+      // (on the agency's day, with the days stored at signing), none of it in a personal workspace.
+      loadServiceStatus(db, d.client_id),
       db.rows<{ id: string; title: string; status: string; due_at: string | null }>("select id, title, status, due_at from public.tasks where dispute_id = $1 order by status, due_at", [id]),
       db.rows<{ id: string; round: number; status: string }>('select id, round, status from public.disputes where parent_dispute_id = $1', [id]),
       staffMembers(db),
@@ -69,13 +72,13 @@ export default async function DisputePage({ params }: { params: Promise<{ id: st
     const idDocs = d.status === 'approved' && (d.target_type === 'bureau' || d.target_type === 'agency') ? intakeSummary(await loadIntake(db, d.client_id)).notAccepted : [];
     // The letter that fits this dispute, from what is on file (no AI). Only before it is sent: afterwards the legal clock block says what can follow.
     const brief = !d.submitted_at && !d.client_confirmed_accurate && !['resolved', 'cancelled'].includes(d.status) && ctx.can('letters:write') ? await loadBrief(db, d.client_id, id) : null;
-    return { d, events, evidence, letters, docs, consents, tasks, children, team, check, idDocs, rec: brief ? recommendLetter(brief) : null };
+    return { d, events, evidence, letters, docs, service: service!, tasks, children, team, check, idDocs, rec: brief ? recommendLetter(brief) : null };
   });
   if (!data) notFound();
-  const { d, events, evidence, letters, docs, consents, tasks, children, team, check, idDocs, rec } = data;
+  const { d, events, evidence, letters, docs, service, tasks, children, team, check, idDocs, rec } = data;
   const agency = specialtyAgency(d.agency);
   const item = parseAgencyItem(d.agency_item);
-  const cs = consentStatus(consents);
+  const cs = service;
   const today = businessToday(); // the agency's calendar day (APP_TIMEZONE), not the UTC date
   const hasApproved = letters.some((l) => (l.status === 'approved' || l.status === 'sent') && l.kind !== 'method_of_verification');
   const steps = nextSteps({ status: d.status, round: d.round, due_at: d.due_at, outcome: d.outcome, hasApprovedLetter: hasApproved, evidenceCount: evidence.length, confirmedAccurate: d.client_confirmed_accurate });
@@ -177,11 +180,11 @@ export default async function DisputePage({ params }: { params: Promise<{ id: st
               {d.status === 'approved' && (
                 <ActionForm action={transitionAction} className="space-y-4">
                   <input type="hidden" name="id" value={d.id} /><input type="hidden" name="to" value="submitted" />
-                  {cs.missing.length > 0 && <Notice tone="bad" title="Cannot submit yet">Required consents missing: {cs.missing.join(', ').replace(/_/g, ' ')}. <Link className="link" href={`/app/clients/${d.client_id}?tab=overview`}>Record them on the client profile.</Link></Notice>}
-                  {cs.inCancellationWindow && <Notice tone="warn" title="Within the 3-business-day cancellation window">The client signed their agreement recently and may still cancel without penalty. Confirm before mailing.</Notice>}
+                  {cs.missing.length > 0 && <Notice tone="bad" title="Cannot submit yet">{cs.clientCancelledOn && `${d.client_name} cancelled their service agreement in the portal on ${sayDay(cs.clientCancelledOn)}. `}Required consents missing: {cs.missing.join(', ').replace(/_/g, ' ')}. <Link className="link" href={`/app/clients/${d.client_id}?tab=overview`}>Record them on the client profile.</Link></Notice>}
+                  {cs.inCancellationWindow && cs.cancellationEndsOn && <Notice tone="bad" title="Cancellation period">{d.client_name} can cancel their service agreement without penalty through {sayDay(cs.cancellationEndsOn)}. No service may be provided before it ends (15 U.S.C. § 1679d(a)(2)), so nothing can be recorded as sent until then.</Notice>}
                   {!hasApproved && <Notice tone="bad" title="No approved letter">Approve a letter for this dispute first.</Notice>}
-                  {/* The delivery form only appears once it can succeed: an approved letter and the required consents. */}
-                  {hasApproved && cs.missing.length === 0 && (<>
+                  {/* The delivery form only appears once it can succeed: an approved letter, the required consents, and the cancellation period over. */}
+                  {hasApproved && cs.missing.length === 0 && !cs.inCancellationWindow && (<>
                   <div className="grid gap-3 sm:grid-cols-2">
                     <Select label="How was it sent?" name="sentMethod" defaultValue="certified_mail" options={[{ value: 'certified_mail', label: 'Certified mail' }, { value: 'first_class_mail', label: 'First-class mail' }, { value: 'portal', label: 'Online portal' }, { value: 'manual', label: 'Other' }]} />
                     <Field label="Date sent" name="sentOn" type="date" defaultValue={today} max={today} required />

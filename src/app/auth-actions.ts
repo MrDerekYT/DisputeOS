@@ -115,11 +115,13 @@ export async function resetPasswordAction(_: ActionState, fd: FormData): Promise
 
 export async function acceptInviteAction(_: ActionState, fd: FormData): Promise<ActionState> {
   return localized(await run(async () => {
-    const d = parseForm(z.object({ token: z.string().min(20).max(200), fullName: z.string().trim().min(2).max(120), password: z.string().min(1).max(200) }), fd);
+    const d = parseForm(z.object({ token: z.string().min(20).max(200), fullName: z.string().trim().min(2).max(120), password: z.string().min(1).max(200), confirm: z.string().max(200).optional(), lang: z.enum(['en', 'es']).optional() }), fd);
+    if (d.confirm !== undefined && d.password !== d.confirm) throw new UserError('The two passwords do not match.');
     const meta = await requestMeta();
-    const r = await acceptInvite(d.token, { fullName: d.fullName, password: d.password }, meta);
+    const r = await acceptInvite(d.token, { fullName: d.fullName, password: d.password, lang: d.lang }, meta);
     if (!r.ok) return { error: r.error };
     await setSessionCookie(r.token, r.role);
-    redirect(r.role === 'client' ? '/portal' : '/mfa/setup');
+    // A new client goes straight into the guided welcome: details, agreements, ID documents.
+    redirect(r.role === 'client' ? '/portal/welcome' : '/mfa/setup');
   }), fd);
 }

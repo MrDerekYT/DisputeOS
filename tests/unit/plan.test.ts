@@ -45,6 +45,11 @@ describe('client action plan', () => {
     expect(s!.detail).toContain('CROA disclosure');
   });
 
+  it('never asks for consents in a personal workspace: the owner makes no agreement with themselves', () => {
+    expect(keys({ self: true, missingConsents: ['Consumer Credit File Rights statement', 'Service agreement'] })).toEqual(['caught-up']);
+    expect(keys({ self: true, reports: 0, missingConsents: ['Service agreement'] })).toEqual(['get-reports']);
+  });
+
   it('counts findings waiting for review', () => {
     expect(buildPlan(base({ findingsToReview: 3 }))[0]).toMatchObject({ key: 'findings', title: 'Review 3 findings', href: `/app/clients/${ID}/compare` });
   });

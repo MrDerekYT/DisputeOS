@@ -1,5 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
-import { anthropicProvider, openAiCompatibleProvider } from '@/lib/ai/provider';
+import { describe, expect, it } from 'vitest';
 import { classifyResponse, progressSummary } from '@/lib/ai/assistant';
 import { assertNoBlockedClaims, findBlockedClaims } from '@/lib/compliance/claims';
 import { consentStatus, businessDaysBetween } from '@/lib/compliance/disclosures';
@@ -7,29 +6,7 @@ import { canTransition, deadlineState, nextSteps, responseDueDate, TRANSITIONS, 
 import { mergeTemplate, unresolvedPlaceholders, buildValues, letterItem } from '@/lib/letters/render';
 import { TEMPLATES } from '@/lib/letters/templates';
 
-describe('provider adapters (request shape verified against a mocked fetch only)', () => {
-  it('anthropic: sends the documented Messages API request and parses text blocks', async () => {
-    const f = vi.fn(async () => new Response(JSON.stringify({ content: [{ type: 'text', text: 'Hello' }] }), { status: 200 }));
-    const out = await anthropicProvider('sk-test', 'claude-sonnet-5-5', f as unknown as typeof fetch).complete({ system: 'sys', user: 'hi' });
-    expect(out).toBe('Hello');
-    const [url, init] = f.mock.calls[0] as unknown as [string, RequestInit];
-    expect(url).toBe('https://api.anthropic.com/v1/messages');
-    expect((init.headers as Record<string, string>)['x-api-key']).toBe('sk-test');
-    expect((init.headers as Record<string, string>)['anthropic-version']).toBe('2023-06-01');
-    expect(JSON.parse(init.body as string)).toMatchObject({ model: 'claude-sonnet-5-5', system: 'sys', messages: [{ role: 'user', content: 'hi' }] });
-  });
-  it('openai-compatible: posts chat/completions with a bearer token', async () => {
-    const f = vi.fn(async () => new Response(JSON.stringify({ choices: [{ message: { content: ' Hi ' } }] }), { status: 200 }));
-    expect(await openAiCompatibleProvider('https://api.example.com/v1/', 'k', 'm', f as unknown as typeof fetch).complete({ system: 's', user: 'u' })).toBe('Hi');
-    const [url, init] = f.mock.calls[0] as unknown as [string, RequestInit];
-    expect(url).toBe('https://api.example.com/v1/chat/completions');
-    expect((init.headers as Record<string, string>).authorization).toBe('Bearer k');
-  });
-  it('surfaces HTTP failures so callers can fall back', async () => {
-    const f = (async () => new Response('no', { status: 429 })) as unknown as typeof fetch;
-    await expect(anthropicProvider('k', 'm', f).complete({ system: 's', user: 'u' })).rejects.toThrow(/HTTP 429/);
-  });
-});
+// The provider adapters are tested in tests/unit/ai-anthropic.test.ts (mocked fetch) and tests/live/ai.live.test.ts (live).
 
 describe('reading bureau responses', () => {
   it.each([
@@ -60,6 +37,11 @@ describe('client progress note', () => {
     }
     expect(progressSummary({ ...base, language: 'en' })).toMatch(/Of 6 disputed items, 3 changed \(2 removed, 1 corrected\)/);
     expect(progressSummary({ ...base, language: 'en' })).toMatch(/Results vary/);
+  });
+  it('puts the greeting, which carries the name, on a line of its own', () => {
+    expect(progressSummary({ ...base, language: 'en' }).split('\n')).toEqual(['Hi Jordan,', '', expect.stringMatching(/^Here is where your case stands\. Of 6 disputed items/)]);
+    expect(progressSummary({ ...base, language: 'es' }).split('\n')[0]).toBe('Hola Jordan,');
+    expect(progressSummary({ ...base, firstName: ' ', language: 'en' }).split('\n')[0]).toBe('Hi,');
   });
   it('handles a client with no disputes yet', () => {
     expect(progressSummary({ ...base, total: 0, deleted: 0, updated: 0, verified: 0, waiting: 0, language: 'en' })).toMatch(/have not sent any disputes yet/);

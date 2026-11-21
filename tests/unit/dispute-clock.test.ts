@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { findBlockedClaims } from '@/lib/compliance/claims';
 import {
-  addBusinessDays, addDays, disputeClock, FEDERAL_HOLIDAYS, HOLIDAYS_THROUGH, holidayTableCovers, isBusinessDay, isFederalHoliday, procedureDescriptionDue, receivedDay,
+  addBusinessDays, addDays, disputeClock, federalHolidays, isBusinessDay, isFederalHoliday, procedureDescriptionDue, receivedDay,
   noResponseAfter, reinvestigationDue, resultsNoticeDue, toDay, withinOriginalPeriod, type Day,
 } from '@/lib/disputes/clock';
 import { complaintSummary, escalationBasis, escalationSteps, NO_RESPONSE_COPY, type ComplaintFacts, type EscalationInput } from '@/lib/disputes/next-steps';
@@ -34,17 +34,56 @@ function holidaysByRule(y: number): Day[] {
   ];
 }
 
-describe('federal holiday table', () => {
-  it('matches the statutory rules for every year it covers, including days observed in the neighbouring year', () => {
-    const years = Object.keys(FEDERAL_HOLIDAYS).map(Number);
-    expect(years).toEqual([2025, 2026, 2027, 2028, 2029, 2030]);
-    expect(HOLIDAYS_THROUGH).toBe(2030);
-    const table = Object.values(FEDERAL_HOLIDAYS).flat().sort();
-    // New Year's Day 2031 (a Wednesday) is not observed in 2030; New Year's Day 2028 (a Saturday) is observed on 2027-12-31.
-    const ruled = [...years, 2031].flatMap(holidaysByRule).filter((d) => d >= '2025-01-01' && d <= '2030-12-31').sort();
-    expect(table).toEqual(ruled);
-    for (const [y, days] of Object.entries(FEDERAL_HOLIDAYS)) for (const d of days) expect(d.slice(0, 4), d).toBe(y);
-    for (const d of table) expect(weekday(d) !== 0 && weekday(d) !== 6, d).toBe(true); // observed days are never a weekend
+/**
+ * The federal holidays as the U.S. Office of Personnel Management published them, on the day each is observed
+ * (https://www.opm.gov/policy-data-oversight/pay-leave/federal-holidays/). The app computes holidays by rule
+ * (federalHolidays in src/lib/disputes/clock.ts); this list, which used to be the app's own table, is kept here only to
+ * check the rule against the published dates.
+ */
+const OPM_PUBLISHED: Record<number, Day[]> = {
+  2025: ['2025-01-01', '2025-01-20', '2025-02-17', '2025-05-26', '2025-06-19', '2025-07-04', '2025-09-01', '2025-10-13', '2025-11-11', '2025-11-27', '2025-12-25'],
+  2026: ['2026-01-01', '2026-01-19', '2026-02-16', '2026-05-25', '2026-06-19', '2026-07-03', '2026-09-07', '2026-10-12', '2026-11-11', '2026-11-26', '2026-12-25'],
+  2027: ['2027-01-01', '2027-01-18', '2027-02-15', '2027-05-31', '2027-06-18', '2027-07-05', '2027-09-06', '2027-10-11', '2027-11-11', '2027-11-25', '2027-12-24', '2027-12-31'],
+  2028: ['2028-01-17', '2028-02-21', '2028-05-29', '2028-06-19', '2028-07-04', '2028-09-04', '2028-10-09', '2028-11-10', '2028-11-23', '2028-12-25'],
+  2029: ['2029-01-01', '2029-01-15', '2029-02-19', '2029-05-28', '2029-06-19', '2029-07-04', '2029-09-03', '2029-10-08', '2029-11-12', '2029-11-22', '2029-12-25'],
+  2030: ['2030-01-01', '2030-01-21', '2030-02-18', '2030-05-27', '2030-06-19', '2030-07-04', '2030-09-02', '2030-10-14', '2030-11-11', '2030-11-28', '2030-12-25'],
+};
+
+describe('federal holidays, computed by rule (LEG-16)', () => {
+  it('gives exactly the dates OPM published, including days observed in the neighbouring year', () => {
+    for (const [y, days] of Object.entries(OPM_PUBLISHED)) expect(federalHolidays(Number(y)), y).toEqual(days);
+    // New Year's Day 2028 (a Saturday) is observed on 2027-12-31 and counts in 2027; 2028 has no January 1.
+    expect(federalHolidays(2027)).toContain('2027-12-31');
+    expect(federalHolidays(2028)).not.toContain('2028-01-01');
+  });
+
+  it('agrees with a second reading of the statute for every year from 2021 to 2100, and never lands on a weekend', () => {
+    for (let y = 2021; y <= 2100; y++) {
+      const ruled = [y, y + 1].flatMap(holidaysByRule).filter((d) => d.startsWith(`${y}-`)).sort();
+      expect(federalHolidays(y), String(y)).toEqual(ruled);
+      for (const d of federalHolidays(y)) {
+        expect(weekday(d) !== 0 && weekday(d) !== 6, d).toBe(true); // observed days are never a weekend
+        expect(isFederalHoliday(d), d).toBe(true);
+      }
+    }
+  });
+
+  it('keeps counting holidays after 2030, where the old table ended', () => {
+    expect(isFederalHoliday('2031-01-01')).toBe(true);  // New Year's Day 2031, a Wednesday
+    expect(isFederalHoliday('2031-11-27')).toBe(true);  // Thanksgiving 2031
+    expect(isBusinessDay('2031-11-27')).toBe(false);
+    expect(isFederalHoliday('2032-12-31')).toBe(true);  // New Year's Day 2033 is a Saturday, observed on Friday
+    expect(isFederalHoliday('2038-12-24')).toBe(true);  // Christmas 2038 is a Saturday, observed on Friday
+    expect(isFederalHoliday('2034-07-04')).toBe(true);
+    expect(addBusinessDays('2031-11-26', 3)).toBe('2031-12-02'); // over Thanksgiving and a weekend
+    expect(resultsNoticeDue('2030-12-27')).toBe('2031-01-06'); // over the weekend and New Year's Day 2031
+  });
+
+  it('counts each holiday only from the year it was made one', () => {
+    expect(federalHolidays(2020)).not.toContain('2020-06-19'); // Juneteenth became a holiday in 2021
+    expect(federalHolidays(2021)).toContain('2021-06-18');     // its first year: June 19, 2021 was a Saturday
+    expect(federalHolidays(1985)).toHaveLength(9);             // before Martin Luther King, Jr.'s Birthday (1986) and Juneteenth
+    expect(federalHolidays(1986)).toContain('1986-01-20');
   });
 
   it('knows the awkward ones', () => {
@@ -56,8 +95,6 @@ describe('federal holiday table', () => {
     expect(isFederalHoliday('2026-11-26')).toBe(true);   // Thanksgiving
     expect(isFederalHoliday('2026-11-27')).toBe(false);  // the day after is an ordinary business day
     expect(isBusinessDay('2026-11-28')).toBe(false);     // Saturday
-    expect(holidayTableCovers('2030-12-31')).toBe(true);
-    expect(holidayTableCovers('2031-01-02')).toBe(false);
   });
 });
 

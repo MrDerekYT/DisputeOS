@@ -2,7 +2,7 @@ import Link from 'next/link';
 import type { Metadata } from 'next';
 import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, CircleDashed, Hand, Wrench } from 'lucide-react';
 import { ActionForm, BrandColorField, Check, Field, SubmitButton } from '@/components/forms';
-import { Badge, DefinitionList, Notice, PageHeader, Section } from '@/components/ui';
+import { Badge, DefinitionList, PageHeader, Section } from '@/components/ui';
 import { requireStaff } from '@/lib/auth/context';
 import { CONSENT_DOCS } from '@/lib/compliance/disclosures';
 import { getEnv } from '@/lib/env';
@@ -16,6 +16,7 @@ import { leadFormPath } from '@/lib/leads';
 import { changePasswordAction, signOutEverywhereAction, updateOrgAction } from './actions';
 import { SETUP_ANCHOR } from '@/lib/setup/checklist';
 import { ClientUpdatesSection } from './client-updates';
+import { AgreementSection } from './agreement';
 
 export const metadata: Metadata = { title: 'Settings' };
 
@@ -61,7 +62,8 @@ export default async function SettingsPage() {
   void sessions;
   const integrations = integrationStatus();
   const agency = org.mode === 'agency';
-  const sections = [['organization', 'Organization'], ...(agency ? [['links', 'Links']] : []), ['security', 'Security'], ...(agency ? [['updates', 'Client updates']] : []), ['integrations', 'Integrations'], ['records', 'Compliance and data']] as [string, string][];
+  // A personal workspace (someone repairing their own credit) makes no service agreement with itself: no Client agreement card.
+  const sections = [['organization', 'Organization'], ...(agency ? [['links', 'Links']] : []), ['security', 'Security'], ...(agency ? [['updates', 'Client updates']] : []), ['integrations', 'Integrations'], ...(agency ? [['agreement', 'Client agreement']] : []), ['records', 'Compliance and data']] as [string, string][];
   return (
     <>
       <PageHeader title="Settings" subtitle="Organization, security, compliance and integrations." />
@@ -124,11 +126,19 @@ export default async function SettingsPage() {
         <p className="mt-2"><Link href="/app/settings/developers" className="link inline-flex items-center gap-1">Developers &amp; connections: API keys, automatic report import and provider status <ChevronRight size={15} aria-hidden /></Link></p>
       </Section>
 
+      {agency && <AgreementSection ctx={ctx} />}
+
       <div id="records" className="mt-8 grid scroll-mt-28 gap-x-8 gap-y-6 xl:grid-cols-2">
-        <Section plain title="Compliance documents" hint="The wording clients are shown and sign. Reference drafts — have your attorney review them.">
-          <ul className="space-y-2.5 text-sm">{CONSENT_DOCS.map((c) => <li key={c.kind} className="flex items-start justify-between gap-3"><span>{c.title}</span><span className="shrink-0 text-xs text-muted">{c.required ? 'Required · ' : ''}v{c.version}</span></li>)}</ul>
-          <div className="mt-4"><Notice tone="warn" title="Not legal advice">The CROA disclosure must use the wording required by 15 U.S.C. § 1679c, contracts must include required terms, and several states require registration or a surety bond. Editing these documents in the app is on the roadmap; today they live in <code>src/lib/compliance/disclosures.ts</code>.</Notice></div>
-        </Section>
+        {agency ? (
+          <Section plain title="Compliance documents" hint="The documents clients are shown and sign, in signing order. A signature in the portal keeps the exact text the client saw. A paper signature your team records keeps the date written on the paper and the app’s text on the day it was recorded, which is not a copy of the paper: keep the signed paper too.">
+            <ul className="space-y-2.5 text-sm">{CONSENT_DOCS.map((c) => <li key={c.kind} className="flex items-start justify-between gap-3"><span>{c.title}</span><span className="shrink-0 text-xs text-muted">{c.required ? 'Required · ' : 'Optional · '}v{c.version}</span></li>)}</ul>
+            <p className="mt-3 text-xs text-muted">The Consumer Credit File Rights statement and the bold statement and Notice of Cancellation in the service agreement are the wording of 15 U.S.C. §§ 1679c–1679e, word for word. Your own terms go in the <a href="#agreement" className="link">client agreement</a> above.</p>
+          </Section>
+        ) : (
+          <Section plain title="Compliance documents" hint="A personal workspace is for working on your own credit file.">
+            <p className="text-sm text-muted">No credit repair agreement, Consumer Credit File Rights statement or cancellation period applies to your own file, so none is asked for before you record a dispute or a letter as sent.</p>
+          </Section>
+        )}
         <Section plain title="Data retention" hint={`Completed or cancelled clients inactive for ${org.settings.retention_days ?? 2555}+ days. Review before deleting.`}>
           {eligible.length === 0 ? <p className="text-sm text-muted">No clients are past your retention period.</p> : (
             <ul className="divide-y divide-line/70 text-sm">{eligible.map((c) => <li key={c.id} className="flex items-center justify-between py-2"><Link className="hover:underline" href={`/app/clients/${c.id}/edit`}>{c.full_name}</Link><span className="text-xs text-muted">{c.status} · last activity {fmtDate(c.last_activity_at)}</span></li>)}</ul>

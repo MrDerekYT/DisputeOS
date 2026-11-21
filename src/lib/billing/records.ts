@@ -10,6 +10,7 @@ import { UserError } from '../errors';
 import { can, PermissionError, type Role } from '../rbac';
 import { dayInZone } from '../util';
 import { monthRange, type Day } from '../business-days';
+import { contractPeriod, type ConsentRow } from '../compliance/disclosures';
 import { chargeEligibility, type ChargeEligibility } from './eligibility';
 import { buildStatement, type Statement, type StatementRows } from './statement';
 
@@ -39,20 +40,26 @@ export async function loadStatement(db: Db, clientId: string, month: string, tz:
 // ------------------------------------------------------------------ charge eligibility
 export interface ChargeCheck extends ChargeEligibility { month: string; chargeDate: Day; soldByPhone: boolean | null }
 
-/** The eligibility of a charge recorded today for work in `month`. Null when the caller cannot see the client. */
+/**
+ * The eligibility of a charge recorded today for work in `month`. Null when the caller cannot see the client. `tz` is
+ * the zone the agency works in (agencyZone in src/lib/agreements.ts): the same day the cancellation period, the
+ * client's Notice of Cancellation and the service gate are counted on.
+ */
 export async function loadChargeCheck(db: Db, clientId: string, month: string, tz: string, now = new Date()): Promise<ChargeCheck | null> {
   const c = await db.row<{ status: string; sold_by_phone: boolean | null }>('select status, sold_by_phone from public.clients where id = $1', [clientId]);
   if (!c) return null;
-  const contracts = await db.rows<{ signed_at: string; revoked_at: string | null }>(
-    "select signed_at, revoked_at from public.client_consents where client_id = $1 and kind = 'croa_contract' order by signed_at desc", [clientId]);
-  // The signing day where the agency works (APP_TIMEZONE), the same "today" the rest of the server uses.
+  const contracts = await db.rows<ConsentRow>(
+    "select kind, signed_at, revoked_at, signed_on::text, cancellation_ends_on::text from public.client_consents where client_id = $1 and kind = 'croa_contract' order by signed_at desc", [clientId]);
+  // The agreement's days as it counts them itself: the day signed and the last day of its period, with the days stored at signing.
   const inForce = contracts.find((r) => !r.revoked_at);
   const revoked = contracts.find((r) => r.revoked_at);
+  const days = inForce ? contractPeriod(inForce, tz) : null;
   const sent = await db.rows<{ on: string }>("select coalesce(sent_on, (sent_at at time zone $2)::date) as on from public.letters where client_id = $1 and status = 'sent'", [clientId, tz]);
   const chargeDate = dayInZone(tz, now);
   const e = chargeEligibility({
     chargeDate, period: monthRange(month), clientStatus: c.status, soldByPhone: c.sold_by_phone,
-    contractSignedOn: inForce ? dayInZone(tz, new Date(inForce.signed_at)) : null,
+    contractSignedOn: days?.signedOn ?? null,
+    contractCancellationEndsOn: days?.endsOn ?? null,
     contractRevokedOn: !inForce && revoked?.revoked_at ? dayInZone(tz, new Date(revoked.revoked_at)) : null,
     lettersSentOn: sent.map((r) => r.on).filter(Boolean),
   });
@@ -104,7 +111,13 @@ export async function setSoldByPhone(db: Db, actor: BActor, clientId: string, so
 // ------------------------------------------------------------------ chargeback evidence pack
 export interface EvidencePack {
   client: { full_name: string; email: string | null; created_at: string; status: string; portal: boolean };
-  consents: { kind: string; version: string; signed_name: string; signed_at: string; revoked_at: string | null; ip: string | null; user_agent: string | null }[];
+  /**
+   * `has_text`: a text is stored with the signature (since migration 0031): for a portal signature the exact text the
+   * client signed, for a paper signature (`recorded_by`, a staff member) the app's text on the recording day, not a copy
+   * of the paper. `signed_on`: the day the client signed (the date written on the paper for a paper signature).
+   * `cancellation_ends_on`: a service agreement's last day to cancel, fixed when it was signed.
+   */
+  consents: { id: string; kind: string; version: string; signed_name: string; signed_at: string; revoked_at: string | null; ip: string | null; user_agent: string | null; has_text: boolean; recorded_by: string | null; signed_on: string | null; cancellation_ends_on: string | null; revoked_reason: string | null }[];
   lettersSent: { title: string; recipient_name: string; sent_on: string | null; sent_at: string | null; sent_method: string | null; tracking_number: string | null; delivery_source: string; carrier_delivered_at: string | null }[];
   communications: { created_at: string; direction: string; channel: string; subject: string | null; status: string }[];
   communicationsTotal: number;
@@ -120,7 +133,9 @@ export async function loadEvidencePack(db: Db, clientId: string): Promise<Eviden
   if (!client) return null;
   return {
     client,
-    consents: await db.rows('select kind, version, signed_name, signed_at, revoked_at, ip, user_agent from public.client_consents where client_id = $1 order by signed_at', [clientId]),
+    consents: await db.rows(
+      `select id, kind, version, signed_name, signed_at, revoked_at, ip, user_agent, text_shown is not null as has_text, recorded_by, signed_on::text, cancellation_ends_on::text, revoked_reason
+         from public.client_consents where client_id = $1 order by signed_at`, [clientId]),
     lettersSent: await db.rows(
       `select title, recipient_name, sent_on, sent_at, sent_method, tracking_number, delivery_source, carrier_delivered_at
          from public.letters where client_id = $1 and status = 'sent' order by coalesce(sent_on, sent_at::date), created_at`, [clientId]),

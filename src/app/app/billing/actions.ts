@@ -8,10 +8,10 @@ import { audit } from '@/lib/audit';
 import { requireStaff } from '@/lib/auth/context';
 import { logEvent } from '@/lib/crm';
 import { PRODUCT } from '@/lib/product';
+import { agencyZone } from '@/lib/agreements';
 import { recordPayment, setSoldByPhone } from '@/lib/billing/records';
 import { isMonth } from '@/lib/business-days';
-import { getEnv } from '@/lib/env';
-import { businessToday } from '@/lib/letters/service';
+import { dayInZone } from '@/lib/util';
 
 const dollars = z.string().trim().regex(/^\d{1,7}(\.\d{1,2})?$/, 'Enter an amount like 99 or 99.50').transform((v) => Math.round(Number(v) * 100));
 
@@ -31,9 +31,12 @@ export async function recordPaymentAction(_: ActionState, fd: FormData): Promise
       }),
       fd,
     );
-    const tz = getEnv().APP_TIMEZONE;
-    const month = isMonth(d.period) ? d.period : businessToday().slice(0, 7);
-    const r = await ctx.tx((db) => recordPayment(db, ctx, { clientId: d.clientId, amountCents: d.amount, method: d.method, note: d.note, subscriptionId: d.subscriptionId || null, month, performed: d.performed, holdAcknowledged: d.ackHold }, tz));
+    // The charge check runs on the agency's own calendar day, the one the client's Notice of Cancellation states.
+    const r = await ctx.tx(async (db) => {
+      const tz = await agencyZone(db, ctx.orgId);
+      const month = isMonth(d.period) ? d.period : dayInZone(tz).slice(0, 7);
+      return recordPayment(db, ctx, { clientId: d.clientId, amountCents: d.amount, method: d.method, note: d.note, subscriptionId: d.subscriptionId || null, month, performed: d.performed, holdAcknowledged: d.ackHold }, tz);
+    });
     revalidatePath(`/app/clients/${d.clientId}`);
     revalidatePath('/app/billing');
     return { ok: r.check.status === 'hold' ? 'Payment recorded. The hold and your acknowledgement are in the audit log.' : 'Payment recorded.' };

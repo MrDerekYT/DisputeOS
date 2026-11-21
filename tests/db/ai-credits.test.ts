@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { polishedProgress, progressSummary } from '@/lib/ai/assistant';
 import { AI_COSTS, AI_OFF, AI_REFUND_PENDING, getBalance, PORTAL_GUIDE_DAILY_CAP, recentLedger, refund, refundUnsettled, spend, withAiCredits } from '@/lib/ai/credits';
 import type { AiProvider } from '@/lib/ai/provider';
 import { buildPaidGuideReply, buildPortalGuideReply } from '@/lib/guide/ask';
@@ -143,6 +144,26 @@ describe('paying for AI results', () => {
     expect(ai.calls).toHaveLength(1);
     expect(await getBalance(o.orgId)).toBe(20 - AI_COSTS.letter_suggestion);
     expect((await rowsOf(o.orgId)).filter((x) => x.reason === 'use')).toHaveLength(1);
+  });
+
+  it('progress note: a rewording outside the courtesy words is not used and costs nothing; a courtesy rewording is charged once', async () => {
+    const o = await makeOrg('NotePolish');
+    await grant(o.orgId, 10);
+    const stats = { firstName: 'Jordan', total: 6, deleted: 2, updated: 1, verified: 1, waiting: 2, draft: 0, language: 'en' as const };
+    const swap = (from: string, to: string) => fake((m) => m.replace(from, to)).provider;
+    for (const promise of ['We will get these negatives off your file.', 'We will win your case.']) {
+      const r = await withAiCredits({ orgId: o.orgId, feature: 'progress_note', actorUserId: o.ownerId }, (p) => polishedProgress(stats, p), swap('We will let you know about each response.', promise));
+      expect(r.ai.status, promise).toBe('refunded');
+      expect(r.result).toMatchObject({ usedAi: false, text: progressSummary(stats) });
+    }
+    const es = await withAiCredits({ orgId: o.orgId, feature: 'progress_note', actorUserId: o.ownerId },
+      (p) => polishedProgress({ ...stats, language: 'es' }, p), swap('Le avisaremos de cada respuesta.', 'Ganaremos su caso.'));
+    expect(es.ai.status).toBe('refunded');
+    expect(await getBalance(o.orgId)).toBe(10);
+    const ok = await withAiCredits({ orgId: o.orgId, feature: 'progress_note', actorUserId: o.ownerId }, (p) => polishedProgress(stats, p), swap('We will let you know about each response.', 'We’ll keep you posted on every response.'));
+    expect(ok.ai).toEqual({ status: 'charged', cost: AI_COSTS.progress_note });
+    expect(ok.result.text).toContain('We’ll keep you posted on every response.');
+    expect(await getBalance(o.orgId)).toBe(10 - AI_COSTS.progress_note);
   });
 
   it('letter suggestion: costs nothing when the rewrite is discarded by the safety checks', async () => {

@@ -9,11 +9,12 @@ const hoursAgo = (h: number) => new Date(Date.parse(NOW) - h * 3_600_000).toISOS
 const complete = (): SetupSnapshot => ({
   email: { driver: 'resend', hasApiKey: true, fromSet: true, testAcceptedAt: hoursAgo(1) },
   sms: { state: 'connected', missing: [], webhookUrl: 'https://app.example.test/api/webhooks/twilio', webhookReachable: true, webhookSeenAt: hoursAgo(2), testAcceptedAt: hoursAgo(1) },
-  agency: { isAgency: true, mailingAddress: true, replyEmail: true, timezoneChosen: true },
+  agency: { isAgency: true, mailingAddress: true, replyEmail: true, timezoneChosen: true, agreementTerms: true },
   jobs: { cronSecretSet: true, lastRunAt: hoursAgo(3), lastRunOk: true },
-  ai: { active: true },
+  ai: { state: 'connected', provider: 'anthropic:claude-opus-5-5', missing: [], testPassedAt: hoursAgo(1), testProvider: 'anthropic:claude-opus-5-5' },
   now: NOW,
 });
+const AI_OFF: SetupSnapshot['ai'] = { state: 'off', provider: 'rules', missing: ['AI_PROVIDER=anthropic', 'ANTHROPIC_API_KEY'], testPassedAt: null, testProvider: null };
 const steps = (s: SetupSnapshot) => Object.fromEntries(buildSetupChecklist(s).groups.flatMap((g) => g.steps).map((x) => [x.key, x])) as Record<string, SetupStep>;
 const edit = (fn: (s: SetupSnapshot) => void) => { const s = complete(); fn(s); return s; };
 
@@ -104,27 +105,57 @@ describe('setup checklist', () => {
     expect(old.detail).toMatch(/more than 48 hours ago/);
   });
 
-  it('AI is optional: it never adds to what is left', () => {
-    const s = edit((x) => { x.ai.active = false; });
-    expect(steps(s).ai).toMatchObject({ status: 'optional' });
+  it('AI switched off is optional: it never adds to what is left', () => {
+    const s = edit((x) => { x.ai = { ...AI_OFF }; });
+    expect(steps(s).ai).toMatchObject({ status: 'optional', missing: ['AI_PROVIDER=anthropic', 'ANTHROPIC_API_KEY'] });
+    expect(steps(s).ai!.detail).toMatch(/nothing depends on it/);
     expect(buildSetupChecklist(s).remaining).toBe(0);
+  });
+
+  it('AI is done only after the connection test passed, with the provider and model in use now', () => {
+    expect(steps(complete()).ai).toMatchObject({ status: 'done' });
+    expect(steps(complete()).ai!.detail).toMatch(/^The connection test passed on Nov 19, 2026 with anthropic:claude-opus-5-5\./);
+    // Connected but never tested: to do, and the page says what the test sends.
+    const untested = steps(edit((x) => { x.ai.testPassedAt = null; x.ai.testProvider = null; })).ai!;
+    expect(untested).toMatchObject({ status: 'todo' });
+    expect(untested.detail).toMatch(/has not passed the connection test here yet\. The test sends one short fixed request with no client data\./);
+    // A pass with another model proves nothing about this one.
+    const moved = steps(edit((x) => { x.ai.provider = 'anthropic:claude-sonnet-5-5'; })).ai!;
+    expect(moved).toMatchObject({ status: 'todo' });
+    expect(moved.detail).toMatch(/the last test passed with anthropic:claude-opus-5-5\. Test it again\./);
+    // A provider chosen without its key: to do, with the missing name, and nothing is tested.
+    const keyless = steps(edit((x) => { x.ai = { state: 'needs_credentials', provider: 'anthropic', missing: ['ANTHROPIC_API_KEY'], testPassedAt: hoursAgo(5), testProvider: 'anthropic:claude-opus-5-5' }; })).ai!;
+    expect(keyless).toMatchObject({ status: 'todo', missing: ['ANTHROPIC_API_KEY'] });
+    expect(keyless.detail).toMatch(/built-in wording is used/);
+    // The test is the host's and the operator's business: it never puts a reminder on an agency's dashboard.
+    expect(buildSetupChecklist(edit((x) => { x.ai.testPassedAt = null; })).actionable).toEqual([]);
   });
 
   it('the counts add up, and every piece missing at once leaves nothing done except nothing', () => {
     const bare: SetupSnapshot = {
       email: { driver: 'disabled', hasApiKey: false, fromSet: false, testAcceptedAt: null },
       sms: { state: 'disabled', missing: ['SMS_DRIVER=twilio'], webhookUrl: 'http://localhost:3000/api/webhooks/twilio', webhookReachable: false, webhookSeenAt: null, testAcceptedAt: null },
-      agency: { isAgency: true, mailingAddress: false, replyEmail: false, timezoneChosen: false },
+      agency: { isAgency: true, mailingAddress: false, replyEmail: false, timezoneChosen: false, agreementTerms: false },
       jobs: { cronSecretSet: false, lastRunAt: null, lastRunOk: false },
-      ai: { active: false },
+      ai: { ...AI_OFF },
       now: NOW,
     };
     const list = buildSetupChecklist(bare);
     expect(list.groups.flatMap((g) => g.steps).filter((x) => x.status === 'done')).toEqual([]);
-    expect(list.groups.map((g) => g.remaining)).toEqual([3, 3, 4]);
-    expect(list.remaining).toBe(10);
-    // Of those ten, only the agency's own details are something this workspace can finish; the rest is the host's.
+    expect(list.groups.map((g) => g.remaining)).toEqual([3, 3, 5]);
+    expect(list.remaining).toBe(11);
+    // Of those eleven, only the agency's own details are something this workspace can finish; the rest is the host's.
     expect(list.actionable).toEqual(['Agency basics']);
+  });
+
+  it('the client agreement terms are an agency basic the workspace finishes itself', () => {
+    const step = (snap: SetupSnapshot) => buildSetupChecklist(snap).groups.find((g) => g.key === 'basics')!.steps.find((x) => x.key === 'agreement_terms');
+    expect(step(complete())).toMatchObject({ status: 'done', href: '/app/settings#agreement' });
+    const without = edit((s) => { s.agency.agreementTerms = false; });
+    expect(step(without)).toMatchObject({ status: 'todo' });
+    expect(buildSetupChecklist(without).actionable).toEqual(['Agency basics']);
+    // A personal workspace has no client agreement.
+    expect(step(edit((s) => { s.agency.isAgency = false; s.agency.agreementTerms = false; }))).toBeUndefined();
   });
 
   it('the dashboard reminder counts only what the workspace itself can finish', () => {

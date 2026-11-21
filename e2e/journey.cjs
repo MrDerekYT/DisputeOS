@@ -7,6 +7,7 @@
 const { chromium } = require('playwright');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
+const { Client: PgClient } = require('pg');
 
 const BASE = process.env.BASE || 'http://localhost:3100';
 const SHOTS = process.env.SHOTS || 'screenshots/e2e';
@@ -59,6 +60,40 @@ const watch = (page, who) => {
   page.on('response', (r) => { if (r.status() >= 500) problems.push(`[${who} http ${r.status()}] ${r.url()}`); });
 };
 const expectText = async (page, text, timeout = 8000) => page.getByText(text, { exact: false }).first().waitFor({ timeout });
+
+/**
+ * No dispute can be recorded as submitted while the client's 3-business-day cancellation period runs (15 U.S.C.
+ * § 1679d(a)(2)), and nothing in the app can date a signature in the past. So, after checking that the app refuses,
+ * the test client's agreements are dated 10 days back directly in the database the server uses: E2E_DATABASE_URL, or
+ * DATABASE_URL (from the environment, or read from .env.local as the dev server does).
+ */
+function e2eDatabaseUrl() {
+  if (!process.env.E2E_DATABASE_URL && !process.env.DATABASE_URL && fs.existsSync('.env.local')) process.loadEnvFile('.env.local');
+  const url = process.env.E2E_DATABASE_URL || process.env.DATABASE_URL;
+  if (!url) throw new Error('Set E2E_DATABASE_URL to the database the server under test uses (needed to date the test agreements before the cancellation period)');
+  return url;
+}
+async function backdateAgreements(clientId, days = 10) {
+  const db = new PgClient({ connectionString: e2eDatabaseUrl() });
+  await db.connect();
+  try {
+    // The days stored with each signature move back with it: the day the client signed (the paper's date) and the last day
+    // of the cancellation period fixed when the agreement was signed, which a recount never shortens.
+    const r = await db.query("update public.client_consents set signed_at = signed_at - make_interval(days => $2::int), signed_on = signed_on - $2::int, cancellation_ends_on = cancellation_ends_on - $2::int where client_id = $1", [clientId, days]);
+    if (!r.rowCount) throw new Error('no agreements found to date back');
+  } finally { await db.end(); }
+}
+/** The agency's client agreement terms (Settings → Client agreement): the service agreement is built from them. */
+async function saveAgreementTerms(page) {
+  await page.goto(BASE + '/app/settings#agreement');
+  await page.getByLabel('Principal business address').fill('500 Bayshore Blvd, Suite 210, Tampa, FL 33606');
+  await page.locator('textarea[name=services]').fill('We review your three credit reports with you, prepare dispute letters for the items you choose, track each investigation and report every response to you in your portal.');
+  await page.locator('textarea[name=paymentTerms]').fill('A monthly fee of $99.00, charged on the 1st of each month for the work fully performed in the month before.');
+  await page.getByLabel('Total of all payments (USD)').fill('594.00');
+  await page.getByLabel('How long the services should take').fill('About 6 months from the date you sign.');
+  await page.getByRole('button', { name: 'Save client agreement' }).click();
+  await expectText(page, 'Client agreement saved');
+}
 
 const EXPERIAN = `Experian Credit Report
 Report Date: 01/15/2026
@@ -147,6 +182,13 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
       if (/\$\d|score|612/i.test(body.replace(/Welcome back/, ''))) throw new Error('Unexpected figures on an empty dashboard: ' + body.slice(0, 200));
     });
 
+    await check('the service agreement cannot be recorded before the agency saves its client agreement terms; then it can', async () => {
+      await staff.goto(BASE + '/app/settings');
+      await expectText(staff, 'Not saved yet: no client can sign the service agreement');
+      await saveAgreementTerms(staff);
+      await expectText(staff, 'Clients can sign the service agreement');
+    });
+
     await check('create a client with consents recorded', async () => {
       await staff.goto(BASE + '/app/clients/new');
       await staff.getByLabel('Full legal name').fill('E2E Client');
@@ -160,11 +202,14 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
       await staff.getByLabel('Date of birth').fill('1985-03-03'); await staff.getByLabel('Social Security number').fill('000-00-4321');
       await staff.check('input[name=consentDisclosure]'); await staff.check('input[name=consentContract]'); await staff.check('input[name=consentAuthorization]');
       await staff.getByLabel('Name the client signed with').fill('E2E Client');
+      // Paper signatures are recorded with the date written on the paper (today, in UTC: never in the future for the app).
+      await staff.getByLabel('Date written on the signed paper').fill(new Date().toISOString().slice(0, 10));
       await staff.getByRole('button', { name: 'Create client' }).click();
       await staff.waitForURL(/\/app\/clients\/[0-9a-f-]{36}$/);
       clientUrl = staff.url();
       await expectText(staff, 'E2E Client');
-      await expectText(staff, 'Signed');
+      await expectText(staff, 'Signed on paper on');
+      await expectText(staff, 'App’s text when recorded (PDF)'); // the stored text is the app's on the recording day, not a copy of the paper
     });
 
     await check('invalid input is rejected with a clear message', async () => {
@@ -240,6 +285,13 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
       await staff.screenshot({ path: `${SHOTS}/05-letter.png`, fullPage: true, caret: 'initial' });
     });
 
+    await check('nothing is recorded as sent while the client can still cancel (3 business days after signing)', async () => {
+      await staff.goto(disputeUrl);
+      await expectText(staff, 'can cancel their service agreement without penalty through');
+      if (await staff.getByRole('button', { name: 'Record submission' }).count()) throw new Error('submission offered inside the cancellation period');
+      await backdateAgreements(clientUrl.split('/').pop()); // signed 10 days ago: the period is over
+    });
+
     await check('submit the dispute: 30-day clock starts, letter marked sent', async () => {
       await staff.goto(disputeUrl);
       await staff.getByLabel('Send without the identity documents').check(); // no identity documents on file yet: an explicit yes is required
@@ -265,17 +317,21 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
       for (const s of ['Ready for review', 'Approved', 'Submitted', 'Response received', 'Resolved']) await expectText(staff, s);
     });
 
-    await check('request a document, then invite the client to the portal', async () => {
+    await check('request a document, then make the client’s welcome link', async () => {
       await staff.goto(clientUrl + '?tab=documents');
       await staff.getByLabel('Note for the client').fill('A clear photo of your ID');
       await staff.getByRole('button', { name: 'Send request' }).click();
       await expectText(staff, 'Request added');
       await staff.goto(clientUrl);
-      await staff.getByRole('button', { name: /Invite to client portal/ }).click();
-      await expectText(staff, 'invitation link'.length ? 'Share this one-time link' : '');
+      await expectText(staff, 'Not invited yet');
+      await staff.getByRole('button', { name: 'Copy welcome link' }).click();
+      await expectText(staff, 'Share this one-time link');
       const t = await staff.locator('main').innerText();
       inviteLink = (t.match(/https?:\/\/\S+\/invite\/\S+/) || [])[0];
-      if (!inviteLink) throw new Error('No invite link shown');
+      if (!inviteLink) throw new Error('No welcome link shown');
+      // A second link replaces the first: only the newest one works.
+      await staff.reload();
+      await expectText(staff, 'Making a new one ends it');
     });
 
     // -------------------------------------------------------------------------------- client portal
@@ -283,20 +339,57 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
     const client = await clientCtx.newPage();
     watch(client, 'client');
 
-    await check('client accepts the invitation and lands in the portal', async () => {
+    await check('client opens the welcome link: the agency’s welcome, the four steps, English and Spanish', async () => {
       await client.goto(inviteLink.replace(/^https?:\/\/[^/]+/, BASE));
+      await expectText(client, 'Welcome, E2E!');
       await expectText(client, 'secure client portal');
       await expectText(client, `E2E Agency ${uniq}`);
       await expectText(client, 'Powered by');
+      for (const s of ['Your details', 'Your agreements', 'Your ID documents', 'about 10 minutes']) await expectText(client, s);
+      await client.getByRole('link', { name: 'Español' }).click();
+      await expectText(client, '¡Le damos la bienvenida, E2E!');
+      await client.getByRole('link', { name: 'English' }).click();
+      await expectText(client, 'Welcome, E2E!');
+    });
+
+    await check('client accepts with a confirmed password and lands in the guided welcome', async () => {
       await client.getByLabel(/^Password/).fill(PASSWORD);
+      await client.getByLabel('Confirm password').fill(PASSWORD + 'x');
       await client.getByRole('button', { name: 'Accept invitation' }).click();
+      await expectText(client, 'The two passwords do not match.');
+      await client.getByLabel(/^Password/).fill(PASSWORD);
+      await client.getByLabel('Confirm password').fill(PASSWORD);
+      await client.getByRole('button', { name: 'Accept invitation' }).click();
+      await client.waitForURL('**/portal/welcome', { timeout: 15000 });
+      await expectText(client, 'Welcome, E2E');
+      // Staff entered the address, date of birth and SSN, and recorded the three paper signatures: the consent to
+      // electronic records is what is left, and it comes first.
+      await expectText(client, 'Document 1 of 4');
+      await expectText(client, 'Consent to electronic records and signatures');
+      await expectText(client, 'Paper copies are free');
+    });
+
+    await check('client opens the PDF copy, gives their consent to electronic records, and can download what they signed', async () => {
+      const pdf = await client.request.get(BASE + '/api/consents/preview/esign');
+      if (pdf.status() !== 200 || !(await pdf.body()).subarray(0, 5).toString().startsWith('%PDF')) throw new Error('reading copy is not a PDF: ' + pdf.status());
+      await client.getByLabel('I can read this page, and I opened the PDF copy').check();
+      await client.getByLabel('Type your full legal name to sign').fill('E2E Client');
+      await client.getByLabel('I have read this and agree').check();
+      await client.getByRole('button', { name: 'Sign', exact: true }).click();
+      await client.waitForURL(/\/portal\/welcome\?step=agreements&signed=/, { timeout: 15000 });
+      await expectText(client, 'Signed. Thank you.');
+      await expectText(client, 'All four agreements are signed.');
+      const href = await client.getByRole('link', { name: 'Download a copy' }).first().getAttribute('href');
+      const copy = await client.request.get(BASE + href);
+      if (copy.status() !== 200 || !(await copy.body()).subarray(0, 5).toString().startsWith('%PDF')) throw new Error('signed copy is not a PDF: ' + copy.status());
+      await client.getByRole('link', { name: 'Finish later' }).click();
       await client.waitForURL('**/portal', { timeout: 15000 });
       await expectText(client, 'Hello, E2E');
     });
 
     await check('portal home opens with one clear next step, the stage explained, and the client’s rights', async () => {
       await expectText(client, 'Your next step');
-      await expectText(client, 'Upload what we asked for'); // the ID request is still open
+      await expectText(client, 'Upload your identity documents'); // the welcome steps are not finished: the ID documents are next
       await expectText(client, 'Your rights');
       await expectText(client, 'AnnualCreditReport.com');
       if (!(await client.getByRole('link', { name: 'Upload now' }).isVisible())) throw new Error('no upload call-to-action');
@@ -478,7 +571,7 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
         }
       }
       await client.setViewportSize({ width: 390, height: 844 });
-      for (const p of ['/portal', '/portal/disputes', '/portal/messages', '/portal/profile']) {
+      for (const p of ['/portal', '/portal/welcome', '/portal/welcome?step=documents', '/portal/disputes', '/portal/messages', '/portal/profile']) {
         await client.goto(BASE + p);
         const over = await client.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
         if (over > 2) throw new Error(`phone ${p} overflows by ${over}px`);

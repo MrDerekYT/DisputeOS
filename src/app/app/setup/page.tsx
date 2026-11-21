@@ -9,8 +9,9 @@ import { TEXTS_NEED_APPROVAL } from '@/lib/client-updates/templates';
 import { APPROVAL_COLS, outreachApproval, type ApprovalRow } from '@/lib/outreach-approval';
 import { buildSetupChecklist, HUMAN_ONLY, type SetupGroup, type SetupStep, type StepStatus } from '@/lib/setup/checklist';
 import { loadSetupSnapshot } from '@/lib/setup/snapshot';
+import { TEST_AI_LIMIT } from '@/lib/setup/test-ai';
 import { TEST_SMS_LIMIT } from '@/lib/setup/test-send';
-import { sendTestEmailAction, sendTestSmsAction } from './actions';
+import { sendTestEmailAction, sendTestSmsAction, testAiConnectionAction } from './actions';
 
 export const metadata: Metadata = { title: 'Get set up' };
 
@@ -68,6 +69,11 @@ export default async function SetupPage() {
       <SubmitButton variant="secondary" pendingText="Sending…">Send a test text to me</SubmitButton>
       <p className="hint">Up to {TEST_SMS_LIMIT.max} a day, to US mobile numbers only. The number is not saved.{smsReady ? '' : ' Text messaging is not connected yet, so this will say so.'}</p>
       {smsReady && textApproval !== 'approved' && <p className="hint">{TEXTS_NEED_APPROVAL[textApproval]} The test text is refused until then too.</p>}
+    </ActionForm>
+  ) : key === 'ai' && snap.ai.state !== 'off' ? (
+    <ActionForm action={testAiConnectionAction} className="mt-3">
+      <SubmitButton variant="secondary" pendingText="Testing…">Test the AI connection</SubmitButton>
+      <p className="hint">One short fixed request with no client data. It uses no AI credits. Up to {TEST_AI_LIMIT.max} an hour.{snap.ai.state === 'connected' ? '' : ' AI is not connected yet, so this will say so.'}</p>
     </ActionForm>
   ) : null;
 

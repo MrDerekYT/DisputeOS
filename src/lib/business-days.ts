@@ -1,14 +1,14 @@
 /**
- * Business-day arithmetic for the whole app: one holiday table, one definition of a business day.
+ * Business-day arithmetic for the whole app: one holiday rule, one definition of a business day.
  *
- * The table of US federal holidays (5 U.S.C. § 6103, on the day each is observed) and the counting helpers live in
- * src/lib/disputes/clock.ts, where they were first needed and where the unit test rebuilds every date from the
- * statute's rules. They are re-exported here so code outside the dispute clock does not import from it, and so there
- * is never a second holiday table to keep in step.
+ * The US federal holidays (5 U.S.C. § 6103, each on the day it is observed, computed by rule for any year) and the
+ * counting helpers live in src/lib/disputes/clock.ts, where they were first needed and where the unit test checks the
+ * rule against OPM's published dates. They are re-exported here so code outside the dispute clock does not import from
+ * it, and so there is never a second holiday list to keep in step.
  */
 import { addBusinessDays, type Day } from './disputes/clock';
 
-export { addBusinessDays, addDays, daysBetween, FEDERAL_HOLIDAYS, holidayTableCovers, HOLIDAYS_THROUGH, isBusinessDay, isFederalHoliday, isWeekend, sayDay, toDay, type Day } from './disputes/clock';
+export { addBusinessDays, addDays, daysBetween, federalHolidays, isBusinessDay, isFederalHoliday, isWeekend, sayDay, toDay, type Day } from './disputes/clock';
 
 /**
  * CROA § 407(a) (15 U.S.C. § 1679e(a)): a consumer may cancel a contract with a credit repair organization "at any
