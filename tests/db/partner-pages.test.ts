@@ -44,6 +44,17 @@ import LeadsPage from '@/app/app/leads/page';
 import PartnerUnsubscribePage from '@/app/unsubscribe/partner/[token]/page';
 import { ReferredByBlock } from '@/app/app/clients/[id]/referred-by-block';
 
+/**
+ * Runs `fn` with the clock on Wednesday 18 November 2026, 10:00 in New York (only Date is faked, so the database and
+ * timers run as usual). Partner emails go out on business days only, so what a partner page says is due depends on the
+ * day it is read; this keeps those checks the same on any day the suite runs.
+ */
+async function onABusinessDay<T>(fn: () => Promise<T>): Promise<T> {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date('2026-11-18T15:00:00Z'));
+  try { return await fn(); } finally { vi.useRealTimers(); }
+}
+
 const saved = { ...process.env };
 beforeAll(() => { process.env.SMS_DRIVER = 'log'; resetEnvCache(); });
 afterAll(async () => { process.env = { ...saved }; resetEnvCache(); await closePool(); });
@@ -201,14 +212,15 @@ describe('Partners pages render from real data', () => {
       expect(blocked).toContain(`The address of your website (http://localhost:3000/a/${a.slug}) cannot be printed in these emails. Only a first consultation may be called free. Do not call credit repair, reports, scores or results free. (“free”) The introduction and the follow-up link to your published site. Connect your own domain on the Website page, or unpublish the site.`);
       expect(blocked).toContain('Nothing sent. The sequence is not running');
       expect(blocked).not.toContain('On and sending');
-      // The partner's own page says the same: due, but not going out.
-      const own = read(await PartnerPage({ params: Promise.resolve({ id: waiting }) }));
+      // The partner's own page says the same: due, but not going out. The sequence only sends on business days, so the
+      // page is read on a fixed weekday: on a weekend or holiday the step would honestly read "Due <next business day>".
+      const own = read(await onABusinessDay(() => PartnerPage({ params: Promise.resolve({ id: waiting }) })));
       expect(own).toContain('Due, but the sequence is not running');
       expect(own).not.toContain('Goes out with the next scheduled run');
       // Unpublished, the emails carry no link and nothing is in the way.
       await withSystem((db) => db.run("update public.organizations set settings = jsonb_set(settings, '{website,published}', 'false'::jsonb) where id = $1", [a.orgId]));
       expect(await page()).toContain('On and sending');
-      expect(read(await PartnerPage({ params: Promise.resolve({ id: waiting }) }))).toContain('Goes out with the next scheduled run');
+      expect(read(await onABusinessDay(() => PartnerPage({ params: Promise.resolve({ id: waiting }) })))).toContain('Goes out with the next scheduled run');
 
       // Saved text that is not a postal address (from before the forms refused it) reads as none. The page says why,
       // and the form shows the saved text so it can be corrected.
