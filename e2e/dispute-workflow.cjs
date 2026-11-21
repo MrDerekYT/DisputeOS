@@ -270,6 +270,8 @@ async function signUpAgency(browser, label) {
       await staff.goto(clientUrl + '?tab=messages');
       await staff.getByLabel('Message').fill('Synthetic update: Experian replied and updated the balance on this account.');
       await staff.getByRole('button', { name: 'Send' }).click();
+      // Wait until the message is saved before the client opens the portal: the page is read once, not reloaded.
+      await see(staff, 'Message sent to the client portal');
       await client.goto(BASE + '/portal');
       await see(client, 'Synthetic update: Experian replied and updated the balance');
       await client.goto(BASE + '/portal/messages');
