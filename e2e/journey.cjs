@@ -510,6 +510,9 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
       await staff.getByRole('link', { name: /API Created/ }).first().click();
       await staff.getByRole('link', { name: /^Reports/ }).click();
       await expectText(staff, 'Authorization needed first');
+      // ...and so is the upload: staff add a report only with the client's written authorization on file
+      await expectText(staff, 'before you upload a report');
+      if (await staff.getByRole('button', { name: 'Upload & read' }).count()) throw new Error('report upload offered without the client’s authorization');
       // the e2e client has it => pull works
       await staff.goto(clientUrl + '?tab=reports');
       await staff.getByRole('button', { name: 'Pull reports' }).click();

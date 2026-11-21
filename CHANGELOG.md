@@ -9,6 +9,10 @@ Migration `0031_client_intake.sql` was edited before release (new columns `signe
 it again by hand (`psql -v ON_ERROR_STOP=1 -f db/migrations/0031_client_intake.sql`; it is safe to run again) or be
 rebuilt; production never ran it.
 
+- **A credit report staff add needs the client's written authorization**, as automatic import already did: uploading
+  one, filing one in the client's documents, or reading a file staff uploaded as a report. The Reports tab says so in
+  place of the upload form. A report the client uploads in the portal can still be read, and a personal workspace needs
+  no authorization for its own reports.
 - **No service without a contract in force.** Recording a letter as sent now needs the same agreements as submitting a
   dispute, so a contract the client cancelled, or none, stops both. A sent date before the contract was signed, or
   inside its cancellation period, is refused with the dates named.

@@ -14,6 +14,7 @@ import { fireTrigger } from '@/lib/automation/engine';
 import { AgreementError, deletionBlock, notReadyMessage, signAgreement } from '@/lib/agreements';
 import { clientTermsIssue, dollars, parseDollars } from '@/lib/compliance/agreement-terms';
 import { CONSENT_KINDS, type ConsentKind } from '@/lib/compliance/disclosures';
+import { staffReportRefusal } from '@/lib/credit/authorization';
 import { DOC_KINDS, CLIENT_STAGES, CLIENT_STATUSES, logEvent } from '@/lib/crm';
 import { intakeSummary } from '@/lib/intake';
 import { loadIntake } from '@/lib/intake-load';
@@ -348,6 +349,9 @@ export async function uploadDocumentAction(_: ActionState, fd: FormData): Promis
   const ctx = await requireStaff('clients:write');
   return run(async () => {
     const d = parseForm(z.object({ clientId: zUuid, kind: z.enum(DOC_KINDS) }), fd);
+    // A credit report staff add needs the client's written authorization on file (src/lib/credit/authorization.ts).
+    const isReport = d.kind === 'credit_report';
+    if (isReport) { const refused = await ctx.tx((db) => staffReportRefusal(db, d.clientId)); if (refused) throw new UserError(refused); }
     let up;
     try {
       up = await readUpload(fd.get('file') as File | null, ['application/pdf', 'image/png', 'image/jpeg', 'text/plain', 'text/csv']);
@@ -358,6 +362,7 @@ export async function uploadDocumentAction(_: ActionState, fd: FormData): Promis
     const key = await putObject(ctx.orgId, d.clientId, up.bytes);
     try {
       await ctx.tx(async (db) => {
+        if (isReport) { const again = await staffReportRefusal(db, d.clientId); if (again) throw new UserError(again); }
         const doc = await db.row<{ id: string }>(
           `insert into public.documents (org_id, client_id, kind, file_name, mime_type, size_bytes, sha256, storage_key, uploaded_by, source, review_status)
            values ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'staff', 'accepted') returning id`,

@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { authenticateApiKey, createApiKey, revokeApiKey } from '@/lib/api/keys';
+import { currentAuthorization, STAFF_REPORT_AUTHORIZATION_NEEDED, staffReportRefusal } from '@/lib/credit/authorization';
 import { ingestInbound, requestReportPull, type CActor } from '@/lib/credit/pull';
 import { ingestBody, toParsed } from '@/lib/credit/schema';
 import { getProvider, listProviders, sandboxReports } from '@/lib/credit/providers';
@@ -90,6 +91,36 @@ describe('payload validation', () => {
     ['two reports for one bureau', { reports: [{ bureau: 'equifax' }, { bureau: 'equifax' }] }], ['empty creditor', { reports: [{ bureau: 'equifax', tradelines: [{ creditor_name: '' }] }] }],
     ['no reports', { reports: [] }], ['score out of range', { reports: [{ bureau: 'equifax', scores: [{ model: 'x', score: 1200 }] }] }],
   ])('rejects %s', (_n, body) => expect(ingestBody.safeParse(body).success).toBe(false));
+});
+
+describe('a report staff add needs the client’s written authorization (a personal workspace does not)', () => {
+  let clientId: string;
+  beforeAll(async () => { clientId = await addClient(org.orgId, 'Upload Client'); });
+
+  it('is refused with no authorization, allowed with one on file, and refused again once it is revoked', async () => {
+    expect(await asUser(manager.id, (db) => staffReportRefusal(db, clientId))).toBe(STAFF_REPORT_AUTHORIZATION_NEEDED);
+    expect(STAFF_REPORT_AUTHORIZATION_NEEDED).toMatch(/written authorization/);
+    expect(STAFF_REPORT_AUTHORIZATION_NEEDED).toMatch(/uploads in their portal can still be read/);
+    await recordConsentRows(org.orgId, clientId);
+    expect(await asUser(specialist.id, (db) => staffReportRefusal(db, clientId))).toBeNull();
+    expect(await asUser(specialist.id, (db) => currentAuthorization(db, clientId))).not.toBeNull();
+    await withSystem((db) => db.run("update public.client_consents set revoked_at = now() where client_id = $1 and kind = 'fcra_authorization'", [clientId]));
+    expect(await asUser(manager.id, (db) => staffReportRefusal(db, clientId))).toBe(STAFF_REPORT_AUTHORIZATION_NEEDED);
+    expect(await asUser(manager.id, (db) => currentAuthorization(db, clientId))).toBeNull();
+  });
+
+  it('is never refused in a personal workspace, where the account holder works on their own file', async () => {
+    const personal = await makeOrg('Personal Upload');
+    await withSystem((db) => db.run("update public.organizations set mode = 'personal' where id = $1", [personal.orgId]));
+    const self = await addClient(personal.orgId, 'Account Holder');
+    expect(await asUser(personal.ownerId, (db) => staffReportRefusal(db, self))).toBeNull();
+  });
+
+  it('cannot be read across workspaces: another workspace’s client is “not found”', async () => {
+    const other = await makeOrg('Other Upload');
+    const theirs = await addClient(other.orgId, 'Their Client');
+    expect(await asUser(manager.id, (db) => staffReportRefusal(db, theirs))).toBe('Client not found.');
+  });
 });
 
 describe('automatic import is gated by the client’s written authorization', () => {

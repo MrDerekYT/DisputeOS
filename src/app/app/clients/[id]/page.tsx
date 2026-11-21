@@ -18,6 +18,7 @@ import { BUREAU_LABEL, cn, dayInZone, fmtDate, isUuid, money, relTime, type Bure
 import { cancelSubscriptionAction, refundPaymentAction, subscribeClientAction } from '../../billing/actions';
 import { addNoteAction, createTaskAction, markInboundReadAction, polishProgressAction, recordConsentAction, requestDocumentAction, reviewDocumentAction, revokeConsentAction, sendMessageAction, setTaskStatusAction, togglePinAction, uploadDocumentAction } from '../actions';
 import { importDocumentAsReportAction, pullReportAction, uploadReportAction } from '../../reports/actions';
+import { currentAuthorization } from '@/lib/credit/authorization';
 import { listProviders } from '@/lib/credit/providers';
 import { ScoreHistory, type ScoreRow } from '@/components/score-history';
 import { PRODUCT } from '@/lib/product';
@@ -375,10 +376,13 @@ async function ReportsTab({ id, ctx }: { id: string; ctx: Ctx }) {
     specialtyFiles: await db.rows<{ id: string; file_name: string }>("select id, file_name from public.documents where client_id = $1 and kind = 'specialty_report' order by created_at desc", [id]),
     reports: await db.rows<{ id: string; bureau: Bureau; status: string; report_date: string | null; created_at: string; n: number; source: string }>(
       `select r.id, r.bureau, r.status, r.report_date, r.created_at, r.source, (select count(*)::int from public.tradelines t where t.report_id = r.id) as n from public.credit_reports r where r.client_id = $1 order by r.created_at desc`, [id]),
-    authorized: !!(await db.row("select 1 from public.client_consents where client_id = $1 and kind = 'fcra_authorization' and revoked_at is null", [id])),
+    authorized: !!(await currentAuthorization(db, id)),
     pulls: await db.rows<{ id: string; provider: string; mode: string; status: string; created_at: string; error: string | null }>('select id, provider, mode, status, created_at, error from public.report_pulls where client_id = $1 order by created_at desc limit 5', [id]),
   }));
   const providers = listProviders().filter((p) => p.status === 'available');
+  // Staff add a report only with the client's written authorization on file; a personal workspace needs none
+  // (src/lib/credit/authorization.ts). The server refuses the same way.
+  const canAddReport = authorized || ctx.session.orgMode === 'personal';
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_22rem]">
       <div className="space-y-4">
@@ -422,6 +426,9 @@ async function ReportsTab({ id, ctx }: { id: string; ctx: Ctx }) {
       </div>
       <div className="space-y-6">
       <Section title="Upload a report">
+        {!canAddReport ? (
+          <Notice tone="warn" title="Authorization needed first">Record the client’s written authorization to review their credit reports (Overview → Compliance record) before you upload a report. A report the client uploads in their portal can still be read.</Notice>
+        ) : (
         <ActionForm action={uploadReportAction} className="space-y-4">
           <input type="hidden" name="clientId" value={id} />
           <div><label className="label" htmlFor="file">File</label><FileInput id="file" accept=".pdf,.txt,.html,.htm,.csv" maxBytes={maxUploadBytes()} tooLarge={tooLargeMessage(maxUploadMb())} /><p className="hint">PDF, HTML, TXT or CSV · max {maxUploadMb()} MB.</p></div>
@@ -429,6 +436,7 @@ async function ReportsTab({ id, ctx }: { id: string; ctx: Ctx }) {
           <SubmitButton pendingText="Reading report…">Upload & read</SubmitButton>
           <p className="text-xs text-muted">Best results: text-based PDF or the CSV template. Scanned images are not read (no OCR). Files are stored encrypted. <a className="link" href="/templates/report-import.csv">CSV template</a></p>
         </ActionForm>
+        )}
       </Section>
       <Section plain title="Pull automatically" hint="Credit Connect">
         {!authorized ? (
@@ -471,13 +479,17 @@ async function DisputesTab({ id, ctx }: { id: string; ctx: Ctx }) {
 
 // ------------------------------------------------------------------ documents
 async function DocumentsTab({ id, ctx }: { id: string; ctx: Ctx }) {
-  const { docs, reqs, intake } = await ctx.tx(async (db) => ({
+  const { docs, reqs, intake, authorized } = await ctx.tx(async (db) => ({
     intake: await loadIntake(db, id),
+    authorized: !!(await currentAuthorization(db, id)),
     docs: await db.rows<{ id: string; kind: string; file_name: string; size_bytes: number; source: string; review_status: string; review_note: string | null; created_at: string; uploader: string | null; mime_type: string; report_id: string | null }>(
       `select d.id, d.kind, d.file_name, d.size_bytes, d.source, d.review_status, d.review_note, d.created_at, u.full_name as uploader, d.mime_type, (select r.id from public.credit_reports r where r.document_id = d.id order by r.created_at limit 1) as report_id from public.documents d left join public.users u on u.id = d.uploaded_by where d.client_id = $1 order by d.created_at desc`, [id]),
     reqs: await db.rows<{ id: string; kind: string; note: string | null; due_at: string | null; fulfilled_document_id: string | null }>('select id, kind, note, due_at, fulfilled_document_id from public.document_requests where client_id = $1 order by created_at desc', [id]),
   }));
   const kindOpts = DOC_KINDS.map((k) => ({ value: k, label: DOC_KIND_LABEL[k]! }));
+  // A credit report staff uploaded is read (or a new one uploaded) only with the client's written authorization on
+  // file; one the client uploaded can always be read. The server refuses the same way (src/lib/credit/authorization.ts).
+  const canAddReport = authorized || ctx.session.orgMode === 'personal';
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_22rem]">
       <div className="space-y-6">
@@ -495,7 +507,9 @@ async function DocumentsTab({ id, ctx }: { id: string; ctx: Ctx }) {
                   <div className="text-xs text-muted">{DOC_KIND_LABEL[x.kind] ?? x.kind} · {(x.size_bytes / 1024).toFixed(0)} KB · {x.source === 'client' ? 'uploaded by client' : `by ${x.uploader ?? 'staff'}`} · {relTime(x.created_at)}{x.review_status === 'rejected' && x.review_note ? ` · ${x.review_note}` : ''}</div></div>
                 <div className="flex flex-wrap items-center gap-2"><StatusBadge status={x.review_status} />
                   {x.report_id && <Link href={`/app/reports/${x.report_id}`} className="btn-ghost btn-sm">Open report</Link>}
-                  {!x.report_id && x.kind === 'credit_report' && x.review_status !== 'rejected' && ['application/pdf', 'text/plain', 'text/html', 'text/csv'].includes(x.mime_type) && (
+                  {!x.report_id && x.kind === 'credit_report' && x.review_status !== 'rejected' && ['application/pdf', 'text/plain', 'text/html', 'text/csv'].includes(x.mime_type) && x.source !== 'client' && !canAddReport && (
+                    <span className="text-xs text-muted">Reading it needs the client’s authorization</span>)}
+                  {!x.report_id && x.kind === 'credit_report' && x.review_status !== 'rejected' && ['application/pdf', 'text/plain', 'text/html', 'text/csv'].includes(x.mime_type) && (x.source === 'client' || canAddReport) && (
                     <ActionForm action={importDocumentAsReportAction} className="inline-flex flex-col items-end gap-1.5"><input type="hidden" name="id" value={x.id} /><input type="hidden" name="clientId" value={id} />
                       <select name="bureau" defaultValue="" aria-label="Bureau this report is from" className="field !w-auto !py-1 text-xs"><option value="">Detect bureau from file</option>{(Object.keys(BUREAU_LABEL) as Bureau[]).map((b) => <option key={b} value={b}>{BUREAU_LABEL[b]}</option>)}</select><SubmitButton className="btn-sm" pendingText="Reading…">Read as credit report</SubmitButton></ActionForm>)}
                   {x.review_status === 'pending_review' && (<><form action={reviewDocumentAction}><input type="hidden" name="id" value={x.id} /><input type="hidden" name="clientId" value={id} /><input type="hidden" name="decision" value="accepted" /><button className="btn-secondary btn-sm">Accept</button></form>
@@ -509,7 +523,7 @@ async function DocumentsTab({ id, ctx }: { id: string; ctx: Ctx }) {
           <ActionForm action={uploadDocumentAction} resetOnSuccess className="space-y-3">
             <input type="hidden" name="clientId" value={id} />
             <Select label="Type" name="kind" options={kindOpts} defaultValue="other" />
-            <div><label className="label" htmlFor="docfile">File</label><FileInput id="docfile" accept=".pdf,.png,.jpg,.jpeg,.txt,.csv" maxBytes={maxUploadBytes()} tooLarge={tooLargeMessage(maxUploadMb())} /><p className="hint">PDF, PNG, JPG, TXT or CSV · max {maxUploadMb()} MB. Type is checked from the file’s contents.</p></div>
+            <div><label className="label" htmlFor="docfile">File</label><FileInput id="docfile" accept=".pdf,.png,.jpg,.jpeg,.txt,.csv" maxBytes={maxUploadBytes()} tooLarge={tooLargeMessage(maxUploadMb())} /><p className="hint">PDF, PNG, JPG, TXT or CSV · max {maxUploadMb()} MB. Type is checked from the file’s contents.{!canAddReport && ' A credit report can be added once the client’s written authorization is on file.'}</p></div>
             <SubmitButton pendingText="Encrypting…">Upload</SubmitButton>
           </ActionForm>
         </Section>
