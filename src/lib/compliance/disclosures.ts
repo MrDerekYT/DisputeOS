@@ -42,6 +42,18 @@ export const CONSENT_DOCS: readonly ConsentDoc[] = [
 ];
 
 export const consentDoc = (kind: ConsentKind) => CONSENT_DOCS.find((d) => d.kind === kind)!;
+
+/**
+ * In a personal workspace the account holder authorizes the software and the report provider they connect to obtain
+ * their own reports (renderConsent): no one disputes on their behalf, so the document has its own title, used in the
+ * stored text, the PDF, the timeline, the Record form and the evidence pack.
+ */
+export const PERSONAL_AUTHORIZATION_TITLE = 'Authorization to obtain my own credit reports';
+/** The document as it is given: in a personal workspace the authorization carries PERSONAL_AUTHORIZATION_TITLE. */
+export const consentDocFor = (kind: ConsentKind, personal: boolean): ConsentDoc =>
+  (personal && kind === 'fcra_authorization' ? { ...consentDoc(kind), title: PERSONAL_AUTHORIZATION_TITLE } : consentDoc(kind));
+/** A document's title in this workspace (consentDocFor). */
+export const consentTitle = (kind: ConsentKind, personal: boolean) => consentDocFor(kind, personal).title;
 export const isConsentKind = (v: unknown): v is ConsentKind => typeof v === 'string' && (CONSENT_KINDS as readonly string[]).includes(v);
 
 /**
@@ -90,9 +102,11 @@ export interface ConsentContext {
   today: Day;
   /**
    * A personal workspace: the account holder works on their own credit, so there is no agency to authorize. Their
-   * authorization names the software and the report provider they connect, for their own reports.
+   * authorization names the software and the report provider they connect, for their own reports, under its own title
+   * (PERSONAL_AUTHORIZATION_TITLE). Required, so that no caller renders the agency's text for a personal workspace by
+   * leaving it out.
    */
-  personal?: boolean;
+  personal: boolean;
 }
 
 export interface RenderedConsent {
@@ -170,7 +184,7 @@ export const consentText = (title: string, blocks: Block[]) => `${title}\n\n${bl
 
 /** The exact text of a document for one client on one day, or `notReady` for the contract while the agency has saved no terms. */
 export function renderConsent(kind: ConsentKind, c: ConsentContext): RenderResult {
-  const doc = consentDoc(kind);
+  const doc = consentDocFor(kind, c.personal);
   let blocks: Block[];
   if (kind === 'esign') blocks = esignBlocks(c);
   else if (kind === 'croa_disclosure') blocks = disclosureBlocks();
@@ -179,7 +193,7 @@ export function renderConsent(kind: ConsentKind, c: ConsentContext): RenderResul
     blocks = contractBlocks(c, c.terms);
   } else if (kind === 'fcra_authorization') {
     blocks = c.personal
-      ? [p(`I authorize ${PRODUCT.name}, the software I use to work on my own credit, and any credit report provider I connect in it, to obtain my own credit reports and scores when I ask, and to store them in my workspace so that I can review them and prepare my own disputes. I decide whether to send each dispute. I understand I may withdraw this authorization at any time.`)]
+      ? [p(`I authorize ${PRODUCT.name}, the software I use to work on my own credit, and any credit report provider I connect in it, to obtain my own credit reports and scores when I ask or through an integration I set up, and to store them in my workspace so that I can review them and prepare my own disputes. I decide whether to send each dispute. I understand I may withdraw this authorization at any time.`)]
       : [p(`I authorize ${c.agencyName} to review the credit reports I provide, and to prepare and, with my approval, submit disputes about information in my credit files to the consumer reporting agencies and the companies that report on my accounts. I understand I may withdraw this authorization at any time.`)];
   } else blocks = [p(STATIC[kind]!)];
   const text = consentText(doc.title, blocks);

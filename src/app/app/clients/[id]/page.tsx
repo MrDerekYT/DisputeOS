@@ -11,7 +11,7 @@ import { AI_COSTS, getBalance, polishOffer } from '@/lib/ai/credits';
 import { providerStatus } from '@/lib/ai/provider';
 import { PolishNote } from '@/components/polish-note';
 import { requireStaff } from '@/lib/auth/context';
-import { CONSENT_DOCS, isDraftEraSignature, SERVICE_CONSENTS, signatureSource } from '@/lib/compliance/disclosures';
+import { CONSENT_DOCS, consentTitle, isDraftEraSignature, isRendered, SERVICE_CONSENTS, signatureSource, type ConsentDoc } from '@/lib/compliance/disclosures';
 import { CLIENT_STAGES, DOC_KIND_LABEL, DOC_KINDS, memberLabel, STAGE_LABEL, staffMembers } from '@/lib/crm';
 import type { DisputeStatus } from '@/lib/disputes/workflow';
 import { BUREAU_LABEL, cn, dayInZone, fmtDate, isUuid, money, relTime, type Bureau } from '@/lib/util';
@@ -38,7 +38,7 @@ import { ReferredByBlock } from './referred-by-block';
 import { ChargeBlock } from './charge-block';
 import { loadSpecialty } from '@/lib/credit/specialty-reports';
 import { businessToday } from '@/lib/letters/service';
-import { loadServiceStatus, paperDateRange, revokeConfirmation } from '@/lib/agreements';
+import { loadClientAgreements, loadServiceStatus, paperDateRange, renderFor, revokeConfirmation } from '@/lib/agreements';
 import { sayDay } from '@/lib/business-days';
 import { WelcomeBlock } from './welcome-block';
 import { AgreementTermsBlock } from './agreement-terms-block';
@@ -168,6 +168,13 @@ type Ctx = Awaited<ReturnType<typeof requireStaff>>;
 type C = { id: string; full_name: string; email: string | null; phone: string | null; preferred_language: 'en' | 'es'; goals: string | null; source: string | null; created_at: string; last_activity_at: string; portal_user_id: string | null; assigned_to: string | null; ssn_last4: string | null; address: Record<string, string | undefined> };
 
 // ------------------------------------------------------------------ overview
+/**
+ * What staff record here: signatures the client gave on paper, never the consent to electronic records (the client
+ * gives it in the portal); in a personal workspace the account holder's own consents, never the CROA statement or
+ * service agreement.
+ */
+const recordableIn = (personal: boolean) => (x: ConsentDoc) => x.kind !== 'esign' && !(personal && (x.kind === 'croa_disclosure' || x.kind === 'croa_contract'));
+
 async function Overview({ id, ctx, c, first }: { id: string; ctx: Ctx; c: C; first: string }) {
   const d = await ctx.tx(async (db) => {
     const outcomes = await db.row<{ total: number; deleted: number; updated: number; verified: number; waiting: number; unresolved: number }>(
@@ -183,7 +190,11 @@ async function Overview({ id, ctx, c, first }: { id: string; ctx: Ctx; c: C; fir
     const scores = await db.rows<ScoreRow>('select bureau, model, score, scored_on from public.credit_scores where client_id = $1 order by scored_on', [id]);
     // The gate the server applies (src/lib/agreements.ts): the documents missing and the cancellation period, counted on
     // the agency's own calendar day with the days stored at signing. A personal workspace has none of it.
-    return { o: outcomes!, consents, events, requests, upcoming, tasks, scores, plan: await loadPlanInput(db, id), cs: (await loadServiceStatus(db, id))! };
+    const cs = (await loadServiceStatus(db, id))!;
+    // In a personal workspace the account holder reads each document before giving it: its exact text, as it is stored.
+    const ag = cs.personal ? await loadClientAgreements(db, ctx.orgId, id) : null;
+    const toGive = ag ? CONSENT_DOCS.filter((x) => recordableIn(true)(x) && !ag.inForce.includes(x.kind)).map((x) => renderFor(ag, x.kind)).filter(isRendered) : [];
+    return { o: outcomes!, consents, events, requests, upcoming, tasks, scores, plan: await loadPlanInput(db, id), cs, toGive };
   });
   const cs = d.cs;
   const personal = cs.personal;
@@ -193,9 +204,7 @@ async function Overview({ id, ctx, c, first }: { id: string; ctx: Ctx; c: C; fir
   const now = new Date();
   const quiet = !cs.missing.length && !d.requests.length && !d.tasks.length && !cs.inCancellationWindow;
   const paperDates = paperDateRange(dayInZone(cs.tz));
-  // Staff record paper signatures only: never the consent to electronic records (the client gives it in the portal),
-  // and in a personal workspace never the CROA statement or service agreement.
-  const recordable = CONSENT_DOCS.filter((x) => x.kind !== 'esign' && !(personal && (x.kind === 'croa_disclosure' || x.kind === 'croa_contract')));
+  const recordable = CONSENT_DOCS.filter(recordableIn(personal));
   // Which documents the record lists: an agency's required ones and whatever is on file; in a personal workspace only what is on file.
   const listed = CONSENT_DOCS.filter((x) => (!personal && x.required) || d.consents.some((k) => k.kind === x.kind));
   return (
@@ -292,7 +301,7 @@ async function Overview({ id, ctx, c, first }: { id: string; ctx: Ctx; c: C; fir
               const src = rec ? signatureSource(rec, personal) : null;
               return (
                 <li key={doc.kind} className="flex items-start justify-between gap-3 text-sm">
-                  <div className="min-w-0"><div className="font-medium leading-snug">{doc.title}</div>
+                  <div className="min-w-0"><div className="font-medium leading-snug">{consentTitle(doc.kind, personal)}</div>
                     <div className="text-xs text-muted">{rec ? (src === 'paper'
                       ? <>Signed on paper{rec.signed_on ? ` on ${fmtDate(rec.signed_on)}` : ''} as “{rec.signed_name}” · recorded by staff on {recordedOn}{rec.has_text && <> · <a className="link" href={`/api/consents/${rec.id}/pdf`}>App’s text when recorded (PDF)</a></>}</>
                       : src === 'self'
@@ -318,13 +327,21 @@ async function Overview({ id, ctx, c, first }: { id: string; ctx: Ctx; c: C; fir
             <summary className="link cursor-pointer text-sm">Record a consent</summary>
             <ActionForm action={recordConsentAction} className="mt-3 space-y-3">
               <input type="hidden" name="clientId" value={id} />
-              <Select label="Document" name="kind" required options={recordable.map((x) => ({ value: x.kind, label: x.title }))} />
+              <Select label="Document" name="kind" required options={recordable.map((x) => ({ value: x.kind, label: consentTitle(x.kind, personal) }))} />
               {personal ? (
                 <>
-                  {/* A personal workspace: the account holder gives their own consent here, today. No paper, no staff. */}
+                  {/* A personal workspace: the account holder gives their own consent here, today. No paper, no staff. They read the text first. */}
+                  {d.toGive.length > 0 && (
+                    <div role="group" aria-label="The text you give" className="space-y-3 rounded-lg border border-line bg-raised/40 p-3 text-sm">
+                      {d.toGive.map((r) => (
+                        <div key={r.doc.kind}>
+                          <p className="font-semibold leading-snug">{r.doc.title}</p>
+                          {r.blocks.map((b, i) => <p key={i} className="mt-1 text-muted">{b.text}</p>)}
+                        </div>))}
+                    </div>)}
                   <Field label="Your full legal name" name="signedName" defaultValue={c.full_name} required />
                   <SubmitButton variant="secondary">Record</SubmitButton>
-                  <p className="text-xs text-muted">Records that you, the account holder, give this yourself, today. The exact text and its fingerprint are kept with the record.</p>
+                  <p className="text-xs text-muted">Records that you, the account holder, give the document you choose yourself, today, with the text shown above. The exact text and its fingerprint are kept with the record.</p>
                 </>
               ) : (
                 <>

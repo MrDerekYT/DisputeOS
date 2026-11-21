@@ -18,7 +18,7 @@
 import { unprintable, type PdfBlock } from '../letters/pdf';
 import { dayInZone } from '../util';
 import { CROA_CANCEL_STATEMENT, longDay, NOTICE_HEADING } from './croa';
-import { consentDoc, isConsentKind, type Block, type SignatureSource } from './disclosures';
+import { consentTitle, isConsentKind, type Block, type SignatureSource } from './disclosures';
 
 export interface SignedConsent {
   kind: string;
@@ -125,6 +125,7 @@ const TITLE_NOTE: Record<SignatureSource, string> = {
 
 /**
  * The PDF's title. A portal signature's PDF is a signed copy; a paper signature's is the app's text when the signature
- * was recorded, and is never called a signed copy; a personal workspace's own consent is given by the account holder.
+ * was recorded, and is never called a signed copy; a personal workspace's own consent is given by the account holder,
+ * under the title it has there ("Authorization to obtain my own credit reports").
  */
-export const copyTitle = (kind: string, source: SignatureSource = 'portal') => `${isConsentKind(kind) ? consentDoc(kind).title : kind} (${TITLE_NOTE[source]})`;
+export const copyTitle = (kind: string, source: SignatureSource = 'portal') => `${isConsentKind(kind) ? consentTitle(kind, source === 'self') : kind} (${TITLE_NOTE[source]})`;

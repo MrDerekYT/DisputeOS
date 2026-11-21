@@ -171,7 +171,7 @@ describe('LEG-7: a paper signature’s copy is the app’s text when it was reco
     paymentTerms: 'A monthly fee of $99.00, charged for the work fully performed in the month before.', totalCents: 59_400, duration: 'About 6 months.', additional: '', updatedAt: '', updatedBy: '',
   };
   // Signed on paper on Monday 16 November and recorded on Thursday 19 November: the app's text, dated the 16th.
-  const contract = renderConsent('croa_contract', { agencyName: TERMS.legalName, terms: TERMS, clientName: 'Dana Whitfield', today: '2026-11-16' });
+  const contract = renderConsent('croa_contract', { agencyName: TERMS.legalName, terms: TERMS, clientName: 'Dana Whitfield', today: '2026-11-16', personal: false });
   const c = (isRendered(contract) ? contract : null) as RenderedConsent;
   const row = { kind: 'croa_contract', text_shown: c.text, text_sha256: c.sha256, signed_name: 'Dana Whitfield', signed_at: '2026-11-19T15:00:00.000Z', ip: '10.0.0.9', recorded_by: 'staff-user', signed_on: '2026-11-16', revoked_at: null };
 
@@ -195,15 +195,17 @@ describe('LEG-7: a paper signature’s copy is the app’s text when it was reco
   });
 
   it('in a personal workspace the account holder’s own consent is labelled as given by them, with no paper wording', () => {
-    const auth = renderConsent('fcra_authorization', { agencyName: 'Robin', terms: null, clientName: 'Robin Self', today: '2026-11-19' });
+    const auth = renderConsent('fcra_authorization', { agencyName: 'Robin', terms: null, clientName: 'Robin Self', today: '2026-11-19', personal: true });
     const a = (isRendered(auth) ? auth : null) as RenderedConsent;
     const own = { kind: 'fcra_authorization', text_shown: a.text, text_sha256: a.sha256, signed_name: 'Robin Self', signed_at: '2026-11-19T15:00:00.000Z', ip: '10.0.0.9', recorded_by: 'owner-user', signed_on: '2026-11-19', revoked_at: null };
     expect(signatureSource(own, true)).toBe('self');
     expect(signatureSource(own, false)).toBe('paper');
     expect(signatureSource({ recorded_by: null }, false)).toBe('portal');
-    expect(copyTitle('fcra_authorization', 'self')).toBe('Authorization to review credit reports and dispute on my behalf (given by the account holder)');
+    // Its own title: nobody disputes on the account holder's behalf (an agency client's authorization keeps the agency title).
+    expect(copyTitle('fcra_authorization', 'self')).toBe('Authorization to obtain my own credit reports (given by the account holder)');
+    expect(copyTitle('fcra_authorization', 'paper')).toBe("Authorization to review credit reports and dispute on my behalf (app's text when the paper signature was recorded, not a copy of the paper)");
     const texts = signedCopyBlocks(own, NY, 'Robin', 'self').map((b) => b.text);
-    expect(texts[0]).toBe('Authorization to review credit reports and dispute on my behalf');
+    expect(texts[0]).toBe('Authorization to obtain my own credit reports');
     const all = texts.join('\n');
     expect(all).toContain('Given by the account holder, in their own workspace, by typing the name: Robin Self');
     expect(all).toContain('IP address: 10.0.0.9');

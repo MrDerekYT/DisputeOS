@@ -543,17 +543,24 @@ until then, treat the connection as unverified.
     answer is then shown only if it passes the claims guard and the stricter rules for model-written text
     (`findGeneratedClaims` in `src/lib/guide/llm.ts`): no promise ("we promise", "for sure", "le prometemos"); no
     "will", "going to" or Spanish future with a score rising, an item coming off or being removed, or an approval
-    ("this will raise your score", "your score will…", "su puntaje subirá", "will be approved"); no sentence that pairs
-    a word of likelihood, timing or what usually happens (should, expect, likely, probably, about to, on track, soon,
-    will, going to, usually, typically, normally, often, generally, commonly, in most cases, most of the time, tend to,
-    as a rule, many or most people or clients; debería, probablemente, a punto de, pronto, esperar, va a, a verb in the
-    future, normalmente, generalmente, habitualmente, por lo general, suele, a menudo, casi siempre, en la mayoría de
-    los casos, muchas personas) with a result (a score going up, credit or a history getting better or clean, an item
-    coming off or being removed, an approval, good results or loving them: "great results", "you will love the
-    results", "excelentes resultados", "le encantarán los resultados"); and no suggestion to dispute accurate
-    information. These are patterns, not an understanding of the text: a false alarm shows the vetted entry instead,
-    and a result stated with none of those words ("once the errors are fixed, your score improves", "your score could
-    improve") is not caught.
+    ("this will raise your score", "your score will…" but not "what your score will be", "su puntaje subirá", "will be
+    approved"); no sentence that pairs a word of likelihood, timing or what usually happens (should, expect, likely,
+    probably, about to, on track, soon, will, going to, usually, typically, normally, often, oftentimes, frequently,
+    generally, commonly, regularly, routinely, in most, many or a lot of cases or instances, most of the time, most times,
+    nearly or almost always, chances or odds are, a good chance, nine times out of ten, tend to, as a rule, "it is (very)
+    common, typical, usual or normal", not unusual, the majority, a lot of, many or most people, clients or borrowers;
+    debería, probablemente, lo más probable, a punto de, pronto, esperar, va a, a verb in the future, normalmente,
+    generalmente, habitualmente, frecuentemente, comúnmente, por lo general, suele, a menudo, casi siempre, la mayoría de
+    las veces, en muchos casos or muchas ocasiones, "es (muy) común, frecuente, habitual o normal", muchas personas,
+    muchos or la mayoría de nuestros clientes) with a result (a score going up, credit or a history getting better or
+    clean, an item coming off or being removed, "are removed", "have negative items removed", "see collections
+    deleted", "son eliminadas", an approval, good results or loving them: "great results", "you will love the results",
+    "excelentes resultados", "le encantarán los resultados"); and no suggestion to dispute accurate information. Every
+    vetted entry passes all of these rules (tested), so a faithful rewording of it is not discarded. These are
+    patterns, not an understanding of the text: a false alarm shows the vetted entry instead (a negated result beside one
+    of those words, "in many cases, accurate information does not come off your report", is flagged), and a result stated
+    with none of those words ("once the errors are fixed, your score improves", "your score could improve") or with
+    another word for how often ("nine in ten clients see…") is not caught.
   - *Setup connection test* (free): one fixed request, "Reply with the single word CONNECTED and nothing else." No
     client or workspace data.
 - **Setup test.** "Test the AI connection" on the Get set up page, for owners and admins (`settings:manage`). Limits: 5

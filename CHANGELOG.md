@@ -29,10 +29,16 @@ rebuilt; production never ran it.
   longer tells an active client that work cannot start, and the investigation stays on their portal home.
 - **Each client can have their own payment terms and total**, set by staff before the client signs, for agencies
   with more than one plan.
-- **The terms check** refuses promises of removal (including ones that name the bureaus, accounts, bills, loans or
-  inquiries) and payment asked for at signing, on the effective date, at the start of the month for that month's work,
-  or before the work starts; how the agency deletes its own records and honest cancellation terms ("if you cancel
-  before the first letters, you pay nothing") pass.
+- **The terms check** refuses promises of removal in English and Spanish (including ones that name the bureaus,
+  accounts, bills, loans or inquiries, or say an item "comes off" a report) and payment asked for at signing, on the
+  effective date, when the account is set up, at the start of a month or billing period for that period's work, or
+  before the work starts ("Before work begins, you pay $99"). It passes how the agency keeps and deletes its own
+  records ("emails are kept for two years and then deleted"), requests and disclaimers ("we dispute the items you
+  select for correction or deletion", "nothing in this agreement promises the removal of any item"), statements of the
+  reporting law (the seven-year period, putting a deleted item back), security freezes and opt-outs, billing that stops
+  ("if you cancel, we stop billing you right away"), honest cancellation terms ("if you cancel before the first
+  letters, you pay nothing") and "no cobramos nada por adelantado". It is a list of rules: it catches the common
+  wordings, not every one, and counsel should still read the agency's terms.
 - **Federal holidays** are computed by rule for any year, so dates after 2030 still skip them.
 - **Signed copies** say when a character could not be printed in the PDF, and the fingerprint is of the stored text.
 - **Dates of birth** that do not exist (February 31) are refused, and a stored impossible date prints as needed.
@@ -42,7 +48,9 @@ rebuilt; production never ran it.
 - **Portal**: an agreement that changed while open is shown again with a note; no loops while the agency's terms are
   not ready (and no promise of a notification); the credit guide's steps come from the same records as the portal home.
 - **AI**: one attempt may use the whole 45 s, the monthly spending limit has its own message, the progress note's two
-  courtesy sentences may only use courtesy words, and the credit guide masks and refuses more (see the entry below).
+  courtesy sentences may only use courtesy words, and the credit guide masks more and refuses more predictions in
+  English and Spanish ("you're well on your way to a better score", "lo normal es que su puntaje suba"; see the entry
+  below).
 
 ## Client welcome link, guided intake and the agreements (unreleased)
 

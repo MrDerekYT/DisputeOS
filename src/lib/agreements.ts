@@ -27,7 +27,7 @@ import { orgTimezone } from './client-updates/templates';
 import { clientPaymentTerms, clientTermsIssue, parseTerms, termsForClient, type AgreementTerms, type ClientPaymentTerms } from './compliance/agreement-terms';
 import { longDay } from './compliance/croa';
 import {
-  consentDoc, consentStatus, isConsentKind, isCurrentSignature, isRendered, renderConsent, SERVICE_CONSENTS, signingOrderProblem, SIGNING_ORDER,
+  consentStatus, consentTitle, isConsentKind, isCurrentSignature, isRendered, renderConsent, SERVICE_CONSENTS, signingOrderProblem, SIGNING_ORDER,
   type ConsentContext, type ConsentKind, type ConsentRow, type ConsentStatus, type RenderedConsent, type RenderResult, type SignatureSource,
 } from './compliance/disclosures';
 import { getEnv } from './env';
@@ -413,8 +413,8 @@ export async function deletionBlock(db: Db, clientId: string, now = new Date()):
   return `This client signed the Consumer Credit File Rights statement on ${sayDay(signedOn)}. Federal law (15 U.S.C. § 1679c(c)) requires you to keep the signed statement for 2 years, so this client can be deleted from ${sayDay(addDays(keepThrough, 1))}. To stop work for them now, set their status to Cancelled instead.`;
 }
 
-/** The document's title, for messages ("Sign the … first"). */
-export const docTitle = (kind: ConsentKind) => consentDoc(kind).title;
+/** The document's title, for messages ("Sign the … first"); in a personal workspace the authorization's own (consentTitle). */
+export const docTitle = (kind: ConsentKind, personal = false) => consentTitle(kind, personal);
 
 /**
  * What staff confirm before revoking a document. Only the statement, the service agreement and the authorization
@@ -423,5 +423,5 @@ export const docTitle = (kind: ConsentKind) => consentDoc(kind).title;
  */
 export function revokeConfirmation(kind: ConsentKind, personal = false): string {
   const stops = !personal && SERVICE_CONSENTS.includes(kind);
-  return `Revoke “${docTitle(kind)}”? The signed record is marked revoked and cannot be restored${stops ? ', and no dispute can be submitted and no letter recorded as sent for this client until it is signed again' : ''}.`;
+  return `Revoke “${docTitle(kind, personal)}”? The signed record is marked revoked and cannot be restored${stops ? ', and no dispute can be submitted and no letter recorded as sent for this client until it is signed again' : ''}.`;
 }

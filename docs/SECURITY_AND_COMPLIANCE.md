@@ -89,16 +89,66 @@ compliant; state requirements vary and change. **Consult a consumer-finance atto
   through a claims check for contracts (`findContractClaims`: promises of removal or deletion, counts of items removed,
   removal or results in a set time, a "clean" report, guarantees, score promises and numbers, loan approval, tradelines,
   new credit identities, offers to dispute accurate information) and an advance-fee check (`findAdvanceFee`, § 1679b(b):
-  a deposit, retainer, prepayment or setup, enrollment or sign-up fee; payment at signing, on the day or at the time of
-  signing, within hours or days of signing or of the effective date, on the effective date, today, up front or in
-  advance; payment before the work starts or before the first letters are sent; billing at the start of a month for that
-  month's work). An honest negation, disclaimer or request passes ("we cannot guarantee that any item will be deleted", "we
-  ask the bureaus to correct or delete information that cannot be verified", "there is no setup fee", "charged at the end
-  of each month for the work fully performed that month"). The removal rules count only when what is removed is on a
-  credit report (negative items, collections, accounts or items on a credit report, anything "from your credit report"),
-  so the agency can state how it deletes its own records ("when you close your account, we delete your documents within
-  30 days"). Both checks are lists of rules that catch the common wordings, not a legal review; the Settings hints say
-  so. Terms saved before a check existed no longer build an agreement, and Settings says what to change.
+  a deposit, retainer, prepayment or setup, enrollment or sign-up fee; payment at signing, on or the same day as signing,
+  at the time or the moment of signing, once the client has signed, with the signed agreement, within hours or days of
+  signing or of the effective date, on the effective date or the start date, when the agreement takes effect, when or
+  before the account is set up or the enrollment is complete (unless that clause bills at the end of the period or for
+  work performed), later after signing (10 days, two weeks, the first of the month after) unless it
+  pays for work already performed, in the first days or weeks unless for work already performed, today, on day one, at
+  onboarding, up front, in advance, at the outset, at checkout, or right away next to a payment word; payment before the
+  work starts, before the first letters are sent or the reports are reviewed, until or once a payment is received or
+  clears, required to begin or to open a file, a payment that starts or secures the program, or payment at the first
+  consultation; billing at the start of a month, a program or a billing cycle ("each service month", "every 30-day
+  period", "on the 1st for the current month") unless it is for the period before; and in Spanish "al firmar", "el día
+  que firma", "al inscribirse", "por adelantado", "antes de empezar" or "de enviar", "al inicio de cada mes", and a
+  "depósito" or "anticipo"). A time phrase that opens its clause is read with the clause after its comma ("Before work
+  begins, you pay $99").
+  - *Removals.* Every removal word is read as a promise: remove, delete, erase, wipe, purge, expunge and the nouns
+    removal and deletion, in any tense, voice or person ("we will also remove", "accounts are removed from Experian",
+    "we will have your medical bills removed", "our team removes…", "the removal of medical bills"); eliminate, take or
+    knock off, come, fall, drop or roll off, clear, disappear, vanish, go away, be gone, no longer appear and say goodbye
+    to where the clause names a credit file; the Spanish words of the website check ("eliminamos", "vamos a eliminar",
+    "serán eliminadas", "sacamos", but not "sacamos una copia de sus reportes"); and, where the clause names a credit
+    file, "elimina", "eliminar", "eliminación", "remueve", "borra" and "desaparecerán". Spanish removals pass when negated,
+    disclaimed ("no podemos prometer que…"), requested ("solicitamos a los burós que corrijan o eliminen…"), a statement
+    of the law or a condition, or about the agency's own records. It passes only when it is negated ("accurate
+    information cannot be removed", but not "there is no account we cannot remove"), disclaimed within its own clause
+    ("we cannot guarantee that any item will be deleted", but not "we cannot guarantee results, and we will remove…"),
+    or disclaimed by "nothing in this agreement promises…", a request ("we ask the bureaus to correct or delete…", "we
+    request that the bureaus delete…", "our letters demand verification or deletion", "we dispute the items you select
+    for correction or deletion"), a statement of the law ("the bureau must correct or delete information that cannot be
+    verified", the seven- and ten-year reporting periods, "a bureau that deletes an item and later puts it back must
+    notify you"), a possible outcome among others ("a dispute can end with the item verified, updated or deleted"), a
+    condition or question ("if an item is deleted, we let you know", "the bureaus decide whether an item is corrected,
+    updated or deleted", "which items were deleted"), a security freeze, fraud alert, prescreened offer or marketing list
+    the client asks about, or about the agency's own records with nothing of a credit file in its clause (or, for a
+    pronoun object or a passive with no subject of its own, "… then delete them", "emails are kept for two years and
+    then deleted", in its sentence): documents, uploads, files, data, information, records, profile, messages, emails,
+    call recordings, notes, login, card, bank, billing or payment details, Social
+    Security number, date of birth, copies of reports and the reports the client uploaded, a portal account, things
+    taken "from our servers" or another of the agency's own systems, and "your account" only where the sentence closes
+    it or names the agency ("when you close your account", "your account with us"). A bureau or other consumer reporting
+    agency (ChexSystems, Early Warning, LexisNexis, Innovis, SageStream, NCTUE), a creditor, lender, bank, collector or
+    furnisher, "credit", a report, an account, loan, bill, debt or other item of a report, or "from" any other place
+    makes it a credit removal ("we remove your account with Capital One", "we remove your personal information from
+    ChexSystems").
+  - *Payments named as none.* A time word counts only with a payment word or an amount in its own clause (cut at ";",
+    ":", a comma, and, but, otherwise, then, unless, except), once the payments named only to say there are none are
+    taken out ("no payment is due", "nothing is charged", "you pay nothing", "costs nothing", "free of charge", "we do not
+    charge a setup, enrollment or activation fee", "no cobramos nada por adelantado", "no hay pagos por adelantado",
+    billing that stops, "if you cancel, we stop billing you right away", and fees only explained, "we explain our fees
+    before we start work"); a cap
+    is not one ("never more than $99 at signing"), nor is a negation in another clause ("there is no setup fee and $99
+    is due when you sign"). A refund owed to the client is not a payment, and a time word that is the object of a
+    cancellation passes ("if you cancel before work starts, you pay nothing", "you have 3 business days after you sign
+    to cancel"); a cancellation anywhere else in the sentence does not ("if you cancel, you pay nothing; otherwise $99 is
+    due when you sign").
+
+  Honest wording passes ("we ask the bureaus to correct or delete information that cannot be verified", "there is no
+  setup fee", "charged at the end of each month for the work fully performed that month", "when you close your account,
+  we delete your documents within 30 days"). Both checks are lists of rules that catch the common wordings, not a legal
+  review; the Settings hints say so. Terms saved before a check existed no longer build an agreement, and Settings says
+  what to change.
 - **A client's own payment terms and total** (`clients.agreement_payment_terms`, `agreement_total_cents`, migration
   0031): for an agency with several plans, an owner, admin or manager sets them on the client page (Agreement payment
   terms) before the client signs, and that client's agreement states them instead of the agency's (§ 1679d(b)(1)). They
@@ -117,8 +167,10 @@ compliant; state requirements vary and change. **Consult a consumer-finance atto
   of the document on the day it was recorded, not a copy of the paper the client signed**, dated with the date on the
   paper (a service agreement's date line and the last day its Notice of Cancellation states are counted from it): keep
   the signed paper (or upload a scan under Documents). In a personal workspace the account holder gives their own
-  authorization in the app: no paper date is asked for, and the record, its PDF and the evidence pack say it was given
-  by the account holder, with no paper wording. A revoked row says why (`revoked_reason`: `client_cancelled` from the
+  authorization in the app, under its own title ("Authorization to obtain my own credit reports": the software and the
+  report provider they connect obtain their own reports, and no one disputes on their behalf), after reading its text,
+  which the client page shows above the Record button: no paper date is asked for, and the record, its PDF, the
+  timeline and the evidence pack say it was given by the account holder, with no paper wording. A revoked row says why (`revoked_reason`: `client_cancelled` from the
   portal, `staff` from the client page). Signatures made before this change keep their version string and have no
   stored text.
 - **Copies:** `/api/consents/<id>/pdf` (staff of the agency and the client, under row-level security) prints the stored
@@ -166,7 +218,8 @@ compliant; state requirements vary and change. **Consult a consumer-finance atto
   deletion block, Settings has no Client agreement card, the client page has no Welcome link or Agreement payment terms
   card and asks for no CROA document (nor does New dispute, and a statement or agreement on file from the 2026-01 drafts
   is not flagged), and the statement and service agreement cannot be recorded there. The person records their own
-  authorization (for automatic report import) with no paper date, labelled as given by the account holder.
+  authorization (for automatic report import), "Authorization to obtain my own credit reports", after reading its text
+  on the client page, with no paper date, labelled as given by the account holder.
 
 **Human approval before external communication:** letters need a manager's approval of the exact text (edits void the
 approval); the facts a letter rests on (a recorded response, a collector's 30-day period, accepted documents, the client

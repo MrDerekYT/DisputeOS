@@ -43,11 +43,12 @@ export function findGuideClaims(text: string): ClaimIssue[] {
  *    happens with a result;
  *  - gen-dispute-accurate: any suggestion to dispute accurate information.
  * They are deliberately blunt — a false alarm only means the vetted text is shown instead — and are not applied to the
- * vetted entries, which use some of these words in the negative ("no one can promise").
+ * vetted entries at run time; every vetted entry passes them all (tests/unit/guide.test.ts), so a faithful rewording of
+ * one is not discarded ("what your score will be" names no change, so gen-score skips it).
  */
 const GENERATED_RULES: { id: string; pattern: RegExp; why: string }[] = [
   { id: 'gen-promise', pattern: /\b(we|i)(\s+can|\s+do|\s+will|['’]ll)?\s+(promise|assure|ensure)\b|\b(le|les|te|se lo)\s+(promet|asegur)\p{L}*|\bpromet(emos|o)\b|\b(for sure|without (a )?doubt|sin duda|con (toda )?seguridad)\b/iu, why: 'Do not promise a result.' },
-  { id: 'gen-score', pattern: /\b(will|going to|gonna)\s+(definitely\s+|certainly\s+|surely\s+)?(raise|improve|increase|boost|go up|rise|jump|climb|recover|bounce back)\b|\b(score|credit)\s+(will|is going to)\b|(?<![\p{L}])(subir[aá]n?|mejorar[aá]n?|aumentar[aá]n?|se elevar[aá]n?|va[n]? a (subir|mejorar|aumentar))(?![\p{L}])/iu, why: 'Do not predict a score change.' },
+  { id: 'gen-score', pattern: /\b(will|going to|gonna)\s+(definitely\s+|certainly\s+|surely\s+)?(raise|improve|increase|boost|go up|rise|jump|climb|recover|bounce back)\b|(?<!\bwhat\s+(?:your|my|their|the|his|her)\s+)\b(score|credit)\s+(will|is going to)\b|(?<![\p{L}])(subir[aá]n?|mejorar[aá]n?|aumentar[aá]n?|se elevar[aá]n?|va[n]? a (subir|mejorar|aumentar))(?![\p{L}])/iu, why: 'Do not predict a score change.' },
   { id: 'gen-removal', pattern: /\b(will|going to|gonna)\s+(definitely\s+|certainly\s+)?(come|drop|fall|be taken|get taken|be wiped|disappear|vanish|go away|get (removed|deleted)|be (removed|deleted|erased))\b|\bgets?\s+(deleted|removed|erased|wiped)\b|(?<![\p{L}])(se\s+)?(eliminar[aá]n?|borrar[aá]n?|quitar[aá]n?|desaparecer[aá]n?|va[n]? a (ser )?(eliminad|borrad|quitad|desaparecer)\p{L}*)(?![\p{L}])/iu, why: 'Do not predict that an item will be removed.' },
   { id: 'gen-approval', pattern: /\b(will|going to|gonna)\s+(definitely\s+|certainly\s+)?(be approved|get approved|qualify|approve)\b|(?<![\p{L}])(ser[aá]n?|va[n]? a ser)\s+aprobad\p{L}*|(?<![\p{L}])(le|lo|la|los|las)\s+aprobar[aá]n(?![\p{L}])|(?<![\p{L}])calificar[aá]n?(?![\p{L}])/iu, why: 'Do not predict an approval.' },
   { id: 'gen-dispute-accurate', pattern: /\beven (if|though|when) (it|they|the \p{L}+)\s*(is|are|['’]s|['’]re)\s+(accurate|correct|true|valid)\b|\bdispute (everything|anything|all (of )?(it|them|the items|your accounts))\b|(?<![\p{L}])aunque\s+(la información\s+|la cuenta\s+|el dato\s+)?(sea|sean|est[eé]n?)\s+(exact|correct|ciert|verdader|v[aá]lid)\p{L}*|(?<![\p{L}])dispute todo(?![\p{L}])/iu, why: 'Never suggest disputing accurate information.' },
@@ -59,39 +60,51 @@ const words = (n: number) => String.raw`(?:\s+\p{L}+){0,${n}}?`;
 /**
  * Words that say what is likely, expected, usual or about to happen, or how soon: should, expect, likely, probably,
  * about to, on track, soon, shortly, will, going to; what usually happens (usually, typically, normally, often,
- * generally, commonly, in most cases, most of the time, tend to, as a rule, many or most people or clients); debería,
- * deberá, probablemente, seguramente, a punto de, pronto, en breve, esperar, va a, any verb in the Spanish future tense
- * (tendrá, quedará, verá), and normalmente, generalmente, habitualmente, por lo general, suele, a menudo, casi siempre,
- * en la mayoría de los casos, muchas personas.
+ * oftentimes, frequently, generally, commonly, regularly, routinely, in most, many or a lot of cases or instances, most
+ * of the time, most times, nearly or almost always, chances or odds are, a good chance, nine times out of ten, tend to,
+ * as a rule, "it is (very) common, typical, usual or normal", "not unusual", the majority, a lot of, many or most
+ * people, clients or borrowers); debería, deberá, probablemente, seguramente, lo más probable, a punto de, pronto, en
+ * breve, esperar, va a, any verb in the Spanish future tense (tendrá, quedará, verá), and normalmente, generalmente,
+ * habitualmente, frecuentemente, comúnmente, por lo general, suele, a menudo, casi siempre, la mayoría de las veces, en
+ * muchos casos or muchas ocasiones, "es (muy) común, frecuente, habitual o normal", muchas personas, muchos or la mayoría
+ * de nuestros clientes.
  */
 const LIKELY = new RegExp(`${A}(?:${[
-  String.raw`should(?:n['’]?t)?|expect(?:s|ed|ing)?|likely|probably|about\s+to|on\s+track|soon|shortly|before\s+long|any\s+day|in\s+no\s+time|bound\s+to|sure\s+to|set\s+to|will|gonna|going\s+to`,
-  String.raw`usually|typically|normally|often|frequently|generally|commonly|in\s+(?:most|many)\s+cases|most\s+of\s+the\s+time|almost\s+always|chances\s+are|(?:it\s+is|it['’]s)\s+common|tends?\s+to|as\s+a\s+rule|(?:many|most)\s+(?:of\s+(?:our|my|the)\s+)?(?:people|clients|consumers|customers)`,
-  String.raw`deber[ií]an?|deber[aá]n?|probablemente|seguramente|a\s+punto\s+de|pronto|en\s+breve|esper(?:e|en|a|an|amos|ar)|va[n]?\s+a|\p{L}+(?:rá|rán|remos)`,
-  String.raw`normalmente|generalmente|habitualmente|t[ií]picamente|por\s+lo\s+general|suel(?:e|en)|a\s+menudo|con\s+frecuencia|muchas\s+veces|en\s+muchos\s+casos|es\s+com[uú]n|casi\s+siempre|en\s+la\s+mayor[ií]a\s+de\s+los\s+casos|(?:muchas|la\s+mayor[ií]a\s+de\s+las)\s+personas|(?:muchos|la\s+mayor[ií]a\s+de\s+los)\s+(?:clientes|consumidores)`,
+  String.raw`should(?:n['’]?t)?|expect(?:s|ed|ing)?|likely|probably|about\s+to|on\s+track|soon|shortly|before\s+long|any\s+day|in\s+no\s+time|bound\s+to|sure\s+to|set\s+to|will|gonna|going\s+to|(?:well\s+)?on\s+(?:your|the|its|their)\s+way\s+to|(?:could|can|may|might|will|would)\s+easily|in\s+(?:my|our)\s+experience|(?:the\s+)?most\s+(?:common|frequent|likely|typical|usual)`,
+  String.raw`usually|typically|normally|often|oftentimes|frequently|generally|commonly|regularly|routinely|in\s+(?:most|many|a\s+lot\s+of|lots\s+of|numerous|countless|the\s+(?:vast\s+)?majority\s+of)\s+(?:cases|instances|situations)|most\s+of\s+the\s+time|most\s+times|(?:almost|nearly|virtually|practically)\s+always|(?:chances|odds)\s+are|(?:a\s+)?(?:good|great|high|strong|fair|decent)\s+chance|\p{L}+\s+times\s+out\s+of\s+\p{L}+|tends?\s+to|as\s+a\s+rule`,
+  String.raw`(?:it\s+is|it['’]s|it\s+was|this\s+is|that\s+is|that['’]s|as\s+is)\s+(?:(?:very|quite|so|really|pretty|fairly|rather|extremely|super|incredibly|\p{L}+ly)\s+)?(?:common|typical|usual|normal|habitual|frequent|standard|routine|not\s+(?:at\s+all\s+)?un(?:common|usual))`,
+  String.raw`(?:the\s+)?(?:vast\s+|great\s+)?majority|a\s+lot\s+of|lots\s+of|(?:many|most)\s+(?:of\s+(?:our|my|the|these)\s+)?(?:people|clients|consumers|customers|borrowers|users|members|folks|individuals|applicants|homeowners)`,
+  String.raw`deber[ií]an?|deber[aá]n?|probablemente|seguramente|lo\s+m[aá]s\s+probable|a\s+punto\s+de|pronto|en\s+breve|esper(?:e|en|a|an|amos|ar)|va[n]?\s+a|\p{L}+(?:rá|rán|remos)|lo\s+(?:m[aá]s\s+)?(?:normal|habitual|com[uú]n|usual|t[ií]pico|frecuente|probable)\s+es\s+que|es\s+(?:(?:muy|bastante|tan|altamente|\p{L}+mente)\s+)?(?:probable|seguro)\s+que`,
+  String.raw`normalmente|generalmente|habitualmente|frecuentemente|com[uú]nmente|usualmente|t[ií]picamente|por\s+lo\s+general|suel(?:e|en)|a\s+menudo|con\s+frecuencia|muchas\s+veces|la\s+mayor[ií]a\s+de\s+las\s+veces|en\s+(?:muchos|la\s+mayor[ií]a\s+de\s+los)\s+casos|en\s+(?:muchas|la\s+mayor[ií]a\s+de\s+las)\s+ocasiones|es\s+(?:(?:muy|bastante|tan|realmente|\p{L}+mente)\s+)?(?:com[uú]n|frecuente|habitual|normal|t[ií]pico|usual)|casi\s+siempre|(?:muchas|la\s+mayor[ií]a\s+de\s+las)\s+personas|(?:muchos|la\s+mayor[ií]a\s+de\s+los)\s+(?:clientes|consumidores)|(?:muchos|muchas|la\s+mayor[ií]a)\s+de\s+(?:nuestros|nuestras|sus|los|las|mis)\s+(?:clientes|personas|consumidores|usuarios)`,
 ].join('|')})${Z}|['’]ll${Z}`, 'iu');
 /** "As soon as" and "tan pronto como" say when, not how soon. */
 const WHEN = new RegExp(`${A}(?:as\\s+soon\\s+as|tan\\s+pronto\\s+como)${Z}`, 'giu');
 /**
  * Results: a score going up ("your score should improve", "a higher score", "su puntaje debería subir"); credit, a
  * history or a report getting better or clean ("your credit is about to get much better", "a clean credit history",
- * "un historial de crédito limpio"); an item coming off or being removed ("should come off", "be gone", "se borren");
+ * "un historial de crédito limpio"); an item coming off or being removed ("should come off", "be gone", "are removed",
+ * "have negative items removed", "see collections deleted", "se borren", "son eliminadas");
  * an approval ("approve you", "get approved", "le aprueben"); good results ("great results", "love the results",
  * "excelentes resultados", "le encantarán los resultados").
  */
 const RESULT = new RegExp(`${A}(?:${[
   String.raw`(?:scores?|fico)${words(4)}\s+(?:improv\p{L}*|ris(?:e|es|ing)|climb\p{L}*|go(?:es)?\s+up|increas\p{L}*|jump\p{L}*|boost\p{L}*|recover\p{L}*|bounc\p{L}*\s+back|get\s+(?:\p{L}+\s+)?(?:better|higher))`,
   String.raw`(?:improv\p{L}*|rais(?:e|es|ed|ing)|boost\p{L}*|increas\p{L}*|higher|better|bigger)${words(2)}\s+(?:scores?|fico)`,
-  String.raw`(?:credit|history|record|report|file)${words(4)}\s+(?:improv\p{L}*|(?:get|gets|getting|look|looks|be|become|becomes|is|are|turn|turns)\s+(?:\p{L}+\s+)?(?:better|clean|clear|healthier|spotless|fixed|repaired))`,
+  String.raw`(?:credit|history|record|report|file)${words(4)}\s+(?:improv\p{L}*|(?:get|gets|getting|look|looks|be|become|becomes|is|are|turn|turns)\s+(?:\p{L}+\s+)?(?:better|clean(?:er)?|clear(?:er)?|healthier|spotless|fixed|repaired|stronger))`,
+  // "a 40-point increase", "an increase of 40 points", "removal is the most common outcome", "approval becomes much more
+  // likely", "they will give you the loan".
+  String.raw`\d+[\s-]*points?\s+(?:increase|jump|boost|gain|rise|improvement|higher|better)|(?:increase|jump|boost|gain|rise)\s+of\s+\d+\s+points?|(?:removal|deletion)s?\s+(?:is|are|was|were)\s+(?:the\s+|a\s+)?(?:most\s+|very\s+|quite\s+)?(?:common|likely|usual|typical|frequent|expected|standard|normal)|approvals?\s+(?:\p{L}+\s+){0,5}?(?:becomes?|is|gets?)\s+(?:much\s+|far\s+|a\s+lot\s+)?(?:more\s+likely|likely|easier|certain|guaranteed|a\s+sure\s+thing)|(?:give|gives|grant|grants|offer|offers)\s+you\s+(?:the|a|that|your)\s+(?:loan|mortgage|card|credit\s+card|apartment|lease|financing)`,
   String.raw`(?:clean|clear|better|improved|healthier|spotless|fresh)\s+(?:\p{L}+\s+)?(?:credit|history|record|report|file|slate)|improv\p{L}*\s+(?:your\s+)?(?:credit|history|record)`,
-  String.raw`(?:come|comes|coming|came|drop|drops|dropped|dropping|fall|falls|falling|fell)\s+off|(?:be|get|gets|got|getting|been)\s+(?:removed|deleted|erased|wiped|gone|taken\s+off)|disappear\p{L}*|vanish\p{L}*|go(?:es)?\s+away`,
+  String.raw`(?:come|comes|coming|came|drop|drops|dropped|dropping|fall|falls|falling|fell)\s+off|(?:be|get|gets|got|getting|been)\s+gone|disappear\p{L}*|vanish\p{L}*|go(?:es)?\s+away`,
+  // "are removed", "are frequently deleted", "have negative items removed", "see collections deleted".
+  String.raw`(?:is|are|was|were|be|been|being|get|gets|got|getting)\s+(?:(?!(?:not|never)${Z})\p{L}+\s+){0,2}?(?:removed|deleted|erased|wiped|taken\s+off|cleared)|(?:have|has|had|having)\s+(?:\p{L}+\s+){1,4}?(?:removed|deleted|erased|wiped|taken\s+off)|(?:see|sees|saw|seeing|watch\p{L}*)\s+(?:\p{L}+\s+){1,4}?(?:removed|deleted|erased|wiped|taken\s+off|go\s+away|disappear\p{L}*|come\s+off|drop\s+off)`,
   String.raw`(?:be|get|gets|got|getting|been)\s+approved|qualif(?:y|ies|ied|ying)\s+for|approv(?:e|es)\s+(?:you|your)`,
   String.raw`(?:puntajes?|puntuaci[oó]n)${words(4)}\s+(?:sub\p{L}*|aument\p{L}*|mejor[aeoó]\p{L}*|elev\p{L}*|recuper\p{L}*|crec\p{L}*)`,
   String.raw`(?:subir|aumentar|mejorar|elevar)\p{L}*${words(2)}\s+(?:puntajes?|puntuaci[oó]n)`,
-  String.raw`(?:cr[eé]dito|historial|informe|reporte|expediente)${words(4)}\s+(?:mejor[aeoó]\p{L}*|limpi\p{L}*|san[oa]|impecable|arreglad\p{L}*|reparad\p{L}*)`,
+  String.raw`(?:cr[eé]dito|historial|informe|reporte|expediente)${words(4)}\s+(?:mejor(?:[aeoó]\p{L}*)?|limpi\p{L}*|san[oa]|impecable|arreglad\p{L}*|reparad\p{L}*)`,
   String.raw`(?:limpi\p{L}*|mejor|impecable)${words(2)}\s+(?:cr[eé]dito|historial|informe|reporte|expediente)`,
-  String.raw`(?:ser|sea|sean|será|serán)\s+(?:eliminad|borrad|quitad)\p{L}*|se\s+(?:elimin|borr|quit)\p{L}*|desaparec\p{L}*|salg\p{L}*\s+de\s+su\s+(?:informe|reporte|historial)`,
-  String.raw`aprobad\p{L}*|(?:le|lo|la|los|las|te)\s+aprueb\p{L}*|calific\p{L}*\s+para`,
+  String.raw`(?:ser|sea|sean|será|serán|es|son|fue|fueron|ha\s+sido|han\s+sido)\s+(?:eliminad|borrad|quitad|removid)\p{L}*|se\s+(?:elimin|borr|quit)\p{L}*|desaparec\p{L}*|salg\p{L}*\s+de\s+su\s+(?:informe|reporte|historial)`,
+  String.raw`aprobad\p{L}*|(?:le|lo|la|los|las|te)\s+aprueb\p{L}*|aprueb\p{L}*\s+(?:la|su|tu)\s+(?:solicitud|pr[eé]stamo|cr[eé]dito|tarjeta|hipoteca)|calific\p{L}*\s+para|(?:le|les|te)\s+(?:dar[aá]n?|dan|otorgar[aá]n?|otorgan|conceder[aá]n?|conceden|aprobar[aá]n?)\s+(?:el|la|un|una|su)\s+(?:pr[eé]stamo|cr[eé]dito|tarjeta|hipoteca|financiamiento)`,
   String.raw`(?:great|excellent|amazing|fantastic|incredible|good|strong|positive|better)\s+(?:results?|outcomes?)|(?:love|like|enjoy|happy\s+with|pleased\s+with|thrilled\s+with|satisfied\s+with)\s+(?:the\s+|your\s+|these\s+)?(?:results?|outcomes?)`,
   String.raw`(?:excelentes|buenos|grandes|incre[ií]bles|positivos|mejores)\s+resultados|encant\p{L}*\s+(?:los\s+|sus\s+)?resultados|(?:content[oa]s?|satisfech[oa]s?|feliz|felices)\s+con\s+(?:los\s+|sus\s+)?resultados`,
 ].join('|')})${Z}`, 'iu');

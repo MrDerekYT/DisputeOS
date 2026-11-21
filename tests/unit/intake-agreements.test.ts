@@ -4,12 +4,15 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { cancellationEndsOn } from '@/lib/business-days';
 import { parseDollars, parseTerms, storedTerms, termsIssue, type AgreementTerms } from '@/lib/compliance/agreement-terms';
-import { findBlockedClaims } from '@/lib/compliance/claims';
-import { readingCopyBlocks, signedCopyBlocks, storedBlocks } from '@/lib/compliance/consent-pdf';
+import { revokeConfirmation } from '@/lib/agreements';
+import { findBlockedClaims, findContractClaims, findMarketingClaims } from '@/lib/compliance/claims';
+import { copyTitle, readingCopyBlocks, signedCopyBlocks, storedBlocks } from '@/lib/compliance/consent-pdf';
 import { CROA_CANCEL_STATEMENT, CROA_STATEMENT, CROA_STATEMENT_TITLE, NOTICE_BLANK, NOTICE_HEADING, NOTICE_TEMPLATE, noticeOfCancellation } from '@/lib/compliance/croa';
 import {
-  CONSENT_DOCS, consentStatus, isRendered, REQUIRED_CONSENTS, renderConsent, SERVICE_CONSENTS, SIGNING_ORDER, signingOrderProblem, type ConsentContext, type RenderedConsent,
+  CONSENT_DOCS, consentStatus, consentTitle, isRendered, PERSONAL_AUTHORIZATION_TITLE, REQUIRED_CONSENTS, renderConsent, SERVICE_CONSENTS, SIGNING_ORDER, signingOrderProblem,
+  type ConsentContext, type RenderedConsent,
 } from '@/lib/compliance/disclosures';
+import { findGuideClaims } from '@/lib/guide/llm';
 import { renderPdf, renderPdfBlocks } from '@/lib/letters/pdf';
 import { PRODUCT } from '@/lib/product';
 import { onboarding } from '@/lib/onboarding';
@@ -33,7 +36,7 @@ const TERMS: AgreementTerms = {
   paymentTerms: 'A monthly fee of $99.00, charged on the 1st of each month for the work fully performed in the month before.',
   totalCents: 59_400, duration: 'About 6 months from the date you sign.', additional: 'Florida residents: see the attached state disclosure.', updatedAt: '2026-11-20T15:00:00.000Z', updatedBy: 'u1',
 };
-const ctx = (over: Partial<ConsentContext> = {}): ConsentContext => ({ agencyName: TERMS.legalName, terms: TERMS, clientName: 'Dana Whitfield', today: '2026-11-25', ...over });
+const ctx = (over: Partial<ConsentContext> = {}): ConsentContext => ({ agencyName: TERMS.legalName, terms: TERMS, clientName: 'Dana Whitfield', today: '2026-11-25', personal: false, ...over });
 const rendered = (kind: (typeof SIGNING_ORDER)[number], c = ctx()) => { const r = renderConsent(kind, c); if (!isRendered(r)) throw new Error('not rendered'); return r as RenderedConsent; };
 
 describe('the statutory wording is the statute, word for word', () => {
@@ -289,18 +292,44 @@ describe('the welcome email and the welcome steps', () => {
 
 describe('the authorization in a personal workspace', () => {
   const base = { agencyName: 'Pat Self', terms: null, clientName: 'Pat Self', today: '2026-11-20' };
-  const text = (personal: boolean) => {
+  const doc = (personal: boolean) => {
     const r = renderConsent('fcra_authorization', { ...base, personal });
     if (!isRendered(r)) throw new Error('not rendered');
-    return r.text;
+    return r;
   };
+  const text = (personal: boolean) => doc(personal).text;
   it('names the software and the report provider the person connects, for their own reports, not their own workspace as an agency', () => {
     const own = text(true);
-    expect(own).toContain(`I authorize ${PRODUCT.name}, the software I use to work on my own credit, and any credit report provider I connect in it, to obtain my own credit reports and scores when I ask`);
+    expect(own).toContain(`I authorize ${PRODUCT.name}, the software I use to work on my own credit, and any credit report provider I connect in it, to obtain my own credit reports and scores when I ask or through an integration I set up`);
     expect(own).toContain('I decide whether to send each dispute.');
     expect(own).not.toContain('I authorize Pat Self');
   });
+  it('has its own title, never "dispute on my behalf": in the stored text, the PDF title, the record and the revoke question', () => {
+    const own = doc(true);
+    expect(PERSONAL_AUTHORIZATION_TITLE).toBe('Authorization to obtain my own credit reports');
+    expect(own.doc.title).toBe(PERSONAL_AUTHORIZATION_TITLE);
+    expect(own.text.startsWith(`${PERSONAL_AUTHORIZATION_TITLE}\n\nI authorize ${PRODUCT.name}`)).toBe(true);
+    expect(own.text).not.toMatch(/on my behalf/);
+    expect(own.version).toBe(`2026-11:${own.sha256.slice(0, 12)}`);
+    expect(consentTitle('fcra_authorization', true)).toBe(PERSONAL_AUTHORIZATION_TITLE);
+    expect(copyTitle('fcra_authorization', 'self')).toBe('Authorization to obtain my own credit reports (given by the account holder)');
+    expect(revokeConfirmation('fcra_authorization', true)).toMatch(/^Revoke “Authorization to obtain my own credit reports”\? /);
+    // The other documents keep their titles; an agency's authorization keeps its own.
+    expect(consentTitle('communications', true)).toBe('Communication preferences');
+    expect(consentTitle('fcra_authorization', false)).toBe('Authorization to review credit reports and dispute on my behalf');
+    expect(copyTitle('fcra_authorization', 'portal')).toBe('Authorization to review credit reports and dispute on my behalf (signed copy)');
+    expect(revokeConfirmation('fcra_authorization')).toMatch(/^Revoke “Authorization to review credit reports and dispute on my behalf”\? /);
+  });
+  it('makes no promise by any check', () => {
+    for (const f of [findBlockedClaims, findMarketingClaims, findContractClaims, findGuideClaims]) expect(f(text(true))).toEqual([]);
+  });
   it('is unchanged for an agency client', () => {
+    expect(doc(false).doc.title).toBe('Authorization to review credit reports and dispute on my behalf');
     expect(text(false)).toContain('I authorize Pat Self to review the credit reports I provide, and to prepare and, with my approval, submit disputes');
+  });
+  it('a context must say whether the workspace is personal', () => {
+    // @ts-expect-error `personal` is required, so no caller renders the agency's text for a personal workspace by leaving it out.
+    const missing: ConsentContext = { agencyName: 'Pat Self', terms: null, clientName: 'Pat Self', today: '2026-11-20' };
+    expect(missing.personal).toBeUndefined();
   });
 });

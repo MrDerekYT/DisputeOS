@@ -268,9 +268,10 @@ describe('LEG-3, SEC-3, LEG-5, LEG-14: the agency’s terms in Settings', () => 
     expect(settings).toContain('A PO Box is accepted, but some states expect a physical address: have your attorney confirm your state’s rules.');
     expect(settings).not.toContain('Street or PO Box');
     expect(settings).toContain('The check is a list of rules, not a legal review');
-    expect(settings).toContain('removing or deleting items on a credit report');
+    expect(settings).toContain('removing or deleting anything but your own records');
+    expect(settings).toContain('how you delete your own records, such as a client’s documents, data or portal account, may be stated, and so may asking the bureaus to correct or delete information');
     expect(settings).not.toContain('no promise of removals or a score change can be saved');
-    expect(settings).toContain('a fee at signing or on the day you sign, within days of signing or of the effective date, today, up front or in advance, before the work starts, at the start of a month for that month’s work, a deposit or a setup or enrollment fee is refused');
+    expect(settings).toContain('a fee at signing or on the day you sign, within days of signing or of the effective date, when your account is set up, today, up front, in advance or at the outset, before the work starts or until a payment clears, at the start of a month, a program or a billing cycle for that period’s work, a deposit or a setup or enrollment fee is refused, in English or Spanish');
     expect(settings).toContain('A client on another plan can have their own payment terms and total, set on their client page before they sign.');
   });
 });

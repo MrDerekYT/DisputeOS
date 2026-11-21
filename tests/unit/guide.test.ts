@@ -4,6 +4,7 @@ import { buildGuideReply, validQuestion } from '@/lib/guide/ask';
 import { entriesFor, entryById, GUIDE_ENTRIES, resolveLink, STARTER_IDS } from '@/lib/guide/knowledge';
 import { guideLabels, guideStarters } from '@/lib/guide/labels';
 import { buildGuidePrompt, cleanQuestion, findGeneratedClaims, findGuideClaims, MAX_ANSWER_CHARS, phraseGuideAnswer, validateGuideAnswer } from '@/lib/guide/llm';
+import { progressNoteIssue, progressSummary } from '@/lib/ai/assistant';
 import { answerFromKnowledge, fallbackText } from '@/lib/guide/match';
 import { clientIdentifiers, genericStepLabels, portalSteps, type PortalStepInput } from '@/lib/guide/steps';
 import type { WelcomeAsk } from '@/lib/onboarding';
@@ -462,10 +463,18 @@ describe('guide AI wording', () => {
     expect(findGeneratedClaims(ok)).toEqual([]);
   });
 
-  it('never flags the vetted entries as predictions, so a faithful rewording of them is not discarded for it', () => {
+  it('never flags a vetted entry with any rule for AI text, so a faithful rewording of it is not discarded', () => {
     for (const e of GUIDE_ENTRIES) for (const lang of LANGS) {
-      expect(findGeneratedClaims(e.answer[lang]).filter((i) => i.id === 'gen-prediction'), `${e.id} ${lang}`).toEqual([]);
+      expect(findGeneratedClaims(e.answer[lang]), `${e.id} ${lang}`).toEqual([]);
+      // The real accept path: the entry's own text, checked against the context it was given in.
+      const p = buildGuidePrompt({ question: 'q', lang, entries: [e], canary });
+      expect(validateGuideAnswer(e.answer[lang], p.context, canary), `${e.id} ${lang}`).toEqual({ ok: true });
     }
+    // All of them run together, as a reply may join several.
+    for (const lang of LANGS) expect(findGeneratedClaims(GUIDE_ENTRIES.map((e) => e.answer[lang]).join(' ')), lang).toEqual([]);
+    // "No one can honestly tell you what your score will be" names no change; "your score will improve" does.
+    expect(findGeneratedClaims('No one can honestly tell you what your score will be after any particular action.')).toEqual([]);
+    expect(findGeneratedClaims('After this, your score will be higher.').map((i) => i.id)).toContain('gen-score');
   });
 
   it('rejects an answer that echoes the real per-request canary', async () => {
@@ -497,5 +506,150 @@ describe('free-report questions are not answered with the definition of a report
     expect(answerFromKnowledge('¿Cómo consigo mi informe de crédito gratis?', 'es').entry?.id).toBe('free-reports');
     expect(answerFromKnowledge('how do I get a free credit report', 'en').entry?.id).toBe('free-reports');
     expect(answerFromKnowledge('¿Qué es un informe de crédito?', 'es').entry?.id).toBe('credit-report');
+  });
+});
+
+describe('habitual predictions and ordinary explanations (the last verification’s corpus)', () => {
+  const HABITUAL = [
+    // the verifier's nine
+    'Scores frequently rise after errors are fixed.',
+    'In many cases, the negative items come off your report.',
+    'Scores almost always rise once errors are fixed.',
+    'Chances are your score goes up after a dispute.',
+    'Most of our clients see their scores rise.',
+    'It is common for negative items to come off after a dispute.',
+    'Con frecuencia, el puntaje sube después de corregir los errores.',
+    'Muchas veces las cuentas negativas se eliminan.',
+    'En muchos casos el puntaje sube.',
+    // mine, same words
+    'Scores frequently go up after a dispute.',
+    'Frequently, negative items come off after a dispute.',
+    'In many cases, your score improves after errors are fixed.',
+    'Most of our clients get a higher score.',
+    'Most of our clients get approved for a mortgage.',
+    'Many of our clients see a better score.',
+    'More often than not, scores go up after errors are fixed.',
+    'It’s common for scores to climb after a dispute.',
+    'Chances are good that your score goes up.',
+    'Chances are high that negative items come off.',
+    'Almost always, the negative items come off.',
+    'Most consumers see their scores rise after a dispute.',
+    'Con frecuencia el puntaje sube.',
+    'Muchas veces el puntaje mejora.',
+    'Con frecuencia, los cobros desaparecen del informe.',
+    'Es común que las cuentas negativas sean eliminadas.',
+    'Es común que el puntaje suba después de una disputa.',
+    // the same class, other words or other result verbs
+    'In many cases, negative items are removed from your report.',
+    'Negative items are frequently removed after a dispute.',
+    'Collections are commonly deleted after a dispute.',
+    'Most of our clients have negative items removed.',
+    'Most of our clients see collections deleted.',
+    'The majority of our clients see their scores rise.',
+    'Oftentimes, scores go up after a dispute.',
+    'Scores regularly rise after a dispute.',
+    'Scores routinely rise after errors are fixed.',
+    'Scores nearly always rise once errors are fixed.',
+    'Scores virtually always rise once errors are fixed.',
+    'Odds are your score goes up after a dispute.',
+    'There is a good chance your score goes up after a dispute.',
+    'It is typical for scores to rise after a dispute.',
+    'It is not unusual for negative items to come off after a dispute.',
+    'A lot of people see their scores rise after a dispute.',
+    'Lots of our clients see their scores rise.',
+    'Nine times out of ten, the negative items come off.',
+    'It is very common for scores to climb after a dispute.',
+    'It is quite common for negative items to come off after a dispute.',
+    'In many instances, negative items come off after a dispute.',
+    'In a lot of cases, negative items come off after a dispute.',
+    'In the majority of cases, negative items come off.',
+    'In most instances, scores rise after errors are fixed.',
+    'Most times, scores rise after errors are fixed.',
+    'Most borrowers see their scores rise after a dispute.',
+    'Frecuentemente el puntaje sube después de corregir los errores.',
+    'La mayoría de las veces el puntaje sube.',
+    'En muchas ocasiones las cuentas negativas se eliminan.',
+    'Es habitual que el puntaje suba después de una disputa.',
+    'Es frecuente que el puntaje suba.',
+    'La mayoría de nuestros clientes ven subir su puntaje.',
+    'Muchos de nuestros clientes ven subir su puntaje.',
+    'Lo más probable es que su puntaje suba.',
+    'Es muy común que el puntaje suba.',
+    'Comúnmente, las cuentas negativas se eliminan.',
+    'En muchos casos, las cuentas negativas son eliminadas.',
+  ];
+  const ORDINARY = [
+    'Bureaus frequently take the full 30 days to investigate.',
+    'In many cases, the bureau asks the furnisher to verify the item.',
+    'It is common to see small differences between the three reports.',
+    'Most of our clients upload their reports as PDFs.',
+    'Chances are the letter will arrive within a week.',
+    'Almost always, the bureau answers by mail.',
+    'Con frecuencia, las agencias responden por correo.',
+    'Muchas veces la respuesta llega por correo.',
+    'En muchos casos, la agencia pide más información.',
+    'Es común que los tres informes muestren diferencias.',
+    'Frequently asked questions are listed below.',
+    'In many cases you can dispute online, by mail or by phone.',
+    'It is common for bureaus to ask for proof of your address.',
+    'Most of our clients choose to receive updates by email.',
+    'Chances are you will need a copy of your ID.',
+    'Muchas veces conviene enviar las cartas por correo certificado.',
+    'Es común que la agencia tarde unos 30 días en responder.',
+    'In many cases, accurate negative information stays on your report for up to seven years.',
+    'Accurate information frequently stays on a report for seven years.',
+    'It is common for accurate items to stay on a report.',
+    'Most of our clients ask how long an investigation takes.',
+    'In many cases, a furnisher updates an account instead of deleting it.',
+    'Chances are the bureau already has your current address.',
+    'It is common for a bureau to send its results by mail.',
+    'Muchas veces la agencia actualiza la cuenta en lugar de eliminarla.',
+    'En muchos casos, el acreedor responde a la agencia, no a usted.',
+    'Es común recibir una carta de cada agencia.',
+  ];
+
+  it.each(HABITUAL)('rejects a habitual prediction: %s', (t) => {
+    expect(findGeneratedClaims(t).map((i) => i.id)).toContain('gen-prediction');
+  });
+
+  it.each(ORDINARY)('accepts an ordinary explanation: %s', (t) => {
+    expect(findGeneratedClaims(t)).toEqual([]);
+  });
+
+  it('flags a negated result beside a word of what usually happens: the rule is blunt, and the vetted text is shown instead', () => {
+    for (const t of ['In many cases, accurate information does not come off your report.', 'Con frecuencia, la información exacta no se elimina.']) expect(findGeneratedClaims(t).map((i) => i.id), t).toEqual(['gen-prediction']);
+  });
+
+  it.each([
+    'Your report should look much cleaner after this round.',
+    'In my experience, scores climb steadily once disputes are resolved.',
+    'With these disputes, you’re well on your way to a better credit score.',
+    'Removal is the most common outcome when a debt collector cannot validate a debt.',
+    'Your score could easily jump 50 points.',
+    'After the dispute, approval for a car loan becomes much more likely.',
+    'Typically, people see a 40-point increase after removing a collection.',
+    'Lo normal es que su puntaje suba después de corregir el error.',
+    'Es muy probable que la cuenta de cobranza sea eliminada.',
+    'Casi siempre, el banco aprueba la solicitud después de corregir los errores.',
+    'Su informe se verá mucho mejor en unas semanas.',
+    'Seguramente le darán el préstamo cuando el error esté corregido.',
+  ])('rejects a prediction from the fresh corpus: %s', (t) => {
+    expect(findGeneratedClaims(t).map((i) => i.id)).toContain('gen-prediction');
+  });
+
+  it.each([
+    'Approval for credit usually depends on your income, your debts and your report.',
+    'A bureau usually responds within 30 days with a correction, a deletion or a verification.',
+    'You can request removal of inaccurate information.',
+    'Es posible que la agencia le pida más documentos.',
+  ])('still accepts an ordinary explanation: %s', (t) => {
+    expect(findGeneratedClaims(t)).toEqual([]);
+  });
+
+  it('the progress note’s fixed text passes every rule for AI text, in English and Spanish', () => {
+    for (const language of LANGS) for (const [total, deleted, updated, verified, waiting] of [[0, 0, 0, 0, 0], [1, 1, 0, 0, 0], [5, 2, 1, 1, 1], [12, 0, 0, 3, 9], [3, 0, 3, 0, 0]] as const) {
+      const text = progressSummary({ firstName: 'Dana', total, deleted, updated, verified, waiting, draft: 0, language });
+      expect(progressNoteIssue(text), `${language} ${total}`).toBeNull();
+    }
   });
 });

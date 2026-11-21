@@ -259,16 +259,26 @@ describe('a personal workspace is asked for no CROA document, and the person giv
     expect(before).toContain('Your full legal name');
     expect(before).not.toContain('Date written on the signed paper');
     expect(before).not.toContain('signed this document on paper');
+    // The authorization has its own title, and its text is shown above the Record button before it is given.
+    expect(before).toContain('Authorization to obtain my own credit reports');
+    expect(before).not.toContain('dispute on my behalf');
+    const shown = before.indexOf('I authorize DisputeOS, the software I use to work on my own credit, and any credit report provider I connect in it');
+    expect(shown).toBeGreaterThan(-1);
+    expect(shown).toBeLessThan(before.indexOf('>Record<'));
 
     expect(await recordConsentAction(undefined, form({ clientId: P.self, kind: 'fcra_authorization', signedName: 'Robin Own' }))).toEqual({ ok: 'Consent recorded.' });
     const row = (await withSystem((db) => db.row<{ id: string; signed_on: string; recorded_by: string | null; ip: string | null }>(
       "select id, signed_on::text, recorded_by, ip from public.client_consents where client_id = $1 and kind = 'fcra_authorization'", [P.self])))!;
     expect(row).toMatchObject({ signed_on: today(), recorded_by: P.ownerId, ip: '10.0.0.1' });
     const events = await withSystem((db) => db.rows<{ summary: string }>("select summary from public.client_events where client_id = $1 and kind = 'consent'", [P.self]));
-    expect(events.map((e) => e.summary)).toEqual(['Authorization to review credit reports and dispute on my behalf given by the account holder']);
+    expect(events.map((e) => e.summary)).toEqual(['Authorization to obtain my own credit reports given by the account holder']);
 
     const page = await clientPage(P.self);
     expect(page).toContain(`Given by the account holder on ${sayDay(today())} as “Robin Own”`);
+    expect(page).toContain('Authorization to obtain my own credit reports');
+    expect(page).not.toContain('dispute on my behalf');
+    // Given now: its text is no longer offered above the Record button.
+    expect(page).not.toContain('I authorize DisputeOS, the software I use to work on my own credit');
     for (const s of ['Signed on paper', 'recorded by staff', 'App’s text when recorded']) expect(page, s).not.toContain(s);
 
     const res = await consentPdf(new Request('http://x/api/consents/x/pdf'), { params: Promise.resolve({ id: row.id }) });
@@ -276,9 +286,12 @@ describe('a personal workspace is asked for no CROA document, and the person giv
     expect(res.headers.get('content-disposition')).toBe(`attachment; filename="fcra-authorization-given-${new Date().toISOString().slice(0, 10)}.pdf"`);
     const pdf = Buffer.from(await res.arrayBuffer()).toString('latin1');
     expect(pdf).toContain('(Given by the account holder, in their own workspace, by typing the name: Robin Own)');
-    expect(pdf).not.toMatch(/paper|staff recorded|signed copy/i);
+    expect(pdf).toContain('/Title (Authorization to obtain my own credit reports \\(given by the account holder\\))');
+    expect(pdf).toContain('(Authorization to obtain my own credit reports) Tj');
+    expect(pdf).not.toMatch(/paper|staff recorded|signed copy|on my behalf/i);
 
     const pack = await evidencePack(P.self);
+    expect(pack).toContain('Authorization to obtain my own credit reports');
     expect(pack).toContain('copy of the text given');
     expect(pack).toContain('given by the account holder in');
     expect(pack).toContain('A personal workspace makes no service agreement, so no notice of cancellation applies.');

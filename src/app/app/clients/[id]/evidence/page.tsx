@@ -7,7 +7,7 @@ import { loadAgency } from '@/lib/agreements';
 import { requireStaff } from '@/lib/auth/context';
 import { EVIDENCE_COMMS_LIMIT, loadEvidencePack } from '@/lib/billing/records';
 import { sayDay } from '@/lib/business-days';
-import { CONSENT_DOCS, contractPeriod, signatureSource } from '@/lib/compliance/disclosures';
+import { consentTitle, contractPeriod, isConsentKind, signatureSource } from '@/lib/compliance/disclosures';
 import { PRODUCT } from '@/lib/product';
 import { dayInZone, fmtDate, isUuid, money } from '@/lib/util';
 
@@ -44,7 +44,8 @@ export default async function EvidencePackPage({ params }: { params: Promise<{ i
   const { pack, tz, personal } = d;
   const today = dayInZone(tz);
   const ts = (v: string) => `${new Date(v).toLocaleString('en-US', { timeZone: tz, dateStyle: 'medium', timeStyle: 'short' })} (${tz})`;
-  const docTitle = (kind: string) => CONSENT_DOCS.find((x) => x.kind === kind)?.title ?? kind.replace(/_/g, ' ');
+  // In a personal workspace the authorization has its own title ("Authorization to obtain my own credit reports").
+  const docTitle = (kind: string) => (isConsentKind(kind) ? consentTitle(kind, personal) : kind.replace(/_/g, ' '));
   const contract = [...pack.consents].reverse().find((c) => c.kind === 'croa_contract' && !c.revoked_at);
   const cancelNotices = pack.consents.filter((c) => /cancel/.test(c.kind));
   return (
