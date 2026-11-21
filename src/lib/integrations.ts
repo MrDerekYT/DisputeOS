@@ -1,5 +1,5 @@
 import { getEnv } from './env';
-import { providerStatus } from './ai/provider';
+import { aiConfig } from './ai/provider';
 import { PRODUCT } from './product';
 import { smsStatus } from './sms';
 import { vercelMissing } from './vercel-domains';
@@ -22,7 +22,7 @@ export interface Integration { key: string; name: string; status: IntegrationSta
 
 export function integrationStatus(): Integration[] {
   const env = getEnv();
-  const ai = providerStatus();
+  const ai = aiConfig();
   const emailLive = env.EMAIL_DRIVER === 'resend' && !!env.RESEND_API_KEY;
   const sandbox = env.APP_ENV === 'development' || env.APP_ENV === 'test';
   const sms = smsStatus();
@@ -38,7 +38,14 @@ export function integrationStatus(): Integration[] {
         : 'Currently writing emails to a local log — nothing is delivered. Messages are marked “not delivered”.',
       ...(env.EMAIL_DRIVER === 'disabled' ? { manualPath: 'Invitations show a one-time link for you to pass on yourself. Message clients through the portal. Password reset by email is unavailable: a person who forgets their password cannot recover the account on their own until email is connected.' } : {}),
       needs: 'EMAIL_DRIVER=resend, RESEND_API_KEY and a verified sending domain' },
-    { key: 'ai', name: `AI assistant (${ai.provider})`, status: ai.active ? 'active' : 'dev_only', verified: !ai.active, detail: ai.active ? 'LLM rewriting on for workspaces with AI credits; outputs are fact-checked before use. Adapter verified against a mocked API only.' : 'Deterministic engine in use (fully functional). LLM rewriting is optional.', needs: 'AI_PROVIDER plus ANTHROPIC_API_KEY, or AI_BASE_URL + AI_API_KEY + AI_MODEL' },
+    { key: 'ai', name: `AI assistant (${ai.provider})`, status: ai.state === 'connected' ? 'active' : ai.state === 'needs_credentials' ? 'needs_credentials' : 'dev_only', verified: ai.state === 'off',
+      detail: ai.state === 'connected'
+        ? `LLM rewriting on for workspaces with AI credits; outputs are fact-checked before use. ${ai.provider.startsWith('anthropic:')
+          ? 'Built to the current Anthropic Messages API with the official SDK and tested against a mocked API; proven live only once npm run ai:prove has passed with a real key.'
+          : 'Implemented to the documented OpenAI-compatible API and tested against a mocked API only.'} “Test the AI connection” on the setup page checks it from this workspace.`
+        : ai.state === 'needs_credentials' ? `Switched on (AI_PROVIDER=${ai.provider}) but not connected: ${ai.missing.join(', ')} still to set. No AI call is made; the deterministic engine is in use.`
+        : 'Deterministic engine in use (fully functional). LLM rewriting is optional.',
+      needs: 'AI_PROVIDER=anthropic plus ANTHROPIC_API_KEY (optional AI_MODEL, AI_EFFORT), or AI_PROVIDER=openai plus AI_BASE_URL, AI_API_KEY and AI_MODEL' },
     { key: 'ai_credits', name: 'AI credits (buying online)', status: 'manual', verified: false,
       detail: 'AI wording is metered: each AI result that is returned costs credits from the workspace balance, and with no credits the standard wording is used. No payment processor is connected, so credits cannot be bought in the app.',
       manualPath: 'The platform operator adds credits from the server with: npm run credits:grant -- <workspace-slug> <amount> [note].  Every grant is written to the credit ledger and the audit log.',

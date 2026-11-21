@@ -1,28 +1,29 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { AlertTriangle, ArrowRight, Check, CheckCircle2, Clock3, FileUp, Hourglass, ListChecks, MessageCircle, PenLine, Scale, Search } from 'lucide-react';
+import { AlertTriangle, ArrowRight, Check, CheckCircle2, Clock3, Download, FileUp, Hourglass, ListChecks, MessageCircle, PenLine, Scale, Search, XCircle } from 'lucide-react';
 import { ActionForm, SubmitButton } from '@/components/forms';
 import { DatedRow, PortalBlock, PortalTitle } from '@/components/portal-kit';
 import { ScoreHistory, type ScoreRow } from '@/components/score-history';
 import { DayMeter, Notice, StatFigure } from '@/components/ui';
-import { CONSENT_DOCS } from '@/lib/compliance/disclosures';
 import { CLIENT_STAGES, DOC_KINDS } from '@/lib/crm';
 import { dayWindow, windowStart, windowText } from '@/lib/day-meter';
 import { intakeSummary } from '@/lib/intake';
 import { loadIntake } from '@/lib/intake-load';
+import { loadWelcome } from '@/lib/onboarding';
 import { portalContext, specialistFirstName } from '@/lib/portal';
-import { nextStep, type NextKey } from '@/lib/portal-next-step';
+import { nextStep, portalHero, type NextKey } from '@/lib/portal-next-step';
 import { fill, type PortalKey } from '@/lib/portal-i18n';
 import { cn, daysUntil, fmtDate, relTimeIn } from '@/lib/util';
 import { portalUploadAction } from '../actions';
+import { cancelledCopy, copyLabel, portalLongDay } from '../cancel-agreement';
 import { PortalFileInput } from '../file-input';
+import { SIGN_HREF, welcomeAskCopy } from '../welcome-ask';
 import { CollectorNotices } from './collector-notices';
 
 export const metadata: Metadata = { title: 'Your case' };
 
 const STEPS = ['intake', 'analysis', 'disputing', 'monitoring'] as const;
 const NEXT_ICON: Record<NextKey, typeof Check> = { sign: PenLine, upload: FileUp, intake: ListChecks, review: Search, wait: Hourglass, prep: Clock3, done: CheckCircle2 };
-
 export default async function PortalHome() {
   const { ctx, client, t, lang } = await portalContext();
   const d = await ctx.tx(async (db) => ({
@@ -39,26 +40,42 @@ export default async function PortalHome() {
     nextWindow: await db.row<{ submitted_at: string | null; due_at: string; deadline_extended: boolean }>(
       "select submitted_at, due_at, deadline_extended from public.disputes where status in ('submitted','under_investigation') and due_at is not null order by due_at limit 1"),
     requests: await db.rows<{ id: string; kind: string; note: string | null; due_at: string | null }>('select id, kind, note, due_at from public.document_requests where fulfilled_document_id is null order by created_at'),
-    consents: await db.rows<{ kind: string }>('select kind from public.client_consents where revoked_at is null'),
     // The identity documents a bureau normally asks for, from this client's own uploads (row-level security).
     intake: intakeSummary(await loadIntake(db, ctx.clientId)),
     events: await db.rows<{ id: string; note: string | null; to_status: string | null; kind: string; created_at: string }>('select id, note, to_status, kind, created_at from public.dispute_events order by created_at desc limit 6'),
     scores: await db.rows<ScoreRow>('select bureau, model, score, scored_on from public.credit_scores order by scored_on'),
     msgs: await db.rows<{ id: string; body: string; created_at: string }>("select id, body, created_at from public.communications where direction = 'outbound' order by created_at desc limit 2"),
+    welcome: await loadWelcome(db, ctx.clientId),
   }));
   const specialist = await specialistFirstName(client.id);
   const first = client.full_name.split(' ')[0];
-  const needSign = CONSENT_DOCS.filter((c) => c.required && !d.consents.some((k) => k.kind === c.kind));
   // A graduated client is past the last step, so every step shows as done.
   const stageIdx = client.stage === 'graduated' ? STEPS.length : Math.min(CLIENT_STAGES.indexOf(client.stage as (typeof CLIENT_STAGES)[number]), STEPS.length - 1);
   const kindLabel = (k: string) => ((DOC_KINDS as readonly string[]).includes(k) ? t(`kind_${k}` as PortalKey) : k);
   const s = d.stats!;
   const stLabel = (k: string | null) => (k ? t(`st_${k}` as PortalKey) : '');
-  const next = nextStep({ needSign: needSign.length > 0, needDocs: d.requests.length > 0, needIntake: d.intake.needed.length > 0, reviewing: s.reviewing > 0, nextDue: s.next_due, stage: client.stage });
+  const ob = d.welcome?.ob ?? null;
+  const ag = d.welcome?.ag ?? null;
+  const org = ag?.agency.agencyName || ctx.session.orgName;
+  // What the team or the bureaus are doing, or a document the team asked for. The agreements, the details and the ID
+  // documents are the welcome steps' (`ob.ask`).
+  const next = nextStep({ needSign: false, needDocs: d.requests.length > 0, reviewing: s.reviewing > 0, nextDue: s.next_due, stage: client.stage });
+  const hero = portalHero({ cancelledOn: ob?.agreements.cancelledOn ?? null, ask: ob?.ask ?? null, next });
+  const cancelled = hero.kind === 'cancelled';
+  const copy = cancelled && ag ? cancelledCopy(ag.rows) : null;
   // One clock for the sentence and the bar, so they can never disagree.
   const now = new Date();
   const days = s.next_due ? daysUntil(s.next_due, now) : null;
-  const NextIcon = NEXT_ICON[next.key];
+  const welcome = hero.kind === 'welcome' ? welcomeAskCopy(hero.ask) : null;
+  const NextIcon = cancelled ? XCircle : welcome ? welcome.icon : NEXT_ICON[next.key];
+  const heroMine = welcome ? welcome.mine : next.mine;
+  // The investigation window is drawn in the hero only when the hero is about it; otherwise it goes under Progress.
+  const heroWait = hero.kind === 'next' && hero.key === 'wait';
+  // What the welcome steps ask, listed under "What we need from you" whatever the hero is. Nothing once the client
+  // cancelled their service agreement: they are not pressed to go on.
+  const asked = ob && !cancelled ? ob.agreements.asked : [];
+  const askDetails = !!ob && !cancelled && !ob.details.done;
+  const askIntake = !cancelled && d.intake.needed.length > 0;
   // Counted from receipt (the deadline minus its 30 or 45 days), so "Day N of 30" matches the legal window.
   const win = d.nextWindow ? dayWindow(windowStart(d.nextWindow.due_at, d.nextWindow.deadline_extended), d.nextWindow.due_at, now) : null;
   const winText = win ? windowText(win, lang) : null;
@@ -74,17 +91,18 @@ export default async function PortalHome() {
           {/* One clear answer to "what happens now?" — computed only from this client's real records. Dark in both themes. */}
           <section aria-labelledby="next-step" className="night order-1 rounded-[1.25rem] border border-line bg-surface p-5 shadow-pop sm:p-7">
             <p className="inline-flex min-h-[1.75rem] items-center gap-2 rounded-full bg-brand-soft px-3 text-[0.8125rem] font-semibold text-brand-strong">
-              <NextIcon size={15} aria-hidden className="shrink-0" /> {t('nextStep')} · {next.mine ? t('forYou') : t('forUs')}
+              <NextIcon size={15} aria-hidden className="shrink-0" /> {cancelled ? t('cx_badge') : <>{t('nextStep')} · {heroMine ? t('forYou') : t('forUs')}</>}
             </p>
-            <h2 id="next-step" className="display mt-3.5 text-[1.625rem] sm:text-[2rem]">{t(`ns_${next.key}_t` as PortalKey)}</h2>
+            <h2 id="next-step" className="display mt-3.5 text-[1.625rem] sm:text-[2rem]">{t(cancelled ? 'cx_done_t' : welcome ? welcome.title : (`ns_${next.key}_t` as PortalKey))}</h2>
             <p className="mt-2 max-w-xl text-[0.9375rem] text-muted">
-              {t(`ns_${next.key}_b` as PortalKey)}
-              {next.key === 'wait' && s.next_due && <> <strong className="font-semibold text-ink">{fmtDate(s.next_due, lang)}</strong>{days != null && days >= 0 && <> ({days === 0 ? t('today') : `${days} ${t(days === 1 ? 'dayAway' : 'daysAway')}`})</>}.</>}
+              {hero.kind === 'cancelled' ? fill(t('cx_done_b'), { date: portalLongDay(hero.on, lang), org }) : fill(t(welcome ? welcome.body : (`ns_${next.key}_b` as PortalKey)), { org })}
+              {heroWait && s.next_due && <> <strong className="font-semibold text-ink">{fmtDate(s.next_due, lang)}</strong>{days != null && days >= 0 && <> ({days === 0 ? t('today') : `${days} ${t(days === 1 ? 'dayAway' : 'daysAway')}`})</>}.</>}
             </p>
-            {next.key === 'wait' && days != null && days < 0 && <p className="mt-1.5 max-w-xl text-sm text-muted">{t('ns_late')}</p>}
+            {copy && ag && <p className="mt-3"><a href={`/api/consents/${copy.id}/pdf`} className="link inline-flex items-center gap-1.5 text-[0.9375rem]"><Download size={15} aria-hidden className="shrink-0" /> {copyLabel(copy, ag.agency.tz, t, lang, 'cx_copy', 'cx_paperText')}</a></p>}
+            {heroWait && days != null && days < 0 && <p className="mt-1.5 max-w-xl text-sm text-muted">{t('ns_late')}</p>}
 
             {/* The investigation window of the dispute whose answer is due first, from its own stored deadline. */}
-            {next.key === 'wait' && win && winText && d.nextWindow && (
+            {heroWait && win && winText && d.nextWindow && (
               <div className="mt-6">
                 <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-1">
                   {win.day != null && win.totalDays != null ? (
@@ -105,24 +123,38 @@ export default async function PortalHome() {
             )}
 
             <div className="mt-6 flex flex-col gap-2.5 sm:flex-row">
-              {next.key === 'sign' && <Link href="/portal/profile#agreements" className="btn-primary btn-lg">{t('sign')} <ArrowRight size={17} aria-hidden /></Link>}
-              {next.key === 'upload' && <a href="#needs" className="btn-primary btn-lg">{t('uploadNow')} <ArrowRight size={17} aria-hidden /></a>}
-              {next.key === 'intake' && <Link href="/portal/documents#checklist" className="btn-primary btn-lg">{t('ck_open')} <ArrowRight size={17} aria-hidden /></Link>}
-              <Link href="/portal/messages" className={cn('btn-quiet btn-lg', !next.mine && 'sm:min-w-[16rem]')}><MessageCircle size={17} aria-hidden /> {messageLabel}</Link>
+              {welcome?.button && welcome.href && <Link href={welcome.href} className="btn-primary btn-lg">{t(welcome.button)} <ArrowRight size={17} aria-hidden /></Link>}
+              {hero.kind === 'next' && next.key === 'upload' && <a href="#needs" className="btn-primary btn-lg">{t('uploadNow')} <ArrowRight size={17} aria-hidden /></a>}
+              <Link href="/portal/messages" className={cn('btn-quiet btn-lg', (cancelled || !heroMine) && 'sm:min-w-[16rem]')}><MessageCircle size={17} aria-hidden /> {messageLabel}</Link>
             </div>
           </section>
 
           <PortalBlock id="needs" title={t('needFromYou')} className="order-3">
-            {d.requests.length === 0 && needSign.length === 0 && d.intake.needed.length === 0 ? <Notice tone="ok">{t('nothingNeeded')}</Notice> : (
+            {d.requests.length === 0 && asked.length === 0 && !askDetails && !askIntake ? <Notice tone="ok">{t('nothingNeeded')}</Notice> : (
               <ul className="space-y-3">
-                {needSign.map((c) => (
-                  <li key={c.kind}>
-                    <Link href="/portal/profile#agreements" className="card flex items-center justify-between gap-3 p-4 text-[0.9375rem] transition-colors hover:bg-raised">
-                      <span className="flex min-w-0 items-center gap-3"><PenLine size={18} className="shrink-0 text-warn" aria-hidden /><span className="font-semibold">{t(`consent_${c.kind}_title` as PortalKey)}</span></span>
-                      <span className="inline-flex shrink-0 items-center gap-1 text-sm font-semibold text-brand-strong">{t('sign')} <ArrowRight size={15} aria-hidden /></span>
+                {askDetails && (
+                  <li>
+                    <Link href="/portal/welcome" className="card flex items-center justify-between gap-3 p-4 text-[0.9375rem] transition-colors hover:bg-raised">
+                      <span className="flex min-w-0 items-center gap-3"><ListChecks size={18} className="shrink-0 text-warn" aria-hidden /><span className="font-semibold">{t('wl_hero_t')}</span></span>
+                      <span className="inline-flex shrink-0 items-center gap-1 text-sm font-semibold text-brand-strong">{t('wl_hero_btn')} <ArrowRight size={15} aria-hidden /></span>
                     </Link>
+                  </li>)}
+                {asked.map((c) => (
+                  <li key={c.kind}>
+                    {c.ready ? (
+                      <Link href={SIGN_HREF} className="card flex items-center justify-between gap-3 p-4 text-[0.9375rem] transition-colors hover:bg-raised">
+                        <span className="flex min-w-0 items-center gap-3"><PenLine size={18} className="shrink-0 text-warn" aria-hidden /><span className="font-semibold">{t(`consent_${c.kind}_title` as PortalKey)}</span></span>
+                        <span className="inline-flex shrink-0 items-center gap-1 text-sm font-semibold text-brand-strong">{t('sign')} <ArrowRight size={15} aria-hidden /></span>
+                      </Link>
+                    ) : (
+                      // Not ready to sign yet: the agency is finishing its agreement, so there is nothing to click.
+                      <div className="card flex flex-wrap items-center justify-between gap-x-3 gap-y-1 p-4 text-[0.9375rem]">
+                        <span className="flex min-w-0 items-center gap-3"><Clock3 size={18} className="shrink-0 text-muted" aria-hidden /><span className="font-semibold">{t(`consent_${c.kind}_title` as PortalKey)}</span></span>
+                        <span className="text-sm text-muted">{fill(t('ns_prepItem'), { org })}</span>
+                      </div>
+                    )}
                   </li>))}
-                {d.intake.needed.length > 0 && (
+                {askIntake && (
                   <li>
                     <Link href="/portal/documents#checklist" className="card flex items-center justify-between gap-3 p-4 text-[0.9375rem] transition-colors hover:bg-raised">
                       <span className="flex min-w-0 items-center gap-3"><ListChecks size={18} className="shrink-0 text-warn" aria-hidden />
@@ -156,7 +188,7 @@ export default async function PortalHome() {
                   <StatFigure label={t('verified')} value={s.verified} />
                 </div>
                 {/* When the hero is about something else, the open window still has a place on the page. */}
-                {next.key !== 'wait' && d.nextWindow && (
+                {!heroWait && d.nextWindow && (
                   <div className="mt-6">
                     <p className="mb-1.5 text-[0.8125rem] font-medium text-muted">{t('expectBy')} {fmtDate(d.nextWindow.due_at, lang)}</p>
                     <DayMeter dueAt={d.nextWindow.due_at} extended={d.nextWindow.deadline_extended} now={now} lang={lang} variant="ticks" />

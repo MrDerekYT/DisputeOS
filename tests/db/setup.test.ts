@@ -268,18 +268,23 @@ describe('setup test sends', () => {
     let snap = await loadSetupSnapshot(ctx);
     expect(snap.email).toEqual({ driver: 'resend', hasApiKey: true, fromSet: true, testAcceptedAt: null });
     expect(snap.sms).toMatchObject({ state: 'connected', webhookUrl: 'https://app.example.test/api/webhooks/twilio', webhookReachable: true, testAcceptedAt: null });
-    expect(snap.agency).toEqual({ isAgency: true, mailingAddress: false, replyEmail: false, timezoneChosen: false });
+    expect(snap.agency).toEqual({ isAgency: true, mailingAddress: false, replyEmail: false, timezoneChosen: false, agreementTerms: false });
     expect(snap.jobs).toEqual({ cronSecretSet: true, lastRunAt: null, lastRunOk: false });
     const json = JSON.stringify([snap, buildSetupChecklist(snap)]);
     for (const secret of ['re_test_key', 'token-for-tests', 'ACtest', 'cron-secret-value', 'hello@agency.test', '+15552345678']) expect(json).not.toContain(secret);
 
     await withSystem(async (db) => {
       await db.run("update public.organizations set settings = settings || jsonb_build_object('lead_mailing_address', '1 Main St, Austin, TX 78701', 'lead_reply_email', 'hello@agency.test', 'timezone', 'America/Chicago') where id = $1", [o.orgId]);
+      // The client agreement terms, as Settings → Client agreement saves them (src/lib/compliance/agreement-terms.ts).
+      await db.run("update public.organizations set settings = settings || jsonb_build_object('agreement', $2::jsonb) where id = $1", [o.orgId, JSON.stringify({
+        legal_name: 'SetupSnap LLC', address: '1 Main St, Austin, TX 78701', total_cents: 59400, duration: 'About 6 months from the date you sign',
+        services: 'We review your credit reports with you and prepare dispute letters for your approval about items you believe are inaccurate.',
+        payment_terms: '$99 per month, charged only after the services for that month are fully performed.', additional: '', updated_at: new Date().toISOString(), updated_by: 'test' })]);
       await db.run("insert into public.job_runs (org_id, started_at, finished_at, status) values ($1, now(), now(), 'ok')", [o.orgId]);
     });
     await sendTestEmail(actor(o), fakeEmail({ ok: true, provider: 'resend', providerRef: 'id' }));
     snap = await loadSetupSnapshot(ctx);
-    expect(snap.agency).toEqual({ isAgency: true, mailingAddress: true, replyEmail: true, timezoneChosen: true });
+    expect(snap.agency).toEqual({ isAgency: true, mailingAddress: true, replyEmail: true, timezoneChosen: true, agreementTerms: true });
     expect(snap.jobs).toMatchObject({ lastRunOk: true });
     expect(snap.email.testAcceptedAt).not.toBeNull();
     const list = buildSetupChecklist(snap);

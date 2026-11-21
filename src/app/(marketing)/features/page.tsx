@@ -101,7 +101,7 @@ export default function FeaturesPage() {
         lede="AI is optional and narrow. It rewords what is already on file; it does not decide what to dispute and it does not send anything. Wherever a model wrote or suggested something, it carries this mark.">
         <Points items={[
           ['Before and after, side by side', 'A suggestion is shown beside the current text with the changed lines marked, and nothing changes until you accept it. If the output changes a number or a date, or contains a blocked claim, it is discarded.'],
-          ['Identifiers stay on the server', 'Personal identifiers are stripped before any text is sent to an AI provider.'],
+          ['Only wording goes to the AI', 'A letter reaches the AI provider as its greeting, linking sentence and closing, with every fact replaced by a marker; a progress note as its connective sentences, without the client’s name. A credit-guide question is sent with the client’s own details on file, known names, and the common written forms of contact details, Social Security and account numbers, dates, street addresses and amounts masked; anything else typed into it, or written another way, is sent as written.'],
           ['Works with AI switched off', 'With no provider or no credits, letters and notes use the standard wording and nothing is charged.'],
         ]} />
         <div className="mt-10 max-w-xl">

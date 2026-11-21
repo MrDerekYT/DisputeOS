@@ -37,7 +37,7 @@ beforeAll(async () => {
   portalUser = p.userId;
   otherPortalUser = (await addPortalClient(A.orgId, 'Other Client')).userId;
   bareClient = await addClient(A.orgId, 'No Agreement');
-  await recordConsentRows(A.orgId, clientId); // signed 10 days ago: outside the cancellation period
+  await recordConsentRows(A.orgId, clientId); // signed long ago: outside the cancellation period
   await withSystem(async (db) => {
     await db.run(
       `insert into public.letters (org_id, client_id, kind, title, recipient_name, status, approved_at, sent_at, sent_on, sent_method, tracking_number)
@@ -88,7 +88,8 @@ describe('work statement: built from records, under row-level security', () => {
 describe('evidence pack', () => {
   it('lists signed agreements with the typed signature, letters sent, messages and portal sign-ins', async () => {
     const p = (await asUser(manager.userId, (db) => loadEvidencePack(db, clientId)))!;
-    expect(p.consents.map((c) => c.kind).sort()).toEqual(['croa_contract', 'croa_disclosure', 'fcra_authorization']);
+    // The fixture records the client's four required agreements (the consent to electronic records is one of them).
+    expect(p.consents.map((c) => c.kind).sort()).toEqual(['croa_contract', 'croa_disclosure', 'esign', 'fcra_authorization']);
     expect(p.consents.every((c) => c.signed_name === 'Jordan Rivera' && !!c.signed_at)).toBe(true);
     expect(p.lettersSent.map((l) => l.title)).toEqual(['Dispute letter to Experian']); // the draft is not evidence of anything sent
     expect(p.communicationsTotal).toBe(1);

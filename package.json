@@ -3,7 +3,9 @@
   "version": "0.2.0",
   "private": true,
   "description": "Credit repair operations platform: CRM, report analysis, dispute workflow, letters, automation, client portal.",
-  "engines": { "node": ">=20.11" },
+  "engines": {
+    "node": ">=20.11"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -20,12 +22,14 @@
     "env:setup": "bash scripts/setup-local-db.sh",
     "jobs:run": "node scripts/run-jobs.mjs",
     "credits:grant": "node scripts/grant-credits.mjs",
+    "ai:prove": "AI_LIVE=1 vitest run tests/live --reporter=verbose",
     "outreach:approve": "node scripts/approve-outreach.mjs",
     "domain:verify": "node scripts/verify-domain.mjs",
     "secrets:gen": "node scripts/gen-secrets.mjs",
     "check": "npm run typecheck && npm run lint && npm test && npm run build"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "1.5.0",
     "lucide-react": "^1.65.0",
     "next": "^15.5.28",
     "pg": "^8.23.1",

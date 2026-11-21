@@ -104,6 +104,46 @@ export function restore(original: Protected, reply: string, protectedTerms: stri
   return { ok: true, text: out.replace(TOKEN, (_, i: string) => original.locked[Number(i) - 1]!) };
 }
 
+const TOKEN_SPLIT = /\[\[LOCKED_\d+\]\]/;
+const sentenceCount = (s: string) => s.split('\n').flatMap(units).filter((u) => u.trim()).length;
+
+/**
+ * For a short text that has to keep its form (a client progress note), run after restore() passed. The reply may reword
+ * each stretch of wording between protected passages, but it must keep the same number of lines, add no wording where
+ * the original had none (before, between or after the protected passages), and keep the number of sentences in every
+ * stretch. A preface, an echoed tag, an added promise or a dropped sentence fails here. Returns the reason, or null.
+ */
+export function shapeIssue(original: Protected, reply: string): string | null {
+  const src = original.masked.replace(/\r\n?/g, '\n').trim();
+  const out = reply.replace(/\r\n?/g, '\n').trim();
+  const lines = (s: string) => s.split('\n').filter((l) => l.trim()).length;
+  if (lines(src) !== lines(out)) return 'the rewrite changed the number of lines';
+  const a = src.split(TOKEN_SPLIT);
+  const b = out.split(TOKEN_SPLIT);
+  if (a.length !== b.length) return 'protected passages were reordered or altered';
+  for (let i = 0; i < a.length; i++) {
+    const was = a[i]!.trim();
+    const now = b[i]!.trim();
+    if (!was && now) return 'the rewrite added wording around a protected passage';
+    if (sentenceCount(was) !== sentenceCount(now)) return 'the rewrite added or dropped a sentence';
+  }
+  return null;
+}
+
+/** One stretch of the wording around the protected passages: as it was sent, and as the model returned it. */
+export interface Stretch { was: string; now: string }
+
+/**
+ * The wording between the protected passages, stretch by stretch, as sent and as returned. Run after restore() passed,
+ * so both texts hold the same markers in the same order. Nothing protected is in it: a check of this reads only what
+ * the model could change.
+ */
+export function editedStretches(original: Protected, reply: string): Stretch[] {
+  const was = original.masked.replace(/\r\n?/g, '\n').trim().split(TOKEN_SPLIT);
+  const now = reply.replace(/\r\n?/g, '\n').trim().split(TOKEN_SPLIT);
+  return was.map((w, i) => ({ was: w.trim(), now: (now[i] ?? '').trim() }));
+}
+
 /** True when `proposed` keeps every protected passage of `original` unchanged, in order — used to re-check a suggestion before saving it. */
 export function sameProtectedContent(original: string, proposed: string, protectedTerms: string[] = []): boolean {
   const a = protect(original, protectedTerms);

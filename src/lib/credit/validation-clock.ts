@@ -24,8 +24,8 @@ export const VALIDATION_PERIOD_DAYS = 30;
 export const PRESUMED_RECEIPT_DAYS = 5;
 
 /**
- * The shared holiday table lists each holiday on the day it is OBSERVED (a Saturday holiday on the Friday before, a
- * Sunday holiday on the Monday after). § 1006.34(b)(5) excludes the holidays "identified in 5 U.S.C. 6103(a)", which
+ * The shared holiday rule (federalHolidays in src/lib/disputes/clock.ts, computed for any year) gives each holiday on
+ * the day it is OBSERVED (a Saturday holiday on the Friday before, a Sunday holiday on the Monday after). § 1006.34(b)(5) excludes the holidays "identified in 5 U.S.C. 6103(a)", which
  * names the holidays themselves, plus Saturdays and Sundays. So an observed-only Friday or Monday is counted here.
  * That can only make the presumed receipt, and so the end of the period, earlier: the cautious reading for a consumer.
  * Only the fixed-date holidays ever move (Jan 1, Jun 19, Jul 4, Nov 11, Dec 25); these are the days they move to.

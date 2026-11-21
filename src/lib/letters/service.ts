@@ -2,6 +2,7 @@ import type { Db } from '../db';
 import { getEnv } from '../env';
 import { UserError } from '../errors';
 import { dayInZone } from '../util';
+import { isRealDay } from '../real-day';
 import { audit } from '../audit';
 import { findBlockedClaims } from '../compliance/claims';
 import { logEvent } from '../crm';
@@ -13,6 +14,7 @@ import { CITES_809B, missingFacts, missingFactsForOwnTemplate } from './library'
 import { specialtyTemplateKey, templateByKey, templatesFor, type LetterKind } from './templates';
 import { parseAgencyItem, specialtyAgency } from '../credit/agencies';
 import { procedureDescriptionDue } from '../disputes/clock';
+import { loadServiceStatus, sentDateRefusal, serviceRefusal } from '../agreements';
 import { CONTENT_KINDS, contentIssues, SPECIFICITY_KINDS, specificityIssues, statesEnclosures, type SpecificityInput } from './specificity';
 
 export interface LActor { orgId: string; userId: string; role: Role; meta?: { ip?: string | null } }
@@ -255,7 +257,7 @@ export function businessToday(now = new Date(), tz: string = getEnv().APP_TIMEZO
 export function checkSentOn(sentOn: string | null | undefined, today = new Date()): string {
   const t = businessToday(today);
   if (!sentOn) return t;
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(sentOn) || Number.isNaN(new Date(`${sentOn}T00:00:00Z`).getTime())) throw new LetterError('Enter the date it was sent as a valid date.');
+  if (!isRealDay(sentOn)) throw new LetterError('Enter the date it was sent as a valid date.');
   // "Future" is judged against the later of the agency's date and the UTC date, so nobody west or east of the
   // configured zone is refused their own today.
   const utc = today.toISOString().slice(0, 10);
@@ -264,12 +266,25 @@ export function checkSentOn(sentOn: string | null | undefined, today = new Date(
   return sentOn;
 }
 
+/**
+ * Records that a person mailed an approved letter: a stand-alone letter, or a follow-up or method-of-verification
+ * letter on a dispute already submitted (the dispute's first letter is recorded through transitionDispute). Every one
+ * of them is a service to the client, so the same gate applies as to a submission (src/lib/agreements.ts): the
+ * statement, the service agreement and the authorization in force (15 U.S.C. § 1679d(a)(1); an agreement the client
+ * cancelled is not in force), the cancellation period over (§ 1679d(a)(2)), and a sent date after that period.
+ * A personal workspace has no such gate.
+ */
 export async function markSent(db: Db, actor: LActor, letterId: string, method: 'certified_mail' | 'first_class_mail' | 'portal' | 'manual', tracking?: string, sentOn?: string | null): Promise<void> {
   if (!can(actor.role, 'letters:write')) throw new PermissionError('letters:write');
   const l = await db.row<{ status: string; client_id: string; kind: string }>('select status, client_id, kind from public.letters where id = $1 for update', [letterId]);
   if (!l) throw new LetterError('Letter not found.');
   if (l.status !== 'approved') throw new LetterError('Only an approved letter can be marked as sent.');
+  const service = await loadServiceStatus(db, l.client_id);
+  const refused = service ? serviceRefusal(service, 'send') : null;
+  if (refused) throw new LetterError(refused);
   const on = checkSentOn(sentOn);
+  const early = service ? sentDateRefusal(service, on, 'send') : null;
+  if (early) throw new LetterError(early);
   // Recorded by a person: delivery_source stays 'staff_recorded'. Only a carrier integration may ever set 'carrier_confirmed'.
   await db.run("update public.letters set status = 'sent', sent_at = now(), sent_on = $4, sent_method = $2, tracking_number = $3, delivery_source = 'staff_recorded', sent_recorded_by = $5 where id = $1", [letterId, method, tracking?.trim().slice(0, 80) || null, on, actor.userId]);
   // 15 U.S.C. § 1681i(a)(7): the description of the reinvestigation procedure is due 15 days after the agency receives the

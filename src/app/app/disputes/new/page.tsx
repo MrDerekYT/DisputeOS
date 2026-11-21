@@ -3,8 +3,8 @@ import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import { Avatar, Badge, EmptyState, Notice, PageHeader, Section } from '@/components/ui';
 import { ActionForm, Check, Field, Select, SubmitButton, TextArea } from '@/components/forms';
+import { loadServiceStatus } from '@/lib/agreements';
 import { requireStaff } from '@/lib/auth/context';
-import { consentStatus } from '@/lib/compliance/disclosures';
 import { asWritten, draftReason, REASON_PROMPT, reportedFor } from '@/lib/disputes/reasons';
 import { loadReportedRows } from '@/lib/disputes/service';
 import { CATEGORIES, categoryForFinding, FIELD_OPTIONS, mustNameAccount } from '@/lib/disputes/workflow';
@@ -59,12 +59,13 @@ export default async function NewDisputePage({ searchParams }: { searchParams: P
     const finding = sp.findingId && isUuid(sp.findingId)
       ? await db.row<{ id: string; category: string; dedupe_key: string; title: string; explanation: string; evidence: Evidence[]; tradeline_ids: string[]; basis: string }>('select id, category, dedupe_key, title, explanation, evidence, tradeline_ids, basis from public.findings where id = $1 and client_id = $2', [sp.findingId, sp.clientId])
       : null;
-    const consents = await db.rows<{ kind: string; signed_at: string; revoked_at: string | null }>('select kind, signed_at, revoked_at from public.client_consents where client_id = $1', [sp.clientId]);
-    return { client, tradelines, finding, consents };
+    // What the submission gate will ask for (src/lib/agreements.ts): nothing in a personal workspace, which makes no
+    // agreement with itself.
+    const cs = (await loadServiceStatus(db, client.id))!;
+    return { client, tradelines, finding, cs };
   });
   if (!data) notFound();
-  const { client, tradelines, finding, consents } = data;
-  const cs = consentStatus(consents);
+  const { client, tradelines, finding, cs } = data;
 
   // ---- A specialty agency item (ChexSystems, LexisNexis, ...) is typed in by hand; it has its own two steps.
   if (sp.specialty || sp.agency) return <SpecialtySteps client={client} agencyKey={sp.agency} />;

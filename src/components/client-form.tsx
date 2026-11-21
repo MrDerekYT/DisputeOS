@@ -10,8 +10,12 @@ export interface ClientDefaults {
   has_dob?: boolean;
 }
 
-/** Shared by "New client" and "Edit client". Sensitive identifiers are write-only: never pre-filled. */
-export function ClientFields({ d = {}, team, canAssign, mode }: { d?: ClientDefaults; team: { id: string; label: string }[]; canAssign: boolean; mode: 'create' | 'edit' }) {
+/**
+ * Shared by "New client" and "Edit client". Sensitive identifiers are write-only: never pre-filled. On New client,
+ * `paperDates` bounds the date of the signed paper (src/lib/agreements.ts, paperDateRange). In a personal workspace
+ * (`personal`) there is no credit repair agreement to record and no portal invitation, so that box is left out.
+ */
+export function ClientFields({ d = {}, team, canAssign, mode, personal = false, paperDates }: { d?: ClientDefaults; team: { id: string; label: string }[]; canAssign: boolean; mode: 'create' | 'edit'; personal?: boolean; paperDates?: { min: string; max: string } }) {
   const a = d.address ?? {};
   return (
     <div className="space-y-8">
@@ -57,14 +61,18 @@ export function ClientFields({ d = {}, team, canAssign, mode }: { d?: ClientDefa
         <TextArea label="Goals" name="goals" rows={3} defaultValue={d.goals} className="sm:col-span-2" placeholder="e.g. Qualify for an auto loan in 12 months" hint="In the client’s own words. Do not record promises or targets on their behalf." />
       </fieldset>
 
-      {mode === 'create' && (
+      {mode === 'create' && !personal && (
         <div role="group" aria-labelledby="consents-title" className="space-y-3 rounded-2xl bg-raised p-5">
           <h3 id="consents-title" className="text-base font-semibold">Consents &amp; portal</h3>
-          <p className="text-sm text-muted">Record what the client has already received and signed. Disputes cannot be submitted until all three are on file (you can also record them later).</p>
+          <p className="text-sm text-muted">Record what the client has already received and signed on paper. Disputes cannot be submitted until all three are on file (you can also record them later, or the client can e-sign them in the portal). They are signed in this order, and the service agreement is built from your saved terms (Settings → Client agreement), with your agency’s payment terms and total: for a client on other figures, record it from the client page after setting their own payment terms there. What is stored with each is the app’s text on the day you record it, dated with the date on the paper, not a copy of the paper: keep the signed paper, or upload a scan under Documents.</p>
           <Check name="consentDisclosure">Client received the <strong>Consumer Credit File Rights</strong> disclosure</Check>
           <Check name="consentContract">Client signed the <strong>service agreement</strong> (3-business-day cancellation right explained)</Check>
           <Check name="consentAuthorization">Client authorized us to <strong>review their reports and dispute on their behalf</strong></Check>
-          <Field label="Name the client signed with" name="signedName" hint="Required if you tick any consent above." />
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Name the client signed with" name="signedName" hint="Required if you tick any consent above." />
+            <Field label="Date written on the signed paper" name="paperSignedOn" type="date" min={paperDates?.min} max={paperDates?.max}
+              hint="Required if you tick any consent above. The service agreement is dated with it, and its 3-business-day cancellation period runs from it." />
+          </div>
           <Check name="invite">Email an invitation to the client portal (needs an email address)</Check>
         </div>
       )}
