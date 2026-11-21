@@ -30,15 +30,34 @@ rebuilt; production never ran it.
 - **Each client can have their own payment terms and total**, set by staff before the client signs, for agencies
   with more than one plan.
 - **The terms check** refuses promises of removal in English and Spanish (including ones that name the bureaus,
-  accounts, bills, loans or inquiries, or say an item "comes off" a report) and payment asked for at signing, on the
-  effective date, when the account is set up, at the start of a month or billing period for that period's work, or
-  before the work starts ("Before work begins, you pay $99"). It passes how the agency keeps and deletes its own
-  records ("emails are kept for two years and then deleted"), requests and disclaimers ("we dispute the items you
-  select for correction or deletion", "nothing in this agreement promises the removal of any item"), statements of the
-  reporting law (the seven-year period, putting a deleted item back), security freezes and opt-outs, billing that stops
-  ("if you cancel, we stop billing you right away"), honest cancellation terms ("if you cancel before the first
-  letters, you pay nothing") and "no cobramos nada por adelantado". It is a list of rules: it catches the common
-  wordings, not every one, and counsel should still read the agency's terms.
+  accounts, bills, loans or inquiries, or say an item "comes off" a report or "will be history"), promises of repaired,
+  restored or clean credit, a success rate, an approval ("you'll be approved for the home loan", "lenders will start
+  approving you", "calificará para una hipoteca") and payment asked for at signing (by "you", "they" or "clients", by
+  e-signature, "upon your signature", during enrollment), on the effective date, when the account is set up or "when we
+  open your file", at the start of a month or billing period for that period's work, "to get started", or before the
+  work starts ("Before work begins, you pay $99", "payment first, then we pull your reports"). It passes how the agency
+  keeps and deletes its own records ("emails are kept for two years and then deleted", "we erase the utility bills and
+  paystubs you uploaded once your agreement ends"; a bare "file", "information" or "profile" only when the sentence
+  speaks of closing the account, the client's request or how long it is kept), requests and disclaimers ("we dispute
+  the items you select for correction or deletion", "nothing in this agreement requires a bureau to delete any item",
+  "removal of any item is not guaranteed", "our fee does not depend on how many items are removed"), outcomes and
+  results a bureau reaches or reports ("we tell you whether each account was corrected, deleted or left unchanged",
+  "we keep a log of every deletion the bureaus report to us", "we do not charge extra when an item is deleted"),
+  statements of the reporting law (the seven-year period, putting a deleted item back, a furnisher that does not
+  respond, identity theft, and the 15 U.S.C. § 1679c(a) statement word for word), security freezes and opt-outs,
+  billing that stops, fees only disclosed or confirmed ("we disclose all fees in writing before you sign", "we are
+  upfront about all of our fees"), notice given in advance ("30 days in advance of any change"), honest cancellation
+  terms and "no cobramos nada por adelantado". Each of these reads the words that govern the removal or the payment,
+  and fails when the rest of the sentence makes the removal certain or the agency's or gives it a time frame ("we
+  request deletion, and the bureaus always grant it", "…, and they agree in nearly all cases", "…, except our
+  clients", "…, usually within the first month"), or when a negated charge is followed by "and", "because", "since",
+  "which" or a cap ("we don't charge interest because you pay the full price when you sign", "we never collect more
+  than one month in advance"). Spanish words are read to their end ("eliminó", "será", "subirá"), and the rules that
+  read a long run of spaces again at every position (a score number, "your score will…") now read it once. Every
+  sentence of the four review rounds (1,410) is a regression test (`tests/unit/claims-corpus.test.ts`); the 8 the
+  rules still read the other way are listed there with the reason, and a test fails if one of them starts being read
+  right, so it is moved out of the list. It is a list of rules that catch common wordings, not every one, and counsel
+  should still read the agency's terms.
 - **Federal holidays** are computed by rule for any year, so dates after 2030 still skip them.
 - **Signed copies** say when a character could not be printed in the PDF, and the fingerprint is of the stored text.
 - **Dates of birth** that do not exist (February 31) are refused, and a stored impossible date prints as needed.
@@ -49,8 +68,16 @@ rebuilt; production never ran it.
   not ready (and no promise of a notification); the credit guide's steps come from the same records as the portal home.
 - **AI**: one attempt may use the whole 45 s, the monthly spending limit has its own message, the progress note's two
   courtesy sentences may only use courtesy words, and the credit guide masks more and refuses more predictions in
-  English and Spanish ("you're well on your way to a better score", "lo normal es que su puntaje suba"; see the entry
-  below).
+  English and Spanish ("you're well on your way to a better score", "lo normal es que su puntaje suba", "the bureau
+  probably deletes the collection", "errors which you dispute are usually removed", "you should see a nice jump in
+  your score", "the account will be dropped", "su puntaje tiende a recuperarse"; see the entry below), including a
+  likelihood stated beside a condition ("if an item is removed, which usually happens, …") and across "U.S." or a
+  sentence that goes on ("Give it about 30 days. After that, your score goes up."). It no longer refuses an ordinary
+  explanation that names a result in an if, whether or si clause, in a which or qué question after a verb of telling,
+  after "does not" or "whether to", or as a belief it then denies ("if an item is removed, you will get a notice",
+  "lenders decide whether to approve you", "many people believe paying off a collection gets it removed, but that is
+  not how it works"), nor "your score will not drop" or "a reply will come by mail". Its rules are lists of words that
+  catch common wordings, not an understanding of the text.
 
 ## Client welcome link, guided intake and the agreements (unreleased)
 

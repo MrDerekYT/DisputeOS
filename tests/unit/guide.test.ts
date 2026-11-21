@@ -616,8 +616,27 @@ describe('habitual predictions and ordinary explanations (the last verification�
     expect(findGeneratedClaims(t)).toEqual([]);
   });
 
-  it('flags a negated result beside a word of what usually happens: the rule is blunt, and the vetted text is shown instead', () => {
-    for (const t of ['In many cases, accurate information does not come off your report.', 'Con frecuencia, la información exacta no se elimina.']) expect(findGeneratedClaims(t).map((i) => i.id), t).toEqual(['gen-prediction']);
+  it('accepts a negated result beside a word of what usually happens: a result that does not happen is no prediction', () => {
+    for (const t of ['In many cases, accurate information does not come off your report.', 'Con frecuencia, la información exacta no se elimina.', 'Paying off a collection usually does not get it removed.']) expect(findGeneratedClaims(t), t).toEqual([]);
+    // Only the result right after the negation is named only; another result in the sentence is still a prediction.
+    expect(findGeneratedClaims('Paying does not get it removed, but your score will usually rise.').map((i) => i.id)).toContain('gen-prediction');
+  });
+
+  it('accepts a result named in an if, whether or si clause, or a which or qué question after a verb of telling; not one with a word of likelihood', () => {
+    for (const t of [
+      'If an item is removed, you will get a notice from the bureau.',
+      'You will receive a letter that lists which items were deleted, updated or verified.',
+      'The bureau should tell you in writing whether the item was removed or verified.',
+      'Lenders generally look at your income and your report to decide whether you qualify for a loan.',
+      'Usted podrá ver en el portal si la cuenta fue eliminada.',
+      'Le diremos qué cuentas fueron eliminadas.',
+      'A freeze you lift online is usually cleared within an hour.',
+    ]) expect(findGeneratedClaims(t), t).toEqual([]);
+    for (const t of [
+      'You will send a goodwill letter, which usually gets it removed.',
+      'If you dispute it, the item will probably be removed.',
+      'Es común que las cuentas negativas sean eliminadas.',
+    ]) expect(findGeneratedClaims(t).map((i) => i.id), t).toContain('gen-prediction');
   });
 
   it.each([
@@ -651,5 +670,48 @@ describe('habitual predictions and ordinary explanations (the last verification�
       const text = progressSummary({ firstName: 'Dana', total, deleted, updated, verified, waiting, draft: 0, language });
       expect(progressNoteIssue(text), `${language} ${total}`).toBeNull();
     }
+  });
+});
+
+describe('AI answers: the code review’s and the fourth verification’s findings', () => {
+  it.each([
+    // "which" after a verb of telling names a result; a relative "which" with a word of likelihood predicts one.
+    'Errors which the bureau cannot verify are usually deleted.', 'Inaccurate items which you dispute are often removed.', 'Items which are disputed are usually removed.',
+    // "see" and "have" are no passive ("se", "ha" do not match their first letters).
+    'Clients which we serve see their collections removed, usually within weeks.', 'Clients which we help have their late payments removed in most cases.',
+    // A likelihood stated beside a condition or a question.
+    'If an item is removed, which usually happens, you’ll get a letter.', 'Ask the bureau which items were deleted; usually it is all of them.',
+    'Si la cuenta es eliminada, como suele pasar, recibirá una carta.', 'Usted verá qué cuentas son eliminadas, y normalmente son todas.',
+    // Abbreviations end no sentence; a sentence that goes on from a word of timing.
+    'Most people in the U.S. see their scores climb after disputing errors.', 'Your score climbs approx. 2 weeks later, usually.', 'Give it about 30 days. After that, your score goes up.',
+    // More wordings of a result or of likelihood.
+    'After the investigation wraps up, that collection should be off your report.', 'You should see a nice jump in your score within a couple of months.',
+    'Most people see their scores rebound within a few months.', 'Disputes like yours usually succeed.', 'You’re on track for approval.',
+    'There’s no reason your score shouldn’t recover after this.', 'Su puntaje tiende a recuperarse en unos meses.', 'Es muy probable que el buró le dé la razón.',
+    'Your score is going up, I’d bet on it.', 'Your score is about to take off.', 'In nine out of ten cases like this, the account is deleted.',
+  ])('rejects a prediction: %s', (t) => {
+    expect(findGeneratedClaims(t).length, t).toBeGreaterThan(0);
+  });
+
+  it.each([
+    'A reply from the bureau will come by mail.', 'Checking your own credit will not lower your score.', 'Your score will depend on what is in your report when a lender checks it.',
+    'Your credit score will not drop because you looked at your own report.', 'Lenders often look at your income too when deciding whether to approve you.',
+    'Typically you can request a goodwill adjustment, though the creditor decides whether to forgive the late payment.',
+    'Some people qualify for a free report more often, for example after a denial.', 'It’s normal for your score to go up and down a little as balances change.',
+    'Many people believe paying off a collection gets it removed, but that is not how it works.', 'Many people’s reports are already error-free, so a dispute isn’t always needed.',
+    'Paying on time every month is the most common way people build better credit over time.',
+    'Muchas personas creen que pagar una cobranza hará que se elimine, pero normalmente sigue apareciendo como pagada.',
+    'Si el buró elimina la cuenta, usted recibirá una carta.', 'If an item is removed, you will get a notice.', 'Paying a collection usually does not get it removed.',
+  ])('still accepts an ordinary explanation: %s', (t) => {
+    expect(findGeneratedClaims(t)).toEqual([]);
+  });
+
+  it('a long run of spaces is read in one pass by "your score will…" (its lookbehind is read after the word)', () => {
+    const text = ' '.repeat(8000);
+    findGeneratedClaims(text);
+    const t0 = performance.now();
+    findGeneratedClaims(text);
+    findGeneratedClaims('\n'.repeat(8000));
+    expect(performance.now() - t0).toBeLessThan(50);
   });
 });

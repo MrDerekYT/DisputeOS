@@ -87,68 +87,156 @@ compliant; state requirements vary and change. **Consult a consumer-finance atto
   accepted, and the Settings hint asks the agency's attorney to confirm its state's rules.
 - **The agency's terms are checked when saved** (`termsIssue`, `src/lib/compliance/agreement-terms.ts`): every field goes
   through a claims check for contracts (`findContractClaims`: promises of removal or deletion, counts of items removed,
-  removal or results in a set time, a "clean" report, guarantees, score promises and numbers, loan approval, tradelines,
-  new credit identities, offers to dispute accurate information) and an advance-fee check (`findAdvanceFee`, § 1679b(b):
-  a deposit, retainer, prepayment or setup, enrollment or sign-up fee; payment at signing, on or the same day as signing,
-  at the time or the moment of signing, once the client has signed, with the signed agreement, within hours or days of
-  signing or of the effective date, on the effective date or the start date, when the agreement takes effect, when or
-  before the account is set up or the enrollment is complete (unless that clause bills at the end of the period or for
-  work performed), later after signing (10 days, two weeks, the first of the month after) unless it
-  pays for work already performed, in the first days or weeks unless for work already performed, today, on day one, at
-  onboarding, up front, in advance, at the outset, at checkout, or right away next to a payment word; payment before the
-  work starts, before the first letters are sent or the reports are reviewed, until or once a payment is received or
-  clears, required to begin or to open a file, a payment that starts or secures the program, or payment at the first
-  consultation; billing at the start of a month, a program or a billing cycle ("each service month", "every 30-day
-  period", "on the 1st for the current month") unless it is for the period before; and in Spanish "al firmar", "el día
-  que firma", "al inscribirse", "por adelantado", "antes de empezar" or "de enviar", "al inicio de cada mes", and a
-  "depósito" or "anticipo"). A time phrase that opens its clause is read with the clause after its comma ("Before work
-  begins, you pay $99").
+  removal or results in a set time, a "clean", "spotless", repaired or restored report or credit ("your credit will be
+  fully repaired", "we fix your credit", "your student loan default reversed"), a success rate ("a 98% success rate"),
+  guarantees, score promises and numbers ("a 100-point jump", "in the 700s", "watch your score shoot up"), loan approval
+  ("you'll be approved for the home loan", "lenders will start approving you", "eligible for prime auto loans",
+  "calificará para una hipoteca"; not "this agreement ends when you are approved for a mortgage" or "clients are
+  approved for financing by their lenders, not by us"), tradelines, new credit identities, offers to dispute accurate
+  information) and an advance-fee check (`findAdvanceFee`, § 1679b(b): a deposit, retainer, prepayment or setup,
+  enrollment or sign-up fee, unless denied ("a deposit is never required"; not "…is not required until the day you
+  sign"); payment at signing (by the client, "they", "clients" or "the customer", by e-signature, "upon your
+  signature", "once you're enrolled", during enrollment), on or the same day or week as signing, at the time or the
+  moment of signing, once the client has signed, the morning or the first business day after, with the signed agreement,
+  as soon as the agency receives it or opens the file, within hours or days of signing or of the effective date, on the
+  effective date or the start date, when the agreement takes effect, when, the moment, the day or before the account is
+  set up or created or the enrollment is complete (unless that clause bills at the end of a billing period or for work
+  performed), upon approval or acceptance of the application, while the client can still cancel, later after signing
+  (10 days, two weeks, the first of the month after) unless it pays for work already performed (not work "to be
+  performed", "we will have performed", "rendered under this agreement" or "completed over the next six months"), in the
+  first hours, days or weeks unless for work already performed, today, on day one or day 3, on the client's first day,
+  at or during onboarding, at the kickoff call or after the intake interview, up front, in advance, at the outset, at
+  checkout, or right away next to a payment word; payment before the work starts, before the first letters are sent,
+  the reports are reviewed, pulled or looked at or the file is assigned, until or once a payment is received or clears,
+  required to begin or to open a file, "to get started" or "to open your case", a payment, deposit or retainer that
+  starts or secures the program, work that begins as soon as the client pays or the card is charged, "payment first,
+  then we pull your reports", or payment at the first consultation; billing at the start of a month, a program or a
+  billing cycle ("each service month", "every 30-day period", "on the 1st for the current month", "it pays for the
+  coming month") unless its own clause says it is for the period before (not a balance carried "together with" it);
+  and in Spanish "al firmar", "el día que firma", "el día de la inscripción", "cuando firme" or "en cuanto firma",
+  "antes de firmar", "al inscribirse", "al comenzar", "hoy", "por adelantado", "antes de empezar" or "de enviar", "al
+  inicio de cada mes", and a "depósito" or "anticipo"). A time phrase that opens its clause is read with the clause
+  after its comma ("Before work begins, you pay $99").
   - *Removals.* Every removal word is read as a promise: remove, delete, erase, wipe, purge, expunge and the nouns
     removal and deletion, in any tense, voice or person ("we will also remove", "accounts are removed from Experian",
     "we will have your medical bills removed", "our team removes…", "the removal of medical bills"); eliminate, take or
-    knock off, come, fall, drop or roll off, clear, disappear, vanish, go away, be gone, no longer appear and say goodbye
-    to where the clause names a credit file; the Spanish words of the website check ("eliminamos", "vamos a eliminar",
-    "serán eliminadas", "sacamos", but not "sacamos una copia de sus reportes"); and, where the clause names a credit
-    file, "elimina", "eliminar", "eliminación", "remueve", "borra" and "desaparecerán". Spanish removals pass when negated,
-    disclaimed ("no podemos prometer que…"), requested ("solicitamos a los burós que corrijan o eliminen…"), a statement
-    of the law or a condition, or about the agency's own records. It passes only when it is negated ("accurate
-    information cannot be removed", but not "there is no account we cannot remove"), disclaimed within its own clause
-    ("we cannot guarantee that any item will be deleted", but not "we cannot guarantee results, and we will remove…"),
-    or disclaimed by "nothing in this agreement promises…", a request ("we ask the bureaus to correct or delete…", "we
-    request that the bureaus delete…", "our letters demand verification or deletion", "we dispute the items you select
-    for correction or deletion"), a statement of the law ("the bureau must correct or delete information that cannot be
-    verified", the seven- and ten-year reporting periods, "a bureau that deletes an item and later puts it back must
-    notify you"), a possible outcome among others ("a dispute can end with the item verified, updated or deleted"), a
-    condition or question ("if an item is deleted, we let you know", "the bureaus decide whether an item is corrected,
-    updated or deleted", "which items were deleted"), a security freeze, fraud alert, prescreened offer or marketing list
-    the client asks about, or about the agency's own records with nothing of a credit file in its clause (or, for a
-    pronoun object or a passive with no subject of its own, "… then delete them", "emails are kept for two years and
-    then deleted", in its sentence): documents, uploads, files, data, information, records, profile, messages, emails,
-    call recordings, notes, login, card, bank, billing or payment details, Social
-    Security number, date of birth, copies of reports and the reports the client uploaded, a portal account, things
-    taken "from our servers" or another of the agency's own systems, and "your account" only where the sentence closes
-    it or names the agency ("when you close your account", "your account with us"). A bureau or other consumer reporting
-    agency (ChexSystems, Early Warning, LexisNexis, Innovis, SageStream, NCTUE), a creditor, lender, bank, collector or
-    furnisher, "credit", a report, an account, loan, bill, debt or other item of a report, or "from" any other place
-    makes it a credit removal ("we remove your account with Capital One", "we remove your personal information from
-    ChexSystems").
-  - *Payments named as none.* A time word counts only with a payment word or an amount in its own clause (cut at ";",
-    ":", a comma, and, but, otherwise, then, unless, except), once the payments named only to say there are none are
-    taken out ("no payment is due", "nothing is charged", "you pay nothing", "costs nothing", "free of charge", "we do not
-    charge a setup, enrollment or activation fee", "no cobramos nada por adelantado", "no hay pagos por adelantado",
-    billing that stops, "if you cancel, we stop billing you right away", and fees only explained, "we explain our fees
-    before we start work"); a cap
-    is not one ("never more than $99 at signing"), nor is a negation in another clause ("there is no setup fee and $99
-    is due when you sign"). A refund owed to the client is not a payment, and a time word that is the object of a
-    cancellation passes ("if you cancel before work starts, you pay nothing", "you have 3 business days after you sign
-    to cancel"); a cancellation anywhere else in the sentence does not ("if you cancel, you pay nothing; otherwise $99 is
-    due when you sign").
+    knock off, come, fall, drop or roll off, clear, disappear, vanish, go away, be gone or "history", no longer appear or
+    report, say goodbye to, pulled, struck or taken down from a report, and suppress, where the clause names a credit
+    file; the Spanish words of the website check ("eliminamos", "eliminó", "vamos a eliminar", "serán eliminadas",
+    "sacamos", but not "sacamos una copia de sus reportes"); and, where the clause names a credit file, "elimina",
+    "eliminar", "eliminación", "remueve", "borra", "desaparecerán", "salgan de su reporte" and "quedará sin cuentas
+    negativas". Spanish removals pass when negated ("no hace que desaparezca"), disclaimed ("no podemos prometer que…",
+    "ninguna parte de este contrato garantiza…"; not "no prometemos nada más que eliminar…"), requested ("solicitamos a
+    los burós que corrijan o eliminen…", "le ayudamos a solicitar que el buró corrija o elimine…"; not "solicite hoy su
+    eliminación…"), a statement of the law (also a creditor that "no responde a tiempo"), a condition (but not on the
+    agency's own verb, "si nos contrata hoy borramos…", the client's signing, "si usted firma hoy…", or with a time
+    frame), what the client is told happened ("cada carta que diga que una cuenta fue eliminada"), what only a bureau,
+    a creditor or a credit reporting agency may do ("los burós pueden eliminar…"; not "nuestra agencia puede…", nor "…, y
+    con nuestras cartas lo hacen"), one of a list of outcomes ("fueron eliminadas, corregidas o verificadas"; never the
+    agency's own, "verificamos y eliminamos…"), or about the agency's own records (documents, the client's data, call
+    recordings, phone number, the agency's call list).
+    It passes only when it is negated ("accurate information cannot be removed", "paying does not mean the bureau will
+    delete it"; not "there is no account we cannot remove", "not only do we remove…" or "no promise other than
+    deleting…"), disclaimed within its own clause ("we cannot guarantee that any item will be deleted", "our fee does not
+    depend on how many items are removed", "we never advise paying a collector to have an item removed"; not "we cannot
+    guarantee results, and we will remove…", "…, only that…", "…beyond the removal of…", "…what we promise, which is
+    deletion…", "no promises — your collections are deleted") or after it ("removal of any item is not guaranteed",
+    "removal of inaccurate information is decided by each bureau"; not "…is not promised, just delivered", "…not by the
+    bureaus but by us", or across a new clause: "…in most cases although results are not guaranteed"), or disclaimed by
+    "nothing in this agreement promises…" or "…requires a bureau to delete…", a right no one has (§ 1679c(a): "neither
+    you nor any 'credit repair' company … has the right to have accurate, current, and verifiable information removed",
+    which passes word for word; not "nobody but our team…"), a request the request verb governs ("we ask the bureaus to
+    correct or delete…", "we request that the bureaus delete…", "our letters demand verification or deletion", "we
+    dispute the items you select for correction or deletion"; not "once you request it, our team is able to delete…",
+    "we request that you sign so our team can delete…" or "we ask for a small monthly fee to remove…"), what the client
+    wants removed ("the items you want removed"; not "…and we remove them"), a statement of the law ("the bureau must
+    correct or delete information that cannot be verified", "if the furnisher does not respond in time, the bureau must
+    delete the account", "a bureau must block or remove information that resulted from identity theft", the seven- and
+    ten-year reporting periods, "over 7 years old", a deleted item that is put back or reappears, "should a bureau ever
+    reinstate an account it deleted", "lenders may still see a deleted collection", paid medical collections that
+    "should no longer appear"; not "for 10 years, our clients have…", nor "newer" items, "sooner" or "our clients don't
+    wait that long"), a possible outcome among others ("a dispute can end with the item verified, updated or deleted";
+    not "can only end with…" or "…, and for our clients it leads to deletion"), one of a list of outcomes a bureau may
+    reach, in any order ("removed, updated or verified", "keeping, changing or deleting"; a list of changes only,
+    "corrected or deleted", only where something says it may happen and not with "we", "will", "each … ends up",
+    "either … or … in your favor", "by our team" or a time frame), a condition or question ("if an item is deleted, we
+    let you know", "we do not charge extra when an item is deleted", "the bureaus decide whether an item is corrected,
+    updated or deleted"; not "if you enroll this week we delete…", "if you enroll today every collection is deleted in
+    30 days" or "if our letters go out this week your late payments are gone next month"), what the client is told
+    happened or what is explained ("which items were deleted", "when a bureau tells us an item was deleted", "which
+    they removed", "a response that shows an account as deleted", "notices that an item was deleted", "every deletion
+    the bureaus report to us", "any deletion shown in your portal", "including any deletions", "when it should drop
+    off"; not "what we do is delete…", "you have our word that every item is deleted", "…, which happens within 30
+    days", "…, usually within the first month" or "why your collections are deleted so quickly"), what only a bureau or
+    creditor may do or decides ("a creditor may agree to remove a late payment", "Experian, Equifax and TransUnion each
+    make their own decision on deletion"), the client taken off one of the agency's lists or removed as an authorized
+    user (not "from the ChexSystems database" or "public records databases"), a security freeze, fraud alert,
+    prescreened offer or marketing list where it is what the removal removes ("we can help you place, lift or remove a
+    security freeze"; not "we place fraud alerts and remove the account the identity thief opened", "your name from the
+    ChexSystems list" or "from lenders' do-not-lend lists"), or about the agency's own records with nothing of a credit
+    file in its clause (or, for a pronoun object or a passive with no subject of its own, "… then delete them", "emails
+    are kept for two years and then deleted", in its sentence up to the removal, never a clause after it): documents,
+    uploads and the files, photos, bills, statements or pay stubs the client uploaded, data, records, a client or case
+    file, messages, emails, call recordings, notes, login, signature, card, bank, billing or payment details, a saved
+    bank account, staff accounts and access, intake-form answers, Social Security number, date of birth, ID, driver's
+    license or passport, copies of reports and the reports the client uploaded, a portal account, things taken "from our
+    servers", "our newsletter" or another of the agency's own systems; a bare "file", "information" or "profile" only
+    where the sentence speaks of closing the account, of the client's request or of how long it is kept ("we delete your
+    file within 30 days after the agreement ends", "we keep your information for five years, then delete it", "files are
+    deleted after two years"; but not "we remove the account from your file" or "we remove harmful information within
+    60 days"); and "your account" only where the sentence closes it or names the agency ("when you close your account",
+    "your account with us"). A bureau or other consumer reporting agency (ChexSystems, Early Warning, LexisNexis,
+    Innovis, SageStream, NCTUE), a creditor, lender, bank, collector or furnisher, "credit", a report, an account, loan,
+    bill, debt or other item of a report (also "harmful information"), or "from" any other place makes it a credit
+    removal ("we remove your account with Capital One", "we remove your personal information from ChexSystems"). Each
+    exemption about what someone else may do fails when the rest of the sentence makes the removal certain or the
+    agency's ("…, and the bureaus always grant it", "…, and they agree in nearly all cases", "…, and it is usually all of
+    them", "…is never in doubt", "…never comes back", "…, and the bureaus rarely refuse", "…, except our clients", "with
+    our letters they choose to", "…; consider them gone", "…is what we deliver", "…, and most clients see them gone
+    within 60 days"), and all but the disclaimers, negations and statements of the law fail when a time frame for the
+    removal follows it. A promise made in a later clause with no removal word is not read ("bureaus must delete what they
+    cannot verify, and our letters are written so they cannot verify your collections").
+  - *Payments named as none.* A time word counts only with a payment word (a deposit, a retainer, dues, a debit, a
+    draft, money that "comes out of" an account, a card that is "run", months "settled" or "taken", a balance "cleared",
+    "se descuenta" among them) or an amount in its own clause (cut at ";", ":", and, but, otherwise, then, unless,
+    except, and a comma before a new subject or condition; a comma that sets off words about the payment does not cut
+    it: "your full payment, made at signing, covers…", "the fee is $99, taken when you sign"; a clause after "and" with
+    no subject of its own is read with the one before, "billing runs for six months and starts the day you sign"; "not
+    after the work but up front" reads the words before "not"; and a next clause that goes back to the time word is
+    read with it, "we go over the fees at signing and collect them right then", "…on day one, and the charge for it
+    posts the same day"), once the payments named only to say there are none are taken out ("no payment is due",
+    "nothing is charged", "payment is not required at signing", "fees are never collected in advance", "no payment of
+    any kind is due", "no fee may be charged before the work it pays for is done", "you pay nothing", "costs nothing",
+    "free of charge", "we do not charge a setup, enrollment or activation fee", "federal law does not allow us to charge
+    you before…", "no cobramos nada por adelantado", "no hay depósito, cuota de inscripción ni pago por adelantado",
+    billing that stops, "if you cancel, we stop billing you right away", but not "front-end payments"), fees only
+    explained, disclosed or confirmed ("we explain our fees before we start work", "before you sign, we tell you the
+    total cost", "we disclose all fees in writing before you sign", "we confirm your monthly price with you before you
+    sign", "antes de firmar, le explicamos todos los cargos"), words about payment that ask for none ("we give you a
+    payment schedule", "your payment method is verified when you enroll", "we collect your billing details when you
+    sign", "your monthly price is locked in when you enroll", "le entregamos un calendario de pagos"), and "up front" or
+    "in advance" in their honest senses ("we are upfront about all of our fees", "we tell you up front what each month
+    will cost", "we will notify you 30 days in advance of any change"). A cap is not one ("never more than $99 at
+    signing", "we never collect more than one month in advance"), nor a payment only put off to a time ("payment is not
+    due until the day you sign"), nor a negation in another clause ("there is no setup fee and $99 is due when you
+    sign", "no long-term contract, a refundable deposit gets you started"), and a negated charge reaches no further than
+    "and", "so", "because", "since", "which", "pues", "ya que" or a dash ("we do not charge interest, and the first month
+    is paid when you sign", "we don't charge interest because you pay the full program price when you sign"). A refund
+    owed to the client is not a payment ("any refund owed to you is due immediately", "we will refund any payment taken
+    before…"), but a payment of the client's refunded only if they cancel is ("$500 at signing, subject to a refund"),
+    and so is "any refund or fee is due at signing". A time word that is the object of a cancellation passes ("if you
+    cancel before work starts, you pay nothing", "you have 3 business days after you sign to cancel"); a cancellation
+    anywhere else in the sentence does not ("if you cancel, you pay nothing; otherwise $99 is due when you sign"), nor
+    does a payment for cancelling ("$299 at signing to cancel it") or for cancelling something else ("within 3 days of
+    signing to cancel the waitlist hold on your file").
 
   Honest wording passes ("we ask the bureaus to correct or delete information that cannot be verified", "there is no
   setup fee", "charged at the end of each month for the work fully performed that month", "when you close your account,
-  we delete your documents within 30 days"). Both checks are lists of rules that catch the common wordings, not a legal
-  review; the Settings hints say so. Terms saved before a check existed no longer build an agreement, and Settings says
-  what to change.
+  we delete your documents within 30 days"). Both checks are lists of rules that catch common wordings, not a legal
+  review; the Settings hints say so. Every sentence of the four rounds of independent review (1,410, in English and
+  Spanish) is a regression test (`tests/unit/claims-corpus.test.ts` with `tests/fixtures/claims-corpus.ts`); the few the
+  rules still read the other way are listed there with the reason. Terms saved before a check existed no longer build
+  an agreement, and Settings says what to change.
 - **A client's own payment terms and total** (`clients.agreement_payment_terms`, `agreement_total_cents`, migration
   0031): for an agency with several plans, an owner, admin or manager sets them on the client page (Agreement payment
   terms) before the client signs, and that client's agreement states them instead of the agency's (§ 1679d(b)(1)). They

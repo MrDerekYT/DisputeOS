@@ -1024,3 +1024,61 @@ describe('the last verification’s fresh corpus: openings, Spanish negations, s
     expect(parseTerms(settings)).not.toBeNull();
   });
 });
+
+describe('the code review’s findings: whole words in Spanish, lists and requests read where they govern, bounded scans', () => {
+  // Each sentence the review wrote to show one bug, with the reading it should get.
+  const PROMISES = [
+    'Our team will verify and remove negative items from your credit report.', 'We verify and remove collections, charge-offs and late payments.',
+    'Verificamos y eliminamos las cuentas negativas de su reporte.', 'Cada cuenta negativa será eliminada o corregida.',
+    'Nuestra agencia puede eliminar las cuentas negativas de su reporte de crédito.', 'You have our word that every negative item is deleted.',
+    'We send personalized letters that are proven to get negative items deleted.', 'Tell us which items you want removed and we remove them for you.',
+    'We can remove you from the ChexSystems database so you can open a bank account again.', 'We remove you from all public records databases.',
+    'We remove you from the tenant screening database.', 'We will remove your name from the ChexSystems list.', 'We remove your name from the LexisNexis list.',
+    'Late payments are removed in most cases although results are not guaranteed.', 'Nobody but our team has the right to have your collections removed.',
+    'Solicite hoy su eliminación de cuentas negativas.', 'We ask for a small monthly fee to remove your negative items.',
+    'If you enroll today your collections are deleted in 30 days or less.', 'What we do is delete your collections.',
+    'You will be approved for a mortgage within six months.', 'We cannot guarantee results, only that we delete your collections.',
+    'We tell you when each collection is deleted, which happens within 30 days.',
+  ];
+  const HONEST = [
+    'The bureaus may verify, update or delete an item.', 'We ask Equifax, Experian and TransUnion to investigate and correct or remove inaccurate items.',
+    'You can remove yourself as an authorized user on a relative’s card.', 'We remove your name from our mailing list.',
+    'A creditor may agree to remove a late payment as a courtesy.', 'Removal of any item is not guaranteed.',
+    'Neither you nor any credit repair company has the right to have accurate, current, and verifiable information removed from your credit report.',
+    'If an item is deleted, we send you the bureau’s letter.', 'Si el buró elimina un dato, le avisamos.',
+    'This agreement ends when you are approved for a mortgage.', 'Once you are approved for a mortgage, you may cancel this agreement at any time.',
+    'If your spouse is approved for a car loan, nothing in this agreement changes.', 'Clients are approved for financing by their lenders, not by us.',
+    'Your service ends when you are approved for a mortgage or when you cancel.',
+    'We keep your information for five years, then delete it.', 'Your information is deleted 30 days after your last payment.', 'Files are deleted after two years.',
+    'We store your information securely and delete it when it is no longer needed.', 'We retain your information for seven years as required by law and then delete it.',
+    'Old files are purged after two years.', 'We delete your file within 30 days after the agreement ends.', 'Uploaded documents are deleted after 30 days.',
+    'We tell you when an item is deleted and send you the bureau’s letter within 5 days.',
+    'We explain when negative items drop off your report and answer your questions within 2 business days.',
+    'We do not guarantee that disputes will be resolved in your favor or that only negative items will be removed.',
+  ];
+  it('refuses each promise and passes each honest sentence in a contract', () => {
+    for (const t of PROMISES) expect(findContractClaims(t).length, t).toBeGreaterThan(0);
+    for (const t of HONEST) expect(findContractClaims(t), t).toEqual([]);
+  });
+  it('reads Spanish words to their end (eliminó, subirá) and guarantees as whole words', () => {
+    for (const t of ['Nuestro equipo eliminó todas sus deudas negativas.', 'Con nosotros, su puntaje subirá.', 'Nothing guarantees results like our team.', 'Pick the Standard or Guaranteed plan.', 'Results assured or guaranteed.'])
+      expect(findMarketingClaims(t).length, t).toBeGreaterThan(0);
+    for (const t of ['Nos aseguramos de que sus cartas se envíen a tiempo.', 'Trabajamos con su aseguradora.', 'Con nosotros, usted conoce sus derechos.', 'We do not promise, imply or guarantee results.'])
+      expect(findMarketingClaims(t), t).toEqual([]);
+  });
+  it('reads a payment put off to the day of signing, or for the month ahead, as an advance fee; honest terms pass', () => {
+    for (const t of ['Payment is not due until the day you sign this agreement.', 'A deposit is not required until the day you sign.', 'The setup fee is not charged until the day you sign.',
+      'Your monthly fee is billed on the 1st; it pays for the coming month.', 'Each payment pays for the month ahead.', 'It pays for the coming month and is billed on the 1st.'])
+      expect(findAdvanceFee(t), t).not.toBeNull();
+    for (const t of ['Nothing is charged at signing; each fee is billed after the work it pays for is done.', 'Payment is not required at signing.', 'Fees are never collected in advance.',
+      'You pay $99 at the end of each month for the work we did that month.', 'No hay depósito, cuota de inscripción ni pago por adelantado.'])
+      expect(findAdvanceFee(t), t).toBeNull();
+  });
+  it('a number followed by a long run of spaces is read in one pass (no scan of the run at every position)', () => {
+    const text = `500${' '.repeat(7996)}x`;
+    findContractClaims(text); findMarketingClaims(text);
+    const t0 = performance.now();
+    findContractClaims(text); findMarketingClaims(text);
+    expect(performance.now() - t0).toBeLessThan(50);
+  });
+});
