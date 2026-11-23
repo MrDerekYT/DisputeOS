@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
-import { AlertTriangle, CheckCircle2, ChevronDown } from 'lucide-react';
+import { AlertOctagon, AlertTriangle, CheckCircle2, ChevronDown } from 'lucide-react';
 import { REPORT_SOURCE_LABEL } from '@/components/staff-kit';
 import { ActionForm, Check, ConfirmButton, Field, SubmitButton } from '@/components/forms';
 import { Badge, DefinitionList, EmptyState, label, Notice, PageHeader, Section, StatusBadge } from '@/components/ui';
@@ -12,7 +12,7 @@ import { BUREAU_LABEL, fmtDate, isUuid, money, type Bureau } from '@/lib/util';
 import { decideReportAction, deleteTradelineAction, updateTradelineAction } from '../actions';
 import { PRODUCT } from '@/lib/product';
 import { FallOffNote } from '@/components/fall-off';
-import { publicRecordFallOff, tradelineFallOff } from '@/lib/credit/reporting-period';
+import { isNegative, publicRecordFallOff, tradelineFallOff } from '@/lib/credit/reporting-period';
 
 export const metadata: Metadata = { title: 'Review report' };
 
@@ -39,7 +39,13 @@ export default async function ReportReview({ params }: { params: Promise<{ id: s
     return { r, tradelines, inquiries, records, identity };
   });
   if (!data) notFound();
-  const { r, tradelines, inquiries, records, identity } = data;
+  const { r, identity, inquiries, records } = data;
+  // Negative items first, collections at the very top: they are what the client hired us for.
+  const rank = (t: TL) => (t.item_type === 'collection' ? 0 : isNegative(t) ? 1 : 2);
+  const tradelines = [...data.tradelines].sort((a, b) => rank(a) - rank(b) || a.creditor_name.localeCompare(b.creditor_name));
+  const collections = tradelines.filter((t) => t.item_type === 'collection');
+  const lates = tradelines.filter((t) => t.item_type !== 'collection' && isNegative(t));
+  const owedInCollections = collections.reduce((sum, t) => sum + (t.balance_cents ?? 0), 0);
   const pending = r.status === 'pending_review';
   const needsConfirm = tradelines.filter((t) => lowConfidenceFields(t).length > 0).length;
 
@@ -62,6 +68,19 @@ export default async function ReportReview({ params }: { params: Promise<{ id: s
           {r.status === 'approved' ? <>This report feeds the <Link className="link" href={`/app/clients/${r.client_id}/compare`}>three-bureau comparison</Link>.</> : 'This report is not used for analysis.'}
         </Notice>
       )}
+      {collections.length + lates.length > 0 ? (
+        <section aria-label="Negative items" className="mt-6 rounded-2xl border-2 border-bad bg-bad-soft p-5 sm:p-6">
+          <div className="flex items-center gap-2 text-bad"><AlertOctagon size={22} aria-hidden /><h2 className="text-lg font-bold">Negative items on this report</h2></div>
+          <div className="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-3">
+            <div><div className="text-4xl font-extrabold tabular-nums text-bad">{collections.length}</div><div className="text-sm font-semibold text-ink">Collection{collections.length === 1 ? '' : 's'}</div></div>
+            <div><div className="text-4xl font-extrabold tabular-nums text-bad">{lates.length}</div><div className="text-sm font-semibold text-ink">Late / past-due account{lates.length === 1 ? '' : 's'}</div></div>
+            {owedInCollections > 0 && <div><div className="text-4xl font-extrabold tabular-nums text-bad">{money(owedInCollections)}</div><div className="text-sm font-semibold text-ink">In collections</div></div>}
+          </div>
+          <p className="mt-4 text-sm text-ink">{pending ? 'Approve this report to turn these into dispute suggestions for the client.' : <>These are on the client’s <Link className="link font-semibold" href={`/app/clients/${r.client_id}/compare`}>dispute suggestions</Link>.</>}</p>
+        </section>
+      ) : tradelines.length > 0 && (
+        <div className="mt-6"><Notice tone="ok" title="No negative items">No collections, late payments or charge-offs were read from this report.</Notice></div>
+      )}
       {r.warnings.length > 0 && <div className="mt-4"><Notice tone="warn" title="Import notes"><ul className="list-disc pl-5">{r.warnings.map((w) => <li key={w}>{w}</li>)}</ul></Notice></div>}
 
       <div className="mt-8">
@@ -73,15 +92,18 @@ export default async function ReportReview({ params }: { params: Promise<{ id: s
           <ul className="panel divide-y divide-line/70">
             {tradelines.map((t) => {
               const low = lowConfidenceFields(t);
+              const isColl = t.item_type === 'collection';
+              const neg = isColl || isNegative(t);
               const statuses = [t.item_type === 'collection' ? 'Collection' : 'Account', t.account_status, t.payment_status, t.original_creditor ? `original creditor ${t.original_creditor}` : null].filter((v, i, all) => !!v && all.findIndex((o) => o?.toLowerCase() === v.toLowerCase()) === i).join(' · ');
               return (
-                <li key={t.id} className="px-5 py-4 sm:px-6">
+                <li key={t.id} className={neg ? 'border-l-4 border-bad bg-bad-soft/50 px-5 py-4 sm:px-6' : 'px-5 py-4 sm:px-6'}>
                   <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
                     <div className="min-w-0">
-                      <h3 className="text-[0.9375rem] font-semibold leading-snug [overflow-wrap:anywhere]">{t.creditor_name} {t.account_last4 && <span className="font-normal text-muted">••{t.account_last4}</span>}</h3>
+                      <h3 className={`${neg ? 'text-lg font-bold text-bad' : 'text-[0.9375rem] font-semibold'} leading-snug [overflow-wrap:anywhere]`}>{t.creditor_name} {t.account_last4 && <span className="font-normal text-muted">••{t.account_last4}</span>}</h3>
                       <p className="mt-0.5 text-[0.8125rem] text-muted">{statuses}</p>
                     </div>
                     <div className="flex flex-wrap items-center gap-1.5">
+                      {isColl ? <Badge tone="bad"><AlertOctagon size={12} aria-hidden /> Collection</Badge> : neg && <Badge tone="bad"><AlertOctagon size={12} aria-hidden /> Late payments</Badge>}
                       {low.length > 0 ? <Badge tone="warn"><AlertTriangle size={12} aria-hidden /> Confirm {low.map((f) => f.replace(/_/g, ' ')).join(', ')}</Badge> : <Badge tone="ok"><CheckCircle2 size={12} aria-hidden /> Read cleanly</Badge>}
                       {t.user_provided.not_mine && <Badge tone="info">Client: not recognised</Badge>}
                       {t.user_provided.never_late && <Badge tone="info">Client: never late</Badge>}
@@ -149,10 +171,10 @@ export default async function ReportReview({ params }: { params: Promise<{ id: s
 
       {pending && (
         <div className="sticky bottom-4 mt-8 flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-raised p-4 shadow-pop">
-          <p className="text-sm text-muted">Approving runs the cross-bureau analysis for this client.</p>
+          <p className="text-sm text-muted">Approving flags every negative item and runs the cross-bureau comparison for this client.</p>
           <div className="flex gap-2">
             <form action={decideReportAction}><input type="hidden" name="id" value={r.id} /><input type="hidden" name="decision" value="rejected" /><ConfirmButton className="btn-secondary" message="Reject this report? This is final: it will not be used, and the same file cannot be read again. To try again you would upload the report as a new file.">Reject</ConfirmButton></form>
-            <form action={decideReportAction}><input type="hidden" name="id" value={r.id} /><input type="hidden" name="decision" value="approved" /><button className="btn-primary" type="submit">Approve report</button></form>
+            <form action={decideReportAction}><input type="hidden" name="id" value={r.id} /><input type="hidden" name="decision" value="approved" /><button className="btn-primary" type="submit">Approve & flag negatives</button></form>
           </div>
         </div>
       )}

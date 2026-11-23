@@ -217,7 +217,7 @@ describe('bureau layouts', () => {
     expect(p.tradelines).toHaveLength(2);
     const [card, coll] = p.tradelines;
     expect(card).toMatchObject({
-      item_type: 'tradeline', creditor_name: 'FIRST BANK CARD', account_last4: '4111', account_type: 'Credit card',
+      item_type: 'tradeline', creditor_name: 'FIRST BANK CARD', account_last4: null, account_type: 'Credit card',
       account_status: 'Open. $120 past due as of Oct 2026.', payment_status: '$120 past due as of Oct 2026.',
       balance_cents: 105000, credit_limit_cents: 150000, high_balance_cents: 120000,
       date_opened: '2024-01-15', date_reported: '2026-10-30', original_creditor: null,
@@ -225,7 +225,7 @@ describe('bureau layouts', () => {
     expect(card!.remarks).toContain('30 days past due as of Oct 2026');
     expect(card!.confidence).toBeGreaterThanOrEqual(0.9);
     expect(coll).toMatchObject({
-      item_type: 'collection', creditor_name: 'COLLECTOR ONE', account_last4: '9988', balance_cents: 90000,
+      item_type: 'collection', creditor_name: 'COLLECTOR ONE', account_last4: null, balance_cents: 90000,
       high_balance_cents: 85000, original_creditor: 'ACME APARTMENTS', date_reported: '2026-11-02',
     });
     expect(coll!.remarks).toContain('Joint with SAM RIVERA');

@@ -37,6 +37,7 @@ export const FINDING_CATEGORIES = {
   missing_on_bureau: 'Not reported by every bureau',
   personal_info: 'Personal information differs',
   collection_validation: 'Collection account',
+  negative_item: 'Late payments or charge-off reported',
   old_inquiry: 'Older inquiry',
   client_statement: 'Client statement conflicts with report',
   possible_reinsertion: 'Possible reinsertion',
@@ -52,13 +53,20 @@ export const normCreditor = (s: string) =>
 
 const normText = (s: string | null) => (s ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 const ABBR: [RegExp, string][] = [[/\bstreet\b/g, 'st'], [/\bavenue\b/g, 'ave'], [/\bapartment\b/g, 'apt'], [/\broad\b/g, 'rd'], [/\bdrive\b/g, 'dr'], [/\bboulevard\b/g, 'blvd'], [/\blane\b/g, 'ln'], [/\bnorth\b/g, 'n'], [/\bsouth\b/g, 's'], [/\beast\b/g, 'e'], [/\bwest\b/g, 'w']];
-const normAddress = (s: string) => ABBR.reduce((a, [re, r]) => a.replace(re, r), normText(s));
+/** "MIAMI FL, 33196-4768" and "MIAMI, FL 33196" are the same address: punctuation and ZIP+4 are ignored. */
+const normAddress = (s: string) => ABBR.reduce((a, [re, r]) => a.replace(re, r), normText(s.replace(/\b(\d{5})-?\d{4}\b/g, '$1')));
 
 export interface AccountGroup {
   key: string; creditor: string; itemType: 'tradeline' | 'collection'; byBureau: Partial<Record<Bureau, AnalysisTradeline>>; bureauCount: number;
 }
 
-/** Same account across bureaus: normalised creditor + last 4 (falls back to creditor + open date when last 4 is absent). */
+/**
+ * Same account across bureaus. First by normalised creditor + last 4 (falls back to creditor + open date when last 4
+ * is absent). Then accounts that one bureau names or numbers differently (e.g. "NISSAN MOTOR ACCEPTANCE" vs
+ * "INFINITI MOTOR ACCEPTANCE CORP", "CB INDIGO/CCI" vs "CB INDIGO", a debt reported by two collectors) are paired when
+ * their reported facts line up: the same open date, last 4 or original creditor, plus enough agreeing details. A
+ * group never holds two accounts from the same bureau, and the best-matching pairs are joined first.
+ */
 export function groupAccounts(lines: AnalysisTradeline[]): AccountGroup[] {
   const groups = new Map<string, AccountGroup>();
   for (const t of lines) {
@@ -69,14 +77,81 @@ export function groupAccounts(lines: AnalysisTradeline[]): AccountGroup[] {
     if (!g.byBureau[t.bureau]) g.bureauCount++;
     g.byBureau[t.bureau] = t;
   }
-  return [...groups.values()].sort((a, b) => a.creditor.localeCompare(b.creditor));
+  const list = [...groups.values()];
+  const lineOf = (g: AccountGroup) => Object.values(g.byBureau)[0]!;
+  const pairs: { a: AccountGroup; b: AccountGroup; score: number }[] = [];
+  for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length; j++) {
+    const a = list[i]!, b = list[j]!;
+    if (a.itemType !== b.itemType || BUREAUS.some((x) => a.byBureau[x] && b.byBureau[x])) continue;
+    const score = sameAccountScore(lineOf(a), lineOf(b));
+    if (score >= 4) pairs.push({ a, b, score });
+  }
+  pairs.sort((x, y) => y.score - x.score);
+  const gone = new Set<AccountGroup>();
+  for (const { a, b } of pairs) {
+    if (gone.has(a) || gone.has(b) || BUREAUS.some((x) => a.byBureau[x] && b.byBureau[x])) continue;
+    // Keep the key of the group identified by account number, so findings stay tied to the stronger identifier.
+    const [keep, drop] = lineOf(b).account_last4 && !lineOf(a).account_last4 ? [b, a] : [a, b];
+    for (const x of BUREAUS) if (drop.byBureau[x]) { keep.byBureau[x] = drop.byBureau[x]; keep.bureauCount++; }
+    gone.add(drop);
+  }
+  return list.filter((g) => !gone.has(g)).sort((a, b) => a.creditor.localeCompare(b.creditor));
+}
+
+const closeMoney = (a: number | null, b: number | null) => a != null && b != null && Math.abs(a - b) <= Math.max(100, Math.abs(a) * 0.02);
+const openState = (s: string | null) => (/closed|paid/i.test(s ?? '') ? 'closed' : /open/i.test(s ?? '') ? 'open' : null);
+
+/** How strongly two lines from different bureaus look like one account. 0 unless an identifier lines up. */
+export function sameAccountScore(a: AnalysisTradeline, b: AnalysisTradeline): number {
+  const na = normCreditor(a.creditor_name), nb = normCreditor(b.creditor_name);
+  const oa = normCreditor(a.original_creditor ?? ''), ob = normCreditor(b.original_creditor ?? '');
+  // Two different account numbers are two accounts, however much else agrees.
+  if (a.account_last4 && b.account_last4 && a.account_last4 !== b.account_last4) return 0;
+  const sameLast4 = !!a.account_last4 && a.account_last4 === b.account_last4;
+  const sameOpened = !!a.date_opened && a.date_opened === b.date_opened;
+  const sameOriginal = !!oa && oa === ob;
+  if (!sameLast4 && !sameOpened && !sameOriginal) return 0;
+  let s = 0;
+  if (sameLast4) s += 5;
+  if (sameOpened) s += 3;
+  if (sameOriginal) s += 3;
+  if (na && na === nb) s += 3;
+  else if (na.split(' ')[0] && na.split(' ')[0] === nb.split(' ')[0]) s += 1;
+  if (closeMoney(a.balance_cents, b.balance_cents)) s += 2;
+  if (closeMoney(a.credit_limit_cents, b.credit_limit_cents)) s += 1;
+  const sa = openState(a.account_status), sb = openState(b.account_status);
+  if (sa && sa === sb) s += 1;
+  return s;
 }
 
 export interface FieldDiff { field: keyof AnalysisTradeline; label: string; values: Partial<Record<Bureau, string>> }
-const DIFF_FIELDS: { field: keyof AnalysisTradeline; label: string; fmt: (t: AnalysisTradeline) => string | null }[] = [
+/**
+ * Bureaus word the same status differently ("Open/Never late." vs "Open", "$690 past due as of Oct 2026." vs
+ * "30 - 59 Days Past Due"). Statuses are compared by what they mean, not by their wording.
+ */
+export function canonAccountStatus(s: string | null): string | null {
+  const t = (s ?? '').toLowerCase();
+  if (!t) return null;
+  if (/collection/.test(t)) return 'collection';
+  if (/charge[ds]?[ -]?off|charged off/.test(t)) return 'charged off';
+  if (/closed|paid/.test(t)) return 'closed';
+  if (/open|current|active/.test(t)) return 'open';
+  return normText(t);
+}
+export function canonPaymentStatus(s: string | null): string | null {
+  const t = (s ?? '').toLowerCase();
+  if (!t) return null;
+  if (/collection/.test(t)) return 'collection';
+  if (/charge[ds]?[ -]?off|charged off/.test(t)) return 'charged off';
+  if (/past due|late|delinquen|\d+\s*(?:-\s*\d+\s*)?days?/.test(t)) return 'past due';
+  if (/pays as agreed|never late|current|on time|as agreed/.test(t)) return 'current';
+  return normText(t);
+}
+
+const DIFF_FIELDS: { field: keyof AnalysisTradeline; label: string; fmt: (t: AnalysisTradeline) => string | null; same?: (t: AnalysisTradeline) => string | null }[] = [
   { field: 'balance_cents', label: 'Balance', fmt: (t) => (t.balance_cents == null ? null : money(t.balance_cents)) },
-  { field: 'account_status', label: 'Account status', fmt: (t) => t.account_status },
-  { field: 'payment_status', label: 'Payment status', fmt: (t) => t.payment_status },
+  { field: 'account_status', label: 'Account status', fmt: (t) => t.account_status, same: (t) => canonAccountStatus(t.account_status) },
+  { field: 'payment_status', label: 'Payment status', fmt: (t) => t.payment_status, same: (t) => canonPaymentStatus(t.payment_status) },
   { field: 'date_opened', label: 'Date opened', fmt: (t) => t.date_opened },
   { field: 'date_of_first_delinquency', label: 'Date of first delinquency', fmt: (t) => t.date_of_first_delinquency },
   { field: 'credit_limit_cents', label: 'Credit limit', fmt: (t) => (t.credit_limit_cents == null ? null : money(t.credit_limit_cents)) },
@@ -87,8 +162,9 @@ export function diffGroup(g: AccountGroup): FieldDiff[] {
   const out: FieldDiff[] = [];
   for (const f of DIFF_FIELDS) {
     const vals: Partial<Record<Bureau, string>> = {};
-    for (const b of BUREAUS) { const t = g.byBureau[b]; const v = t ? f.fmt(t) : null; if (v) vals[b] = v; }
-    const distinct = new Set(Object.values(vals).map((v) => normText(v)));
+    const canon: string[] = [];
+    for (const b of BUREAUS) { const t = g.byBureau[b]; const v = t ? f.fmt(t) : null; if (v) { vals[b] = v; canon.push((f.same ? f.same(t!) : null) ?? normText(v)); } }
+    const distinct = new Set(canon);
     if (Object.keys(vals).length >= 2 && distinct.size > 1) out.push({ field: f.field, label: f.label, values: vals });
   }
   return out;
@@ -172,9 +248,25 @@ export function analyze(input: {
           });
         }
       }
+      if (t.item_type !== 'collection' && isNegative(t)) {
+        const chargedOff = /charge[ds]?[ -]?off|charged off/i.test(`${t.account_status ?? ''} ${t.payment_status ?? ''}`);
+        const what = chargedOff ? 'a charge-off' : 'late payments';
+        add({
+          dedupe_key: `negative:${t.id}`, category: 'negative_item', severity: chargedOff ? 'strong' : 'review',
+          title: `${name} on ${BUREAU_LABEL[b]} reports ${what}`,
+          explanation: `${BUREAU_LABEL[b]} reports ${what} on this account. Check every late month and amount against the client’s statements: a late payment that the records show was on time, a wrong date or amount, or a missing dispute notation is a reason to dispute. If the reporting is accurate, a goodwill request to the creditor is the usual next step.`,
+          evidence: [
+            ...(t.payment_status ? [rep(t, 'Payment status', t.payment_status)] : []),
+            ...(t.account_status ? [rep(t, 'Account status', t.account_status)] : []),
+            ...(t.payment_history ? [rep(t, 'Payment history', t.payment_history)] : []),
+            ...(t.balance_cents != null ? [rep(t, 'Balance', money(t.balance_cents))] : []),
+          ],
+          basis: 'verified_fact', tradeline_ids: [t.id],
+        });
+      }
       if (t.item_type === 'collection') {
         add({
-          dedupe_key: `collection:${t.id}`, category: 'collection_validation', severity: 'info',
+          dedupe_key: `collection:${t.id}`, category: 'collection_validation', severity: 'strong',
           title: `${name} is a collection account on ${BUREAU_LABEL[b]}`,
           explanation: 'A written validation request to the collector (FDCPA § 809(b)) is a standard first step; it must be sent within 30 days of the collector’s first written notice to preserve the right to dispute that way. Check the date of that notice with the client.',
           evidence: [rep(t, 'Account type', 'Collection'), ...(t.balance_cents != null ? [rep(t, 'Balance', money(t.balance_cents))] : [])], basis: 'verified_fact', tradeline_ids: [t.id],

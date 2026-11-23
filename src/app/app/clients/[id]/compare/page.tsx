@@ -150,18 +150,21 @@ export default async function ComparePage({ params, searchParams }: { params: Pr
               <ul className="space-y-3">
                 {findings.map((f) => {
                   const basis = BASIS_LABEL[f.basis]!;
+                  // Collections, charge-offs and late payments are what clients come to us for: shown in red.
+                  const negative = f.category === 'collection_validation' || f.category === 'negative_item' || f.category === 'obsolete_item';
                   return (
-                    <li key={f.id} className="card card-pad">
+                    <li key={f.id} className={negative ? 'card card-pad border-l-4 border-bad bg-bad-soft/50' : 'card card-pad'}>
                       <div className="flex flex-wrap items-start justify-between gap-3">
                         <div className="min-w-0 flex-1">
                           <div className="mb-1.5 flex flex-wrap items-center gap-2">
                             {canDispute && f.status !== 'disputed' && <label className="flex items-center gap-1.5 text-xs font-medium"><input type="checkbox" form="bulk" name="finding" value={f.id} className="h-4 w-4 rounded border-line-strong accent-[rgb(var(--brand))]" /> Select</label>}
                             <Badge tone={basis.tone}>{basis.text}</Badge>
                             <Badge>{FINDING_CATEGORIES[f.category] ?? f.category}</Badge>
-                            {f.severity === 'strong' && <Badge tone="warn">Worth a close look</Badge>}
+                            {negative && <Badge tone="bad">Negative item</Badge>}
+                            {f.severity === 'strong' && <Badge tone={negative ? 'bad' : 'warn'}>Worth a close look</Badge>}
                             {f.status !== 'suggested' && <StatusBadge status={f.status} />}
                           </div>
-                          <h3 className="text-[0.9375rem] font-semibold leading-snug">{f.title}</h3>
+                          <h3 className={negative ? 'text-lg font-bold leading-snug text-bad' : 'text-[0.9375rem] font-semibold leading-snug'}>{f.title}</h3>
                           <p className="mt-1 text-sm text-muted">{f.explanation}</p>
                           <details className="mt-3">
                             <summary className="link cursor-pointer text-[0.8125rem]">What this is based on ({f.evidence.length})</summary>
