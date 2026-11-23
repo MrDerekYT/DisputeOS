@@ -10,6 +10,8 @@ import { SplitBar } from '@/components/charts';
 import { aiUnapproved, REPORT_SOURCE_LABEL } from '@/components/staff-kit';
 import { loadDisputeCounts, progressSummary } from '@/lib/ai/assistant';
 import { AI_COSTS, getBalance, polishOffer } from '@/lib/ai/credits';
+import { ocrEnabled } from '@/lib/reports/ocr';
+import { reportMimes } from '@/lib/reports/read-file';
 import { providerStatus } from '@/lib/ai/provider';
 import { PolishNote } from '@/components/polish-note';
 import { requireStaff } from '@/lib/auth/context';
@@ -19,7 +21,8 @@ import type { DisputeStatus } from '@/lib/disputes/workflow';
 import { BUREAU_LABEL, cn, dayInZone, fmtDate, isUuid, money, relTime, type Bureau } from '@/lib/util';
 import { cancelSubscriptionAction, refundPaymentAction, subscribeClientAction } from '../../billing/actions';
 import { addNoteAction, createTaskAction, markInboundReadAction, polishProgressAction, recordConsentAction, requestDocumentAction, reviewDocumentAction, revokeConsentAction, sendMessageAction, setTaskStatusAction, togglePinAction, uploadDocumentAction } from '../actions';
-import { importDocumentAsReportAction, pullReportAction, uploadReportAction } from '../../reports/actions';
+import { importDocumentAsReportAction, pullReportAction, uploadReportFileAction } from '../../reports/actions';
+import { ReportDropzone } from '@/components/report-dropzone';
 import { currentAuthorization } from '@/lib/credit/authorization';
 import { listProviders } from '@/lib/credit/providers';
 import { ScoreHistory, type ScoreRow } from '@/components/score-history';
@@ -380,6 +383,7 @@ async function Overview({ id, ctx, c, first }: { id: string; ctx: Ctx; c: C; fir
 
 // ------------------------------------------------------------------ reports
 async function ReportsTab({ id, ctx }: { id: string; ctx: Ctx }) {
+  const scans = ocrEnabled();
   const { reports, authorized, pulls, specialty, specialtyFiles } = await ctx.tx(async (db) => ({
     specialty: await loadSpecialty(db, id),
     specialtyFiles: await db.rows<{ id: string; file_name: string }>("select id, file_name from public.documents where client_id = $1 and kind = 'specialty_report' order by created_at desc", [id]),
@@ -438,13 +442,10 @@ async function ReportsTab({ id, ctx }: { id: string; ctx: Ctx }) {
         {!canAddReport ? (
           <Notice tone="warn" title="Authorization needed first">Record the client’s written authorization to review their credit reports (Overview → Compliance record) before you upload a report. A report the client uploads in their portal can still be read.</Notice>
         ) : (
-        <ActionForm action={uploadReportAction} className="space-y-4">
-          <input type="hidden" name="clientId" value={id} />
-          <div><label className="label" htmlFor="file">File</label><FileInput id="file" accept=".pdf,.txt,.html,.htm,.csv" maxBytes={maxUploadBytes()} tooLarge={tooLargeMessage(maxUploadMb())} /><p className="hint">PDF, HTML, TXT or CSV · max {maxUploadMb()} MB.</p></div>
-          <Select label="Bureau (if the file doesn’t say)" name="bureau" placeholder="Detect automatically" options={(Object.keys(BUREAU_LABEL) as Bureau[]).map((b) => ({ value: b, label: BUREAU_LABEL[b] }))} />
-          <SubmitButton pendingText="Reading report…">Upload & read</SubmitButton>
-          <p className="text-xs text-muted">Best results: text-based PDF or the CSV template. Scanned images are not read (no OCR). Files are stored encrypted. <a className="link" href="/templates/report-import.csv">CSV template</a></p>
-        </ActionForm>
+        <div className="space-y-4">
+          <ReportDropzone clientId={id} action={uploadReportFileAction} accept={scans ? '.pdf,.txt,.html,.htm,.csv,.png,.jpg,.jpeg' : '.pdf,.txt,.html,.htm,.csv'} maxBytes={maxUploadBytes()} tooLarge={tooLargeMessage(maxUploadMb())} hint={`${scans ? 'PDF, photo, HTML, TXT or CSV' : 'PDF, HTML, TXT or CSV'} · max ${maxUploadMb()} MB each`} />
+          <p className="text-xs text-muted">AnnualCreditReport.com PDFs from Experian and Equifax are read exactly, field by field, for free. {scans ? `Other layouts (TransUnion, other printouts), scans and photos are read by AI (${AI_COSTS.report_scan} AI credits each, nothing taken if it can't be read) and every field is flagged for you to check.` : 'Other layouts read best as the CSV template; scans and photos need AI reading, which is off.'} The bureau is detected from the file. Files are stored encrypted. <a className="link" href="/templates/report-import.csv">CSV template</a></p>
+        </div>
         )}
       </Section>
       <Section plain title="Pull automatically" hint="Credit Connect">
@@ -516,9 +517,9 @@ async function DocumentsTab({ id, ctx }: { id: string; ctx: Ctx }) {
                   <div className="text-xs text-muted">{DOC_KIND_LABEL[x.kind] ?? x.kind} · {(x.size_bytes / 1024).toFixed(0)} KB · {x.source === 'client' ? 'uploaded by client' : `by ${x.uploader ?? 'staff'}`} · {relTime(x.created_at)}{x.review_status === 'rejected' && x.review_note ? ` · ${x.review_note}` : ''}</div></div>
                 <div className="flex flex-wrap items-center gap-2"><StatusBadge status={x.review_status} />
                   {x.report_id && <Link href={`/app/reports/${x.report_id}`} className="btn-ghost btn-sm">Open report</Link>}
-                  {!x.report_id && x.kind === 'credit_report' && x.review_status !== 'rejected' && ['application/pdf', 'text/plain', 'text/html', 'text/csv'].includes(x.mime_type) && x.source !== 'client' && !canAddReport && (
+                  {!x.report_id && x.kind === 'credit_report' && x.review_status !== 'rejected' && reportMimes().includes(x.mime_type) && x.source !== 'client' && !canAddReport && (
                     <span className="text-xs text-muted">Reading it needs the client’s authorization</span>)}
-                  {!x.report_id && x.kind === 'credit_report' && x.review_status !== 'rejected' && ['application/pdf', 'text/plain', 'text/html', 'text/csv'].includes(x.mime_type) && (x.source === 'client' || canAddReport) && (
+                  {!x.report_id && x.kind === 'credit_report' && x.review_status !== 'rejected' && reportMimes().includes(x.mime_type) && (x.source === 'client' || canAddReport) && (
                     <ActionForm action={importDocumentAsReportAction} className="inline-flex flex-col items-end gap-1.5"><input type="hidden" name="id" value={x.id} /><input type="hidden" name="clientId" value={id} />
                       <select name="bureau" defaultValue="" aria-label="Bureau this report is from" className="field !w-auto !py-1 text-xs"><option value="">Detect bureau from file</option>{(Object.keys(BUREAU_LABEL) as Bureau[]).map((b) => <option key={b} value={b}>{BUREAU_LABEL[b]}</option>)}</select><SubmitButton className="btn-sm" pendingText="Reading…">Read as credit report</SubmitButton></ActionForm>)}
                   {x.review_status === 'pending_review' && (<><form action={reviewDocumentAction}><input type="hidden" name="id" value={x.id} /><input type="hidden" name="clientId" value={id} /><input type="hidden" name="decision" value="accepted" /><button className="btn-secondary btn-sm">Accept</button></form>

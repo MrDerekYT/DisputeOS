@@ -78,6 +78,9 @@ const schema = z.object({
   AI_BASE_URL: z.string().url().optional(),
   AI_API_KEY: z.string().optional(),
   ANTHROPIC_API_KEY: z.string().optional(),
+  /** Reading scanned/photographed credit reports (src/lib/reports/ocr.ts). Off by default: the whole report goes to the provider. */
+  OCR_PROVIDER: z.enum(['off', 'anthropic', 'openai']).default('off'),
+  OCR_MODEL: z.string().optional(),
   // Custom domains for agency websites (src/lib/vercel-domains.ts). Without the first two, a domain an agency
   // connects stays pending until the platform operator adds it by hand (docs/DEPLOY-VERCEL.md).
   VERCEL_API_TOKEN: z.string().optional(),
@@ -131,6 +134,8 @@ export function getEnv(): Env {
     // The log driver delivers nothing and writes reset/invitation links in plaintext to disk: development and test only.
     if (env.EMAIL_DRIVER === 'log') problems.push('EMAIL_DRIVER must be resend in staging/production, or disabled to run without email (the log driver delivers nothing)');
     if (env.EMAIL_DRIVER === 'resend' && !env.RESEND_API_KEY) problems.push('RESEND_API_KEY is required when EMAIL_DRIVER=resend');
+    if (env.OCR_PROVIDER === 'anthropic' && !env.ANTHROPIC_API_KEY) problems.push('ANTHROPIC_API_KEY is required when OCR_PROVIDER=anthropic');
+    if (env.OCR_PROVIDER === 'openai' && !(env.AI_BASE_URL && env.AI_API_KEY && (env.OCR_MODEL ?? env.AI_MODEL))) problems.push('AI_BASE_URL, AI_API_KEY and OCR_MODEL (or AI_MODEL) are required when OCR_PROVIDER=openai');
     if (env.SMS_DRIVER === 'log') problems.push('SMS_DRIVER must be twilio in staging/production, or disabled to run without text messages (the log driver delivers nothing)');
     // Vercel: the filesystem is read-only and not shared between instances, request bodies stop at 4.5 MB, and
     // vercel.json schedules /api/jobs/run, which answers 404 until CRON_SECRET is set.

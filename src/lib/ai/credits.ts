@@ -13,6 +13,7 @@ export const AI_COSTS = {
   letter_suggestion: 5,
   progress_note: 2,
   guide_answer: 1,
+  report_scan: 10,
 } as const;
 export type AiFeature = keyof typeof AI_COSTS;
 
@@ -20,6 +21,7 @@ export const AI_FEATURE_LABEL: Record<AiFeature, string> = {
   letter_suggestion: 'Letter wording suggestion',
   progress_note: 'Client progress note polish',
   guide_answer: 'Credit guide answer worded by AI',
+  report_scan: 'Scanned credit report read by AI',
 };
 
 /** Shown to staff wherever AI wording was skipped. Portal clients are never shown these. */

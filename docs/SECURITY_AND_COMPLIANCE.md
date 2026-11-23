@@ -34,7 +34,7 @@ downloads and search (`/api/documents`, `/api/letters/*/pdf`, `/api/consents/*/p
 that has completed two-step verification, the same as pages; keep `PII_ENCRYPTION_KEY` in a secret manager and back it up separately; use a persistent,
 access-controlled volume for `STORAGE_DIR`; enable database backups and encryption at rest at your provider.
 
-**Known gaps:** no malware scanning of uploads; no OCR; the `fs` storage backend only (no S3); recovery codes for
+**Known gaps:** no malware scanning of uploads; OCR of scanned reports is off by default and, when turned on, sends the whole report to the AI provider (OpenRouter or Anthropic) (docs/INTEGRATIONS.md, "Scanned reports"); the `fs` storage backend only (no S3); recovery codes for
 lost authenticators (an admin can reset a teammate's factor, owners cannot be reset); key re-encryption job after
 rotation is not built; no Sentry/observability wiring (a PII scrubber exists in `src/lib/scrub.ts`); no formal
 penetration test or SOC 2 audit has been done.
