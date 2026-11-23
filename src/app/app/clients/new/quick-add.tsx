@@ -60,7 +60,7 @@ export function QuickAdd({ emailLive, canSetUp, terms = 'ready' }: { emailLive: 
       <h2 id="quick-add-title" className="text-lg font-semibold leading-snug">Invite a client</h2>
       <p className="mt-1 text-sm text-muted">
         {emailLive
-          ? 'Their name and email are all you need. They get a welcome email with a one-time link, set a password, and fill in their details, agreements and ID themselves.'
+          ? 'Their name and email are all you need. Email them a welcome link, or get the link to text or send yourself. They set a password and fill in their details, agreements and ID themselves.'
           : 'Their name and email are all you need. They use a one-time welcome link to set a password and fill in their details, agreements and ID themselves.'}
       </p>
       {!emailLive && (
@@ -92,8 +92,11 @@ export function QuickAdd({ emailLive, canSetUp, terms = 'ready' }: { emailLive: 
         </div>
         <div className="mt-6 flex justify-end">
           {emailLive
-            ? <SubmitButton pendingText="Sending…">Send welcome email</SubmitButton>
-            : <SubmitButton pendingText="Adding…">Add client and get the link</SubmitButton>}
+            ? <div className="flex flex-wrap justify-end gap-3">
+                <SubmitButton name="via" value="link" variant="secondary" pendingText="Adding…">Add and get the link</SubmitButton>
+                <SubmitButton name="via" value="email" pendingText="Sending…">Send welcome email</SubmitButton>
+              </div>
+            : <SubmitButton name="via" value="link" pendingText="Adding…">Add client and get the link</SubmitButton>}
         </div>
       </form>
 

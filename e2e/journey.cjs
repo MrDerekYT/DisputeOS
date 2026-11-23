@@ -269,7 +269,7 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
         await staff.getByLabel('Last name').fill('Myself');
         await staff.getByLabel(/^Email/).fill(email);
         await staff.getByRole('button', { name: 'Add client and get the link' }).click();
-        await expectText(staff, 'That is the email you sign in with, so it cannot also be a client’s. Nothing was added.');
+        await expectText(staff, 'That is the email you sign in with, so it cannot also be a client’s: one email is one sign-in. Nothing was added.');
         if (!(await inView(result))) throw new Error('the refusal is not on screen after the button was pressed');
         if (!(await fieldHolds(staff.getByLabel(/^Email/), email))) throw new Error('the form lost what was typed after the refusal');
         await staff.getByLabel('First name').fill('Quinn');

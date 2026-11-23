@@ -1,5 +1,10 @@
 # Changelog
 
+## Invite by email or by link (unreleased)
+
+- **Invite a client: email it or get the link.** With email connected, “Invite a client” has two buttons: “Send welcome email”, and “Add and get the link”, which adds the client and shows the one-time link to copy or text, with no email sent.
+- **A client email that is a team sign-in is caught.** One email is one sign-in, so a welcome link to an email someone on the team signs in with could never be accepted. The Welcome link card now refuses it and says what to do instead of making a link that fails, and adding yourself as a client says to use another email address of yours.
+
 ## New client is a quick invite (unreleased)
 
 For an agency, New client opens on "Invite a client": first name, last name, email, an optional phone number and the

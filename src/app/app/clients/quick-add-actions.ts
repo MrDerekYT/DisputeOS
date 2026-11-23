@@ -99,16 +99,20 @@ export async function quickAddClientAction(_: ActionState, fd: FormData): Promis
         email: z.string().trim().toLowerCase().optional(),
         phone: z.string().trim().optional(),
         preferredLanguage: z.enum(['en', 'es']).default('en'),
+        via: z.enum(['email', 'link']).default('email'),
       }),
       fd,
     );
-    const live = emailIsLive();
+    const connected = emailIsLive();
+    // "Get the link" adds the client and hands back the link without emailing anything, even when email works.
+    const live = connected && d.via === 'email';
     const first = tidy(d.firstName);
     const last = tidy(d.lastName);
     if (!visible(first) || !visible(last)) throw new UserError('Enter the client’s first name and last name.');
     if (first.length > NAME_MAX || last.length > NAME_MAX) throw new UserError(`That name is too long. Use up to ${NAME_MAX} characters for the first name and for the last name.`);
     const email = d.email ?? '';
     if (!email) throw new UserError(`Enter the client’s email address. ${live ? 'The welcome email goes to it.' : 'Their portal account is made for it.'}`);
+    const linkOnly = connected && !live;
     if (email.length > EMAIL_MAX || !z.string().email().safeParse(email).success) throw new UserError('That email address does not look right. Check it and try again.');
     const phone = d.phone || undefined;
     if (phone && phone.length > PHONE_MAX) throw new UserError(`That phone number is too long. Use up to ${PHONE_MAX} characters.`);
@@ -142,17 +146,19 @@ export async function quickAddClientAction(_: ActionState, fd: FormData): Promis
     }
     if (found.member) {
       if (found.member.user_id === ctx.userId) {
-        throw new UserError(`That is the email you sign in with, so it cannot also be a client’s. Nothing was added. To ${live ? 'see the welcome email' : 'try the welcome link'} yourself, use another email address of yours.${
-          live && ctx.can('settings:manage') ? ' To check that email works, use “Send a test email to me” on Get set up.' : ''}`);
+        throw new UserError(`That is the email you sign in with, so it cannot also be a client’s: one email is one sign-in. Nothing was added. To add yourself as a client, use another email address of yours (for example a second Gmail address).${
+          connected && ctx.can('settings:manage') ? ' To check that email works, use “Send a test email to me” on Get set up.' : ''}`);
       }
       throw new UserError(found.member.role === 'client'
         ? 'This email already has a client portal sign-in in your workspace, so it cannot be used for a new client. Nothing was added. Use a different email address.'
         : 'This email belongs to someone on your team, so it cannot also be a client’s. Nothing was added. Use the client’s own email address.');
     }
 
-    try { await holdUnapprovedEmail(ctx); } catch (e) {
-      if (e instanceof UserError) throw new UserError(`${e.message} To add the client now without sending an email, use “Enter everything yourself”.`);
-      throw e;
+    if (live) {
+      try { await holdUnapprovedEmail(ctx); } catch (e) {
+        if (e instanceof UserError) throw new UserError(`${e.message} To add the client now without sending an email, use “Add and get the link”.`);
+        throw e;
+      }
     }
 
     const actor = { orgId: ctx.orgId, userId: ctx.userId, ip: ctx.meta.ip };
@@ -188,6 +194,10 @@ export async function quickAddClientAction(_: ActionState, fd: FormData): Promis
       const h = byHand(link);
       return { ok: `${first} was added. Email is not connected, so no email was sent. Send ${first} this link yourself. ${once}${h.note}`, data: { outcome: 'link', ...h.data } };
     };
+    if (made.link && linkOnly) {
+      const h = byHand(made.link);
+      return { ok: `${first} was added. No email was sent. Send ${first} this link yourself. ${once}${h.note}`, data: { outcome: 'link', ...h.data } };
+    }
     if (made.link) return notConnected(made.link);
 
     // The client exists from here on, so nothing below may read as "try again": a second submission would be refused.
