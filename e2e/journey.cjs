@@ -60,6 +60,25 @@ const watch = (page, who) => {
   page.on('response', (r) => { if (r.status() >= 500) problems.push(`[${who} http ${r.status()}] ${r.url()}`); });
 };
 const expectText = async (page, text, timeout = 8000) => page.getByText(text, { exact: false }).first().waitFor({ timeout });
+/** Waits for a field to hold `want` (a form is emptied, or put back, a moment after its message appears). */
+const fieldHolds = async (field, want, ms = 4000) => { const until = Date.now() + ms; while (Date.now() < until) { if ((await field.inputValue()) === want) return true; await new Promise((r) => setTimeout(r, 50)); } return false; };
+/**
+ * Whether an element is on screen, clear of the bar that stays at the top of the staff app: all of it, or (`top: true`)
+ * its start in the upper part of the screen. Polled, because the page scrolls to a new result a moment after it appears.
+ */
+const inView = async (locator, { top = false, ms = 3000 } = {}) => {
+  const until = Date.now() + ms;
+  for (;;) {
+    const ok = await locator.evaluate((el, startOnly) => {
+      const r = el.getBoundingClientRect();
+      const bar = document.querySelector('header.sticky');
+      const clear = r.height > 0 && r.top >= (bar ? bar.getBoundingClientRect().bottom : 0) - 1;
+      return clear && (startOnly ? r.top < window.innerHeight * 0.6 : r.bottom <= window.innerHeight + 1);
+    }, top);
+    if (ok || Date.now() > until) return ok;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+};
 
 /**
  * No dispute can be recorded as submitted while the client's 3-business-day cancellation period runs (15 U.S.C.
@@ -185,12 +204,22 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
     await check('the service agreement cannot be recorded before the agency saves its client agreement terms; then it can', async () => {
       await staff.goto(BASE + '/app/settings');
       await expectText(staff, 'Not saved yet: no client can sign the service agreement');
+      // New client says so before anyone is invited, and sends an owner to the place to save them.
+      await staff.goto(BASE + '/app/clients/new');
+      await expectText(staff, 'Your client agreement terms are not saved yet.');
+      await staff.getByRole('link', { name: 'Open Settings → Client agreement' }).waitFor();
       await saveAgreementTerms(staff);
       await expectText(staff, 'Clients can sign the service agreement');
+      await staff.goto(BASE + '/app/clients/new');
+      await expectText(staff, 'Invite a client');
+      if (await staff.getByText('Your client agreement terms', { exact: false }).count()) throw new Error('New client still says the client agreement terms are not saved');
     });
 
     await check('create a client with consents recorded', async () => {
+      // New client opens on the quick invite; the full form is one link away, at the same address with ?manual=1.
       await staff.goto(BASE + '/app/clients/new');
+      await staff.getByRole('link', { name: 'Enter everything yourself' }).click();
+      await staff.waitForURL(/\/app\/clients\/new\?manual=1$/);
       await staff.getByLabel('Full legal name').fill('E2E Client');
       await staff.getByLabel('Email', { exact: true }).fill(clientEmail);
       await staff.getByLabel('Phone').fill('813-555-0142');
@@ -213,11 +242,77 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
     });
 
     await check('invalid input is rejected with a clear message', async () => {
-      await staff.goto(BASE + '/app/clients/new');
+      await staff.goto(BASE + '/app/clients/new?manual=1');
       await staff.getByLabel('Full legal name').fill('Bad Input');
       await staff.getByLabel('ZIP').fill('12');
       await staff.getByRole('button', { name: 'Create client' }).click();
       await expectText(staff, 'Use a 5-digit ZIP');
+    });
+
+    await check('quick invite: a name and an email add the client and show a one-time welcome link (no email service here), in view on a laptop screen; your own email and the same email again are refused', async () => {
+      const quickEmail = `quick-${uniq}@example.test`;
+      const result = staff.locator('#quick-add-result');
+      // A common laptop screen (1366x768, less the browser's own bars): what the button did must be in view without scrolling by hand.
+      await staff.setViewportSize({ width: 1366, height: 633 });
+      try {
+        // The full form links back to the quick invite.
+        await staff.getByRole('link', { name: 'Invite a client instead' }).click();
+        await staff.waitForURL(/\/app\/clients\/new$/);
+        await expectText(staff, 'Invite a client');
+        // This step is written for a server with no email service connected (the default): say so instead of timing out.
+        if (await staff.getByRole('button', { name: 'Send welcome email' }).count()) throw new Error('this server has an email service connected; the quick invite step needs one with none (EMAIL_DRIVER=log, the default)');
+        // The page says so before the button is pressed, and the way to the full form is on screen when the page opens.
+        await expectText(staff, 'Email is not connected yet');
+        if (!(await inView(staff.getByRole('link', { name: 'Enter everything yourself' })))) throw new Error('“Enter everything yourself” is not on screen when New client opens');
+        // Your own sign-in email cannot also be a client's (its welcome link could never be used): refused, nothing added.
+        await staff.getByLabel('First name').fill('Avery');
+        await staff.getByLabel('Last name').fill('Myself');
+        await staff.getByLabel(/^Email/).fill(email);
+        await staff.getByRole('button', { name: 'Add client and get the link' }).click();
+        await expectText(staff, 'That is the email you sign in with, so it cannot also be a client’s. Nothing was added.');
+        if (!(await inView(result))) throw new Error('the refusal is not on screen after the button was pressed');
+        if (!(await fieldHolds(staff.getByLabel(/^Email/), email))) throw new Error('the form lost what was typed after the refusal');
+        await staff.getByLabel('First name').fill('Quinn');
+        await staff.getByLabel('Last name').fill('Invite');
+        await staff.getByLabel(/^Email/).fill(quickEmail);
+        await staff.getByLabel('Phone').fill('(813) 555-0177');
+        await staff.getByRole('button', { name: 'Add client and get the link' }).click();
+        await expectText(staff, 'Quinn was added. Email is not connected, so no email was sent.');
+        // The whole result (the message, the link, Copy) is on screen: the page went to it.
+        if (!(await inView(result))) throw new Error('the result is not on screen after the button was pressed');
+        const link = (await staff.locator('code', { hasText: '/invite/' }).first().innerText()).trim();
+        const sms = await staff.getByRole('link', { name: 'Text it from your phone' }).getAttribute('href');
+        if (!sms.startsWith('sms:+18135550177?body=') || !decodeURIComponent(sms).endsWith(link)) throw new Error('the text link does not carry the number and the welcome link: ' + sms);
+        // The text says which business it is from.
+        if (!decodeURIComponent(sms).includes(`this is E2E Agency ${uniq}.`)) throw new Error('the text does not name the agency: ' + decodeURIComponent(sms));
+        // Everything stays on the one page, and the form is empty again for the next client.
+        if (!/\/app\/clients\/new$/.test(staff.url())) throw new Error('left the New client page: ' + staff.url());
+        if (!(await fieldHolds(staff.getByLabel('First name'), '')) || !(await fieldHolds(staff.getByLabel(/^Email/), ''))) throw new Error('the form was not emptied for the next client');
+        for (const name of ['Open Quinn’s page', 'Enter Quinn’s details yourself']) await staff.getByRole('link', { name }).waitFor();
+        await staff.screenshot({ path: `${SHOTS}/02b-quick-invite.png`, fullPage: true, caret: 'initial' });
+        // The link opens the client's welcome page, in the agency's name.
+        const inviteeCtx = await browser.newContext({ viewport: { width: 390, height: 844 }, extraHTTPHeaders: ip() });
+        const invitee = await inviteeCtx.newPage(); watch(invitee, 'invitee');
+        await invitee.goto(link.replace(/^https?:\/\/[^/]+/, BASE));
+        await expectText(invitee, 'Welcome, Quinn!');
+        await expectText(invitee, `E2E Agency ${uniq}`);
+        await settle(invitee);
+        await inviteeCtx.close();
+        // The same email again, typed in capitals: nothing is added, what was typed stays, and the page links to the client.
+        await staff.getByLabel('First name').fill('Quincy');
+        await staff.getByLabel('Last name').fill('Again');
+        await staff.getByLabel(/^Email/).fill(quickEmail.toUpperCase());
+        await staff.getByRole('button', { name: 'Add client and get the link' }).click();
+        await expectText(staff, 'Quinn Invite was already added with this email');
+        if (!(await inView(result))) throw new Error('the refusal of the same email is not on screen after the button was pressed');
+        if (!(await fieldHolds(staff.getByLabel('First name'), 'Quincy')) || !(await fieldHolds(staff.getByLabel(/^Email/), quickEmail.toUpperCase()))) throw new Error('the form lost what was typed after the refusal');
+        // "Open Quinn's page" goes to the Welcome link card, where the message says the link can be sent from.
+        await staff.getByRole('link', { name: 'Open Quinn’s page' }).click();
+        await staff.waitForURL(/\/app\/clients\/[0-9a-f-]{36}#welcome$/);
+        await expectText(staff, 'Quinn Invite');
+        await expectText(staff, 'Making a new one ends it'); // the Welcome link card shows the link that was made
+        if (!(await inView(staff.locator('section#welcome'), { top: true }))) throw new Error('the client’s page did not open at the Welcome link card');
+      } finally { await staff.setViewportSize({ width: 1360, height: 900 }); }
     });
 
     await check('upload two bureau reports → read, review and approve each', async () => {

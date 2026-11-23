@@ -1,5 +1,38 @@
 # Changelog
 
+## New client is a quick invite (unreleased)
+
+For an agency, New client opens on "Invite a client": first name, last name, email, an optional phone number and the
+client's language. One button creates the client (status Onboarding, assigned to whoever adds them, with the same
+timeline entry, audit entry and "a client is created" automations as the full form), makes the welcome link and sends
+the welcome email, and the page stays open with an empty form for the next client. No schema change.
+
+- **What happened is said plainly, and brought into view** (on a laptop screen the result would otherwise sit below
+  the bottom edge, and an emptied form looks the same whether the email went out or not):
+  - the email was sent, said only when the email service took it;
+  - email is not connected: the page says so before the click, the button reads "Add client and get the link", and a
+    one-time link is shown with Copy and, when a phone number was typed, "Text it from your phone" (the text names the
+    agency; a number that cannot be read as a full number is said so instead of the link being dropped);
+  - the email was held back by the claims check (the message says when the wording is in the business name, which
+    every welcome email carries) or was not accepted by the email service (said in the app's words, with the service's
+    own sentence quoted after them and no status code): its link is ended and a fresh one is shown the same way, with
+    "Enter their details yourself";
+  - the email service did not answer: it may or may not have arrived, so no second link is handed out, and "Open …'s
+    page" goes straight to the Welcome link card, where the buttons are.
+- **Refused before anything is created**: an email a client of the workspace already has (with a link to that client,
+  and what to do when it is someone else who shares the address); an email that already signs in to the workspace
+  (your own, a colleague's, a client's portal account), because a welcome link for it could never be accepted; the
+  hourly email limit of a workspace that is not approved. Two submissions at the same moment cannot both create the
+  client (a lock on the workspace and the email).
+- **Said before the click**: that email is not connected, and that the agency's client agreement terms are not saved
+  yet (or no longer pass the checks), in which case a client can be invited but cannot sign the service agreement
+  until they are.
+- **The full form is one button away** ("Enter everything yourself" in the page header, `/app/clients/new?manual=1`)
+  and unchanged; a personal workspace sees only the full form.
+- Making the link, sending the email and logging the outcome is one function (`src/lib/welcome-send.ts`), shared with
+  "Email welcome link" on the client page. Once the email service has the email, its answer is the outcome: a log
+  entry that cannot be written afterwards is printed for the operator and no longer turns "sent" into "try again".
+
 ## Review fixes for the client intake and the Claude connection (unreleased)
 
 An independent review of the two entries below confirmed 31 defects; each fix was verified again by a second reviewer.

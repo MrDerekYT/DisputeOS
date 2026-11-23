@@ -160,7 +160,7 @@ where does its partner list come from. The Partners and Leads pages tell the age
 The lead follow-up emails need the approval for the same reason as the rest: the enquiry form is public and takes any
 address, and the business name is the From name and part of the subject of every such email, so without the gate a
 workspace nobody has looked at could put a name of its choice in a stranger's inbox. The approval, the switch and both
-addresses are read again with every email that is claimed. Until a workspace is approved, the emails its staff send by hand to a client or lead ("Email welcome link", an email from the Messages tab, "New client" with the invitation ticked) are limited to 50 an hour for the whole workspace. What does not need the approval: emails to the workspace's
+addresses are read again with every email that is claimed. Until a workspace is approved, the emails its staff send by hand to a client or lead ("Email welcome link", an email from the Messages tab, the welcome email that "New client" sends, the full New client form with the invitation ticked) are limited to 50 an hour for the whole workspace. What does not need the approval: emails to the workspace's
 own team and clients (invitations, sign-in emails, client updates by email).
 Before it records an approval the command prints the mailing address and the reply address the workspace has saved:
 besides the name they are what its automatic emails carry, and the workspace can change both later without a new approval.

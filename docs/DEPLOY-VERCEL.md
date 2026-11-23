@@ -173,8 +173,8 @@ way as the command in step 8 but ending in `npm run db:migrate`.
    "I run a credit repair business". This creates your workspace and makes you its **owner**.
 2. You are taken straight to two-step verification: scan the code with an authenticator app (1Password, Google
    Authenticator, Authy) and enter the 6-digit code. Staff cannot use the app without it. **Keep the authenticator.**
-3. Invite colleagues from Team, and clients from a client's page. With `EMAIL_DRIVER=disabled` the app shows you a
-   one-time link to pass on yourself instead of sending an email.
+3. Invite colleagues from Team, and clients from New client (a name and an email are enough) or a client's page. With
+   `EMAIL_DRIVER=disabled` the app shows you a one-time link to pass on yourself instead of sending an email.
 
 Sign-up is open: anyone who knows the address can create their own, separate workspace. Workspaces cannot see each
 other's data (PostgreSQL row-level security), but if you do not want strangers creating workspaces on your deployment,

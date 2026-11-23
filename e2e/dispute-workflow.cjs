@@ -119,7 +119,7 @@ async function signUpAgency(browser, label) {
       await staff.getByLabel('How long the services should take').fill('About 5 months from the date you sign.');
       await staff.getByRole('button', { name: 'Save client agreement' }).click();
       await see(staff, 'Client agreement saved');
-      await staff.goto(BASE + '/app/clients/new');
+      await staff.goto(BASE + '/app/clients/new?manual=1'); // the full form; New client itself opens on the quick invite
       await staff.getByLabel('Full legal name').fill('Workflow Client');
       await staff.getByLabel('Email', { exact: true }).fill(`wf-client-${uniq}@example.test`);
       await staff.getByLabel('Street').fill('700 Sample Road'); await staff.getByLabel('City').fill('Tampa');

@@ -120,7 +120,7 @@ export function ConfirmButton({ children, message, className = 'btn-secondary bt
 }
 
 /** Re-applies submitted values to a form. Passwords and files are deliberately left empty. */
-function restoreForm(form: HTMLFormElement, data: FormData) {
+export function restoreForm(form: HTMLFormElement, data: FormData) {
   for (const el of Array.from(form.elements)) {
     if (el instanceof HTMLInputElement) {
       if (!el.name || el.type === 'password' || el.type === 'file' || el.type === 'hidden' || el.type === 'submit') continue;

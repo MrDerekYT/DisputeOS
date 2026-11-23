@@ -32,7 +32,11 @@ describe('API keys', () => {
     const k = await asUser(org.ownerId, (db) => createApiKey(db, ADMIN_ACTOR(), { name: 'Zapier', scopes: ['clients:read', 'reports:write'] }));
     expect(k.key).toMatch(/^dosk_[a-z0-9]{8}_/);
     const stored = await withSystem((db) => db.rows<Record<string, unknown>>('select * from public.api_keys where id = $1', [k.id]));
-    expect(JSON.stringify(stored)).not.toContain(k.key.split('_')[2]); // the secret is nowhere in the database
+    // The secret is nowhere in the database, whole or in part. It is everything after the prefix, and may itself hold
+    // "_" (it is base64url), so it is not split on that: a secret that began with "_" used to leave nothing to look for.
+    const secret = k.key.slice(`dosk_${k.prefix}_`.length);
+    expect(secret).toHaveLength(43);
+    for (const part of [secret, secret.slice(0, 12), secret.slice(-12)]) expect(JSON.stringify(stored), part).not.toContain(part);
     const auth = await authenticateApiKey(`Bearer ${k.key}`, testIp());
     expect(auth).toMatchObject({ ok: true, principal: { orgId: org.orgId, userId: org.ownerId, role: 'owner', scopes: ['clients:read', 'reports:write'] } });
   });

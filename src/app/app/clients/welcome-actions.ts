@@ -7,12 +7,9 @@ import { parseForm, run, UserError, zUuid } from '@/lib/action';
 import { requireStaff } from '@/lib/auth/context';
 import { rateLimit } from '@/lib/auth/rate-limit';
 import { emailIsLive } from '@/lib/lead-outreach';
-import { delivers, sendEmail } from '@/lib/mailer';
 import { holdUnapprovedEmail } from '@/lib/staff-email';
-import {
-  expireWelcomeLinks, issueWelcomeLink, logWelcomeEmail, portalSignInUrl, providerError, welcomeClient, welcomeEmail, welcomeEmailIssue, welcomeLinkProblem,
-  WELCOME_LINKS_PER_DAY, type WelcomeClient,
-} from '@/lib/welcome-link';
+import { issueWelcomeLink, welcomeClient, welcomeLinkProblem, WELCOME_LINKS_PER_DAY, type WelcomeClient } from '@/lib/welcome-link';
+import { sendWelcomeEmail } from '@/lib/welcome-send';
 
 type StaffCtx = Awaited<ReturnType<typeof requireStaff>>;
 
@@ -51,34 +48,20 @@ export async function copyWelcomeLinkAction(_: ActionState, fd: FormData): Promi
  * operator's approval, and never with a prohibited claim in it. A link whose email failed is expired at once.
  *
  * The timeline and the audit log say "emailed" only once the email service took the email ("may not have arrived" when
- * it did not answer); an email that was not sent is logged as failed, with its link ended (logWelcomeEmail).
+ * it did not answer); an email that was not sent is logged as failed, with its link ended. Making the link, sending and
+ * logging are sendWelcomeEmail (src/lib/welcome-send.ts), shared with "Invite a client" on New client.
  */
 export async function emailWelcomeLinkAction(_: ActionState, fd: FormData): Promise<ActionState> {
   const ctx = await requireStaff('clients:write');
   return run(async () => {
     if (!emailIsLive()) throw new UserError('Email is not connected, so nothing can be emailed. Use “Copy welcome link” and send the link yourself.');
     const client = await prepare(ctx, fd, () => holdUnapprovedEmail(ctx));
-    const org = await ctx.tx((db) => db.row<{ reply: string | null }>("select nullif(trim(settings->>'lead_reply_email'), '') as reply from public.organizations where id = $1", [ctx.orgId]));
-    const actor = { orgId: ctx.orgId, userId: ctx.userId, ip: ctx.meta.ip };
-    const { link, expired } = await ctx.tx((db) => issueWelcomeLink(db, actor, client, 'email'));
-    const lang = client.preferred_language === 'es' ? 'es' : 'en';
-    const mail = welcomeEmail({ lang, fullName: client.full_name, orgName: ctx.session.orgName, link, signIn: portalSignInUrl({ mode: ctx.session.orgMode, slug: ctx.session.orgSlug }, lang) });
-    // Not sent: the link is ended and the failure logged, in one transaction.
-    const fail = async (reason: string) => {
-      await ctx.tx(async (db) => { await expireWelcomeLinks(db, client.id); await logWelcomeEmail(db, actor, client.id, { status: 'failed', reason }, expired); });
-      revalidatePath(`/app/clients/${client.id}`);
-    };
-    const issue = welcomeEmailIssue(mail);
-    if (issue) { await fail(`claims check: ${issue}`); throw new UserError(`The welcome email was not sent: ${issue}. Use “Copy welcome link” instead.`); }
-    const sent = await sendEmail({ to: client.email!, ...mail, fromName: ctx.session.orgName, ...(org?.reply ? { replyTo: org.reply } : {}) });
-    if (!delivers(sent)) { await fail('email is not connected'); throw new UserError('Email is not connected, so nothing was sent. Use “Copy welcome link” instead.'); }
-    if (sent.ok || sent.unconfirmed) {
-      await ctx.tx((db) => logWelcomeEmail(db, actor, client.id, { status: sent.ok ? 'sent' : 'unconfirmed' }, expired));
-      revalidatePath(`/app/clients/${client.id}`);
-      return sent.ok ? { ok: `Invitation emailed to ${client.email}.` } : { error: 'The email service did not answer, so it may or may not have arrived. Ask the client before sending the welcome link again.' };
-    }
-    const why = providerError(sent.error);
-    await fail(why);
-    return { error: `Could not send the email: ${why}. Nothing was sent; use “Copy welcome link” instead.` };
+    const sent = await sendWelcomeEmail(ctx, client);
+    revalidatePath(`/app/clients/${client.id}`);
+    if (sent.status === 'sent') return { ok: `Invitation emailed to ${client.email}.` };
+    if (sent.status === 'unconfirmed') return { error: 'The email service did not answer, so it may or may not have arrived. Ask the client before sending the welcome link again.' };
+    if (sent.why === 'claims') return { error: `The welcome email was not sent: ${sent.detail}. Use “Copy welcome link” instead.` };
+    if (sent.why === 'not_connected') return { error: 'Email is not connected, so nothing was sent. Use “Copy welcome link” instead.' };
+    return { error: `Could not send the email: ${sent.detail}. Nothing was sent; use “Copy welcome link” instead.` };
   });
 }

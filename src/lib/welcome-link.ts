@@ -13,6 +13,7 @@ import { getEnv } from './env';
 import { greetingName } from './lead-emails';
 import { portalLoginPath } from './org-brand';
 import type { Lang } from './portal-i18n';
+import { toE164 } from './sms';
 
 /** Links one client may be given per day, emailed or copied. A new link replaces the last, so more are never needed. */
 export const WELCOME_LINKS_PER_DAY = 10;
@@ -116,4 +117,30 @@ export function welcomeEmail(i: { lang: Lang; fullName: string; orgName: string;
 export function welcomeEmailIssue(mail: { subject: string; text: string }): string | null {
   const c = findBlockedClaims(`${mail.subject}\n${mail.text}`)[0];
   return c ? `${c.why} (“${c.excerpt}”)` : null;
+}
+
+/**
+ * "Text it from your phone": a link that opens the staff member's own messaging app with the client's number and the
+ * welcome link already typed, for a link that is passed on by hand. The app sends nothing: the staff member reads the
+ * text and presses send on their own phone. The text is short, in the client's language, and greets the client by a
+ * first name only when it reads as one. It says which business it is from, so it does not read like a text from a
+ * stranger: the agency's name (`orgName`) is named unless the name itself carries wording the welcome email would be
+ * held back for (findBlockedClaims), in which case the text is the fixed words and the link alone.
+ * Null when the number cannot be read as a phone number (./sms.ts toE164).
+ *
+ * Written as the standard says (RFC 5724): sms:<number in international form>?body=<the text, percent-encoded>, which
+ * is what Android reads. Apple devices read the text after "&body=" instead, so the page swaps that one separator when
+ * it is opened on one (src/app/app/clients/new/quick-add.tsx).
+ */
+export function welcomeTextHref(phone: string | null | undefined, i: { lang: Lang; fullName: string; orgName?: string | null; link: string }): string | null {
+  const to = toE164(phone);
+  if (!to) return null;
+  const first = greetingName(i.fullName);
+  // One line, and no full stop of its own before the one the sentence ends with.
+  const name = (i.orgName ?? '').replace(/\s+/g, ' ').trim().replace(/[\s.]+$/, '');
+  const org = name && !findBlockedClaims(name).length ? name : '';
+  const body = i.lang === 'es'
+    ? `Hola${first ? ` ${first}` : ''}: ${org ? `le escribe ${org}. Este` : 'este'} es su enlace para configurar su portal de cliente. Funciona una sola vez y vence en ${WELCOME_LINK_DAYS} días: ${i.link}`
+    : `Hello${first ? ` ${first}` : ''}, ${org ? `this is ${org}. Here` : 'here'} is your link to set up your client portal. It works once and expires in ${WELCOME_LINK_DAYS} days: ${i.link}`;
+  return `sms:${to}?body=${encodeURIComponent(body)}`;
 }
