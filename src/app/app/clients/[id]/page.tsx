@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
-import { AlertTriangle, ArrowLeft, Check as CheckIcon, CheckCircle2, ChevronDown, ChevronRight, Download, FileText, Gavel, Mail, MapPin, Pencil, Phone, Pin, ScanSearch } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, Check as CheckIcon, CheckCircle2, ChevronDown, ChevronRight, Download, FileText, Gavel, Mail, MapPin, Pencil, Phone, Pin, ScanSearch, Trash2 } from 'lucide-react';
 import { ActionForm, Check, ConfirmButton, Field, Select, SubmitButton, TextArea } from '@/components/forms';
 import { AiTag, Avatar, Badge, DayMeter, DefinitionList, EmptyState, Notice, Section, StatusBadge, Tabs } from '@/components/ui';
 import { SplitBar } from '@/components/charts';
@@ -118,6 +118,7 @@ export default async function ClientPage({ params, searchParams }: { params: Pro
           <div className="flex flex-wrap items-center gap-2">
             <Link href={`/app/clients/${id}/statement`} className="btn-secondary">Work statement</Link>
             <Link href={`/app/clients/${id}/edit`} className="btn-secondary"><Pencil size={15} aria-hidden /> Edit</Link>
+            {ctx.can('clients:delete') && <Link href={`/app/clients/${id}/edit#delete`} className="btn-secondary text-bad"><Trash2 size={15} aria-hidden /> Delete</Link>}
             <Link href={`/app/disputes/new?clientId=${id}`} className="btn-primary"><Gavel size={15} aria-hidden /> New dispute</Link>
           </div>
         </div>
