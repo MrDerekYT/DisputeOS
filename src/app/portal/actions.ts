@@ -1,8 +1,8 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
-import { redirect } from 'next/navigation';
 import { after } from 'next/server';
+import { redirect } from 'next/navigation';
 import { z } from 'zod';
 import type { ActionState } from '@/components/forms';
 import { parseForm, run, UserError, zBool, zDate, zText } from '@/lib/action';
@@ -25,11 +25,24 @@ import { autoReadClientReport } from '@/lib/reports/auto-read';
 import { label as kindLabel } from '@/components/ui';
 
 /**
+ * Runs work after the page has answered, so the client never waits on it. Outside a request (scripts, tests) Next's
+ * after() is not available: the work then runs in the background. Errors are logged, never shown to the client.
+ */
+function afterResponse(fn: () => Promise<unknown>) {
+  const safe = () => fn().catch((e) => console.error('[portal] follow-up failed', (e as Error).message));
+  try {
+    after(safe);
+  } catch {
+    void safe();
+  }
+}
+
+/**
  * After the client's change is saved and the page has answered: tell the workspace's owners and admins (in the app
  * and by email). Never delays or breaks what the client did.
  */
 function tellStaff(ctx: PortalCtx, title: (name: string) => string, body: (name: string) => string, href: string) {
-  after(async () => {
+  afterResponse(async () => {
     const c = await withSystem((db) => db.row<{ full_name: string }>('select full_name from public.clients where id = $1', [ctx.clientId])).catch(() => null);
     const name = c?.full_name?.trim() || 'A client';
     await alertStaff({ orgId: ctx.orgId, title: title(name), body: body(name), href });
@@ -97,7 +110,7 @@ export async function portalUploadAction(_: ActionState, fd: FormData): Promise<
     const file = { bytes: up.bytes, mime: up.mime, name: up.name };
     // A credit report is read right away (after the page answers, so the client never waits on it) and queued for
     // review; staff are told either way. Anything else: staff are told a file arrived.
-    after(async () => {
+    afterResponse(async () => {
       const c = await withSystem((db) => db.row<{ full_name: string }>('select full_name from public.clients where id = $1', [ctx.clientId])).catch(() => null);
       const name = c?.full_name?.trim() || 'A client';
       if (d.kind === 'credit_report') {
