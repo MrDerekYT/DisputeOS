@@ -599,6 +599,46 @@ until then, treat the connection as unverified.
   weeks of use. The OpenAI-compatible adapter is unchanged apart from its error kinds and the 45 s deadline, and is
   tested against a mocked API only.
 
+## Reading reports with AI: AnnualCreditReport.com layouts, scans and photos
+
+Off by default. The rules-based parser reads the plain "Label: value" layout and the CSV template. It cannot follow
+the bureaus' own layouts (AnnualCreditReport.com, Experian/Equifax/TransUnion disclosures), and a scan or photo has
+no text at all. With AI reading on, the rules go first; when they recognise no accounts, or the file is a bureau
+disclosure, the report's text (or, for a scan, the pages) goes to the AI, which rewrites it into the fixed layout,
+and the parser files each value into its field (creditor, last 4, type, status, payment status, balance, limit, high
+balance, dates, payment history, remarks; collections with original creditor; public records; inquiries; names,
+addresses, employers). To turn it on, pick one:
+
+**Through OpenRouter (or any OpenAI-compatible endpoint) — uses the same connection as the AI wording**
+
+| Variable | Value |
+| --- | --- |
+| `OCR_PROVIDER` | `openai` |
+| `AI_BASE_URL` | `https://openrouter.ai/api/v1` |
+| `AI_API_KEY` | your OpenRouter key |
+| `OCR_MODEL` | a model that reads images and PDFs (falls back to `AI_MODEL`; a text-only or free model will fail or read poorly) |
+
+**Through Anthropic directly:** `OCR_PROVIDER=anthropic`, `ANTHROPIC_API_KEY`, optional `OCR_MODEL` (default `claude-sonnet-5-5`).
+
+Staging/production refuse to start when the chosen provider's variables are missing.
+
+What happens (`src/lib/reports/ocr.ts`, `src/lib/reports/read-file.ts`):
+
+- **The whole scan goes to the provider** (and, through OpenRouter, to the model's host). Turn this on only once your
+  client agreement and privacy notice cover sending credit reports to an AI processor, and your attorney has agreed.
+- The model transcribes the pages into the parser's "Label: value" layout. It is told to write only the last 4 of
+  account numbers and never an SSN, date of birth or phone number; the answer is cleaned again on our side (any
+  longer account number is cut to its last 4, SSN-shaped numbers removed).
+- **Every field read from a scan is flagged for review** (confidence held below the review threshold), and the report
+  carries the warning "Read from a scan or photo: check every field against the original before approving."
+- **10 AI credits per AI read** (`report_scan` in `src/lib/ai/credits.ts`), taken only when something was recognised;
+  a failed or empty read is refunded. No credits, no read.
+- Up to 30 pages per scan, inside the 4 MB upload limit on Vercel; the call stops after 50 seconds.
+- With OCR on, the report upload also accepts PNG and JPEG photos, and a photo the client put in the vault as a credit
+  report gets the "Read as credit report" button.
+- Both adapters follow the providers' documented APIs and are tested against a mocked fetch; neither has been run
+  against the live service yet.
+
 ## AI credits
 
 AI wording is metered so the platform operator can charge for it. Nothing about AI is free, apart from the Setup

@@ -1,5 +1,30 @@
 # Changelog
 
+## Exact import of AnnualCreditReport.com reports, drag-and-drop upload (unreleased)
+
+No migration.
+
+- **Experian and Equifax free reports are read exactly** (`src/lib/reports/bureau-layouts.ts`): each value is taken
+  from the bureau's own label and filed into its field (creditor, last 4, type, status, payment status, balance,
+  limit, high balance, dates opened/reported/first delinquency, payment history, remarks; collections with original
+  creditor and collection status; hard inquiries; names and addresses). No AI and no credits. Soft inquiries are
+  skipped; employers and phone numbers are left to the reviewer.
+- **Drag-and-drop upload** on the client's Reports tab: drop several reports at once (or tap to choose on a phone);
+  each uploads in turn and shows what was read, with a link to open it.
+
+## Reading AnnualCreditReport.com reports, scans and photos with AI (unreleased)
+
+No migration. Off until `OCR_PROVIDER` is set: `openai` uses the OpenRouter connection already used for AI wording, `anthropic` uses Anthropic directly (docs/INTEGRATIONS.md, "Scanned reports").
+
+- **AnnualCreditReport.com and bureau disclosure PDFs are read.** When the built-in reader recognises no accounts, or
+  the file is a bureau's own disclosure, the AI rewrites the report's text into the fixed layout and each value is
+  filed into its field.
+- **Scanned PDFs and photos of credit reports can be read.** The AI model transcribes them into the layout the report parser
+  already reads; every field read this way is flagged for a person to check, and the report says it came from a scan.
+- **10 AI credits per scan**, refunded when nothing could be read. Account numbers are cut to their last 4 and
+  SSN-shaped numbers removed from what comes back.
+- With it off, nothing changes: scans are refused with the same message as before.
+
 ## New client is a quick invite (unreleased)
 
 For an agency, New client opens on "Invite a client": first name, last name, email, an optional phone number and the

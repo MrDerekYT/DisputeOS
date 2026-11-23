@@ -8,35 +8,62 @@ import { parseForm, run, UserError, zBool, zDate, zOpt, zText, zUuid } from '@/l
 import { requireStaff } from '@/lib/auth/context';
 import { sha256Hex } from '@/lib/crypto';
 import { logEvent } from '@/lib/crm';
-import { parseReportText, parseTradelineCsv, parseMoneyToCents, normalizeDate } from '@/lib/reports/parser';
-import { pdfToText, PdfTextError } from '@/lib/reports/pdf-text';
+import { parseMoneyToCents, normalizeDate } from '@/lib/reports/parser';
 import { staffReportRefusal } from '@/lib/credit/authorization';
+import { ocrEnabled } from '@/lib/reports/ocr';
+import { readReportFile, ReportReadError, reportMimes, SCANS_OFF_IMAGE, type ReadResult } from '@/lib/reports/read-file';
 import { requestReportPull } from '@/lib/credit/pull';
 import { decideReport, regenerateFindings, ReportError, storeParsedReport } from '@/lib/reports/service';
 import type { ParsedReport } from '@/lib/reports/types';
 import { deleteObject, getObject, putObject } from '@/lib/storage';
-import { readUpload, UploadError } from '@/lib/upload';
+import { readUpload, UploadError, type DetectedMime } from '@/lib/upload';
 import { BUREAUS } from '@/lib/util';
 
 export async function uploadReportAction(_: ActionState, fd: FormData): Promise<ActionState> {
   const ctx = await requireStaff('reports:write');
   return run(async () => {
+    const { firstId } = await importUploadedReport(ctx, fd);
+    redirect(`/app/reports/${firstId}`);
+  });
+}
+
+/**
+ * One file from the drag-and-drop box. Same reading and storing as uploadReportAction, but answers with the result
+ * instead of leaving the page, so the box can upload several files in turn and show each one's outcome.
+ */
+export async function uploadReportFileAction(_: ActionState, fd: FormData): Promise<ActionState> {
+  const ctx = await requireStaff('reports:write');
+  return run(async () => {
+    const r = await importUploadedReport(ctx, fd);
+    const p = r.parsed;
+    const accounts = p.tradelines.filter((t) => t.item_type === 'tradeline').length;
+    const collections = p.tradelines.length - accounts;
+    const parts = [`${accounts} account${accounts === 1 ? '' : 's'}`, `${collections} collection${collections === 1 ? '' : 's'}`, `${p.inquiries.length} inquir${p.inquiries.length === 1 ? 'y' : 'ies'}`];
+    if (p.publicRecords.length) parts.push(`${p.publicRecords.length} public record${p.publicRecords.length === 1 ? '' : 's'}`);
+    return { ok: `${BUREAU_NAME[p.bureau ?? ''] ?? 'Report'}: ${parts.join(', ')}${r.via.startsWith('ai') ? ' (read by AI, check each field)' : ''}`, data: { reportId: r.firstId } };
+  });
+}
+
+const BUREAU_NAME: Record<string, string> = { experian: 'Experian', equifax: 'Equifax', transunion: 'TransUnion' };
+
+async function importUploadedReport(ctx: Awaited<ReturnType<typeof requireStaff>>, fd: FormData) {
     const d = parseForm(z.object({ clientId: zUuid, bureau: z.enum(BUREAUS).optional().or(z.literal('')) }), fd);
     // A report staff add needs the client's written authorization on file (src/lib/credit/authorization.ts); checked
     // before the file is read or stored, and again in the transaction that records it.
     const refused = await ctx.tx((db) => staffReportRefusal(db, d.clientId));
     if (refused) throw new UserError(refused);
     let up;
-    try { up = await readUpload(fd.get('file') as File | null, ['application/pdf', 'text/plain', 'text/html', 'text/csv']); }
-    catch (e) { if (e instanceof UploadError) throw new UserError(e.message); throw e; }
+    try { up = await readUpload(fd.get('file') as File | null, reportMimes() as DetectedMime[]); }
+    catch (e) {
+      if (e instanceof UploadError) throw new UserError(e.message);
+      throw e;
+    }
 
     let parsed: ParsedReport;
-    try {
-      if (up.mime === 'text/csv' || /\.csv$/i.test(up.name)) parsed = parseTradelineCsv(up.bytes.toString('utf8'));
-      else if (up.mime === 'application/pdf') parsed = parseReportText(await pdfToText(up.bytes));
-      else parsed = parseReportText(up.bytes.toString('utf8'), up.mime === 'text/html' ? 'html' : 'text');
-    } catch (e) {
-      if (e instanceof PdfTextError) throw new UserError(e.message);
+    let via: ReadResult['via'];
+    try { ({ parsed, via } = await readReportFile(up, { orgId: ctx.orgId, userId: ctx.userId })); }
+    catch (e) {
+      if (e instanceof ReportReadError) throw new UserError(e.message);
       throw e;
     }
     if (!parsed.tradelines.length && !parsed.inquiries.length && !parsed.publicRecords.length && !parsed.identity.length)
@@ -59,8 +86,8 @@ export async function uploadReportAction(_: ActionState, fd: FormData): Promise<
       if (e instanceof ReportError) throw new UserError(e.message);
       throw e;
     }
-    redirect(`/app/reports/${firstId}`);
-  });
+    revalidatePath(`/app/clients/${d.clientId}`);
+    return { firstId, parsed, via };
 }
 
 /**
@@ -84,15 +111,12 @@ export async function importDocumentAsReportAction(_: ActionState, fd: FormData)
     if (doc.used) throw new UserError(USED);
     const byStaff = doc.source !== 'client';
     if (byStaff) { const refused = await ctx.tx((db) => staffReportRefusal(db, d.clientId)); if (refused) throw new UserError(refused); }
-    if (!['application/pdf', 'text/plain', 'text/html', 'text/csv'].includes(doc.mime_type)) throw new UserError('Only a PDF, text, HTML or CSV file can be read as a report. A photo or scan cannot be read automatically.');
+    if (!reportMimes().includes(doc.mime_type)) throw new UserError(ocrEnabled() ? 'Only a PDF, photo, text, HTML or CSV file can be read as a report.' : `Only a PDF, text, HTML or CSV file can be read as a report. ${SCANS_OFF_IMAGE}`);
     const bytes = await getObject(doc.storage_key);
     let parsed: ParsedReport;
-    try {
-      if (doc.mime_type === 'text/csv') parsed = parseTradelineCsv(bytes.toString('utf8'));
-      else if (doc.mime_type === 'application/pdf') parsed = parseReportText(await pdfToText(bytes));
-      else parsed = parseReportText(bytes.toString('utf8'), doc.mime_type === 'text/html' ? 'html' : 'text');
-    } catch (e) {
-      if (e instanceof PdfTextError) throw new UserError(e.message);
+    try { ({ parsed } = await readReportFile({ bytes, mime: doc.mime_type, name: '' }, { orgId: ctx.orgId, userId: ctx.userId })); }
+    catch (e) {
+      if (e instanceof ReportReadError) throw new UserError(e.message);
       throw e;
     }
     if (!parsed.tradelines.length && !parsed.inquiries.length && !parsed.publicRecords.length && !parsed.identity.length)
