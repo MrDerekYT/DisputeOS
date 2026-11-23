@@ -532,3 +532,22 @@ export async function clearClientTermsAction(_: ActionState, fd: FormData): Prom
 export async function invitePortalAction(prev: ActionState, fd: FormData): Promise<ActionState> {
   return emailWelcomeLinkAction(prev, fd);
 }
+
+// ---------------------------------------------------------------- status and stage
+/** "Status and stage" on the client page: a person's choice, which the automatic updates then leave alone. */
+export async function setProgressAction(_: ActionState, fd: FormData): Promise<ActionState> {
+  const ctx = await requireStaff('clients:write');
+  return run(async () => {
+    const d = parseForm(z.object({ clientId: zUuid, status: z.enum(CLIENT_STATUSES), stage: z.enum(CLIENT_STAGES) }), fd);
+    await ctx.tx(async (db) => {
+      const before = await db.row<{ status: string; stage: string }>('select status, stage from public.clients where id = $1', [d.clientId]);
+      if (!before) throw new UserError('Client not found.');
+      await db.run('update public.clients set status = $2, stage = $3 where id = $1', [d.clientId, d.status, d.stage]);
+      if (before.status !== d.status) await logEvent(db, ctx, d.clientId, 'status_changed', `Status changed: ${before.status} → ${d.status}`);
+      if (before.stage !== d.stage) await logEvent(db, ctx, d.clientId, 'stage_changed', `Stage changed: ${before.stage} → ${d.stage}`);
+      await audit(db, { orgId: ctx.orgId, actorId: ctx.userId, action: 'client.updated', entityType: 'client', entityId: d.clientId, ip: ctx.meta.ip, meta: { fields: 'progress' } });
+    });
+    revalidatePath(`/app/clients/${d.clientId}`);
+    return { ok: 'Saved.' };
+  });
+}

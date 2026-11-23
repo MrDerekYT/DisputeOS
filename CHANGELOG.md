@@ -3,6 +3,8 @@
 ## Invite by email or by link (unreleased)
 
 - **Invite a client: email it or get the link.** With email connected, “Invite a client” has two buttons: “Send welcome email”, and “Add and get the link”, which adds the client and shows the one-time link to copy or text, with no email sent.
+- **Status and stage follow the client's file.** The client page moves a client forward on its own: Onboarding → Active once a service agreement is signed, and Intake → Analysis → Disputing → Monitoring as reports come in and disputes are sent and answered. It never moves a client back, never changes Paused, Completed, Cancelled or Graduated, and leaves alone a choice a person made after the latest change in the file. Each automatic change is on the timeline. Under the journey strip, “Change status or stage” has two dropdowns that start on the suggestion, with the reasons from the file.
+- **Delete button on the client page**, next to Edit. It opens the existing delete section (type the name to confirm; the 2-year rule for signed agreements still applies).
 - **A client email that is a team sign-in is caught.** One email is one sign-in, so a welcome link to an email someone on the team signs in with could never be accepted. The Welcome link card now refuses it and says what to do instead of making a link that fails, and adding yourself as a client says to use another email address of yours.
 
 ## New client is a quick invite (unreleased)
