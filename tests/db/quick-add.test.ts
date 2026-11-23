@@ -518,7 +518,7 @@ describe('invite a client: nothing is created twice', () => {
 describe('invite a client: an email that already signs in to this workspace', () => {
   // One person has one place in a workspace, so such an email could never accept a client's welcome link: the link
   // would end in "You are already a member of this organization". It is refused before anything is created.
-  const SELF = 'That is the email you sign in with, so it cannot also be a client’s. Nothing was added. To see the welcome email yourself, use another email address of yours.';
+  const SELF = 'That is the email you sign in with, so it cannot also be a client’s: one email is one sign-in. Nothing was added. To add yourself as a client, use another email address of yours (for example a second Gmail address).';
   const SELF_TEST = `${SELF} To check that email works, use “Send a test email to me” on Get set up.`;
   const TEAM = 'This email belongs to someone on your team, so it cannot also be a client’s. Nothing was added. Use the client’s own email address.';
   const state = async (orgId: string) => ({
@@ -550,9 +550,7 @@ describe('invite a client: an email that already signs in to this workspace', ()
 
     // With no email service the same holds, in the words that fit: there is no welcome email to see.
     process.env = { ...saved }; resetEnvCache();
-    expect(await add({ firstName: 'Avery', lastName: 'Owner', email: o.ownerEmail })).toEqual({
-      error: 'That is the email you sign in with, so it cannot also be a client’s. Nothing was added. To try the welcome link yourself, use another email address of yours.',
-    });
+    expect(await add({ firstName: 'Avery', lastName: 'Owner', email: o.ownerEmail })).toEqual({ error: SELF });
     expect(await state(o.orgId)).toEqual(before);
   });
 
@@ -608,7 +606,7 @@ describe('invite a client: an email that already signs in to this workspace', ()
 });
 
 describe('invite a client: refused before anything is created', () => {
-  const REFUSED = 'This workspace can send 50 emails an hour until the platform operator has approved it. Try again later. To add the client now without sending an email, use “Enter everything yourself”.';
+  const REFUSED = 'This workspace can send 50 emails an hour until the platform operator has approved it. Try again later. To add the client now without sending an email, use “Add and get the link”.';
   it('the workspace’s hourly email limit: no client, no link and no email', async () => {
     // The limit counts per clock hour. The clock stands still for this test, a minute into the current hour.
     vi.useFakeTimers({ toFake: ['Date'] });
@@ -769,7 +767,7 @@ describe('the New client page', () => {
     signIn(o);
     connectEmail();
     const on = await page();
-    for (const s of ['Invite a client', 'Send welcome email', 'They get a welcome email with a one-time link']) expect(on, s).toContain(s);
+    for (const s of ['Invite a client', 'Send welcome email', 'Add and get the link', 'Email them a welcome link, or get the link']) expect(on, s).toContain(s);
     for (const s of ['Email is not connected', 'Add client and get the link', 'Full legal name']) expect(on, s).not.toContain(s);
   });
 
@@ -835,5 +833,42 @@ describe('the New client page', () => {
       for (const s of ['Full legal name', 'Create client', 'href="/app/clients"']) expect(h, s).toContain(s);
       for (const s of ['Invite a client', 'Enter everything yourself', 'Consents &amp; portal', 'Add client and get the link']) expect(h, s).not.toContain(s);
     }
+  });
+});
+
+describe('invite a client: get the link instead of emailing it', () => {
+  it('with email connected, “Add and get the link” adds the client and returns a working link; nothing is emailed or counted', async () => {
+    const o = await makeOrg('QuickLinkOnly');
+    signIn(o);
+    connectEmail();
+    const email = freshEmail();
+    const before = await hourlyHits(o.orgId);
+    const r = await quickAddClientAction(undefined, form({ firstName: 'Dana', lastName: 'Whitfield', email, via: 'link' }));
+    expect(r?.error).toBeUndefined();
+    expect(r?.ok).toBe('Dana was added. No email was sent. Send Dana this link yourself. It works once and expires in 7 days.');
+    const data = r!.data as { outcome: string; clientId: string; link: string };
+    expect(data.outcome).toBe('link');
+    expect(handed).toEqual([]);
+    expect(await hourlyHits(o.orgId)).toBe(before);
+    expect(await invites(data.clientId)).toEqual([{ email, live: true }]);
+    // The link works: the client sets a password and is linked to their record.
+    const ok = await acceptInvite(tokenOf(data.link), { fullName: 'Dana Whitfield', password: 'Dana-Own-Password-8841' }, { ip: testIp() });
+    expect(ok.ok).toBe(true);
+    expect((await clientRow(data.clientId) as { portal_user_id: string | null }).portal_user_id).not.toBeNull();
+  });
+});
+
+describe('welcome link for a client whose email is a team sign-in', () => {
+  it('is refused with what to do, instead of making a link that could never be accepted', async () => {
+    const o = await makeOrg('QuickTeamEmail');
+    signIn(o);
+    connectEmail();
+    // Added before this check existed, or edited later to the owner's own sign-in email.
+    const c = await addClient(o.orgId, 'Avery Owner');
+    await withSystem((db) => db.run('update public.clients set email = $2 where id = $1', [c, o.ownerEmail]));
+    const r = await emailWelcomeLinkAction(undefined, form({ clientId: c }));
+    expect(r?.error).toContain('This email is a sign-in for your team');
+    expect(handed).toEqual([]);
+    expect(await invites(c)).toEqual([]);
   });
 });

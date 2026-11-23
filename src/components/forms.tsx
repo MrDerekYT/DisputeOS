@@ -8,12 +8,14 @@ import { cn } from '@/lib/util';
 export type ActionState = { error?: string; ok?: string; data?: Record<string, string> } | undefined;
 type ServerAction = (prev: ActionState, fd: FormData) => Promise<ActionState>;
 
-export function SubmitButton({ children, className, variant = 'primary', pendingText }: { children: ReactNode; className?: string; variant?: 'primary' | 'secondary' | 'danger' | 'ghost'; pendingText?: string }) {
-  const { pending } = useFormStatus();
+export function SubmitButton({ children, className, variant = 'primary', pendingText, name, value }: { children: ReactNode; className?: string; variant?: 'primary' | 'secondary' | 'danger' | 'ghost'; pendingText?: string; name?: string; value?: string }) {
+  const { pending, data } = useFormStatus();
+  // With two buttons in one form, only the pressed one says it is working.
+  const mine = !name || !data || data.get(name) === value;
   return (
-    <button type="submit" disabled={pending} aria-busy={pending} className={cn(`btn-${variant}`, className)}>
-      {pending && <Loader2 size={16} className="animate-spin" aria-hidden />}
-      {pending && pendingText ? pendingText : children}
+    <button type="submit" name={name} value={value} disabled={pending} aria-busy={pending} className={cn(`btn-${variant}`, className)}>
+      {pending && mine && <Loader2 size={16} className="animate-spin" aria-hidden />}
+      {pending && mine && pendingText ? pendingText : children}
     </button>
   );
 }

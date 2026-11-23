@@ -19,11 +19,19 @@ import { toE164 } from './sms';
 export const WELCOME_LINKS_PER_DAY = 10;
 export const WELCOME_LINK_DAYS = 7;
 
-export interface WelcomeClient { id: string; full_name: string; email: string | null; preferred_language: Lang; portal_user_id: string | null }
+export interface WelcomeClient {
+  id: string; full_name: string; email: string | null; preferred_language: Lang; portal_user_id: string | null;
+  /** Set when the client's email is the sign-in of someone on the agency's team: such a link can never be accepted. */
+  team_email?: boolean;
+}
 
 /** The client, read under the staff member's row-level security: another agency's client is simply not found. */
 export async function welcomeClient(db: Db, clientId: string): Promise<WelcomeClient | null> {
-  return db.row<WelcomeClient>('select id, full_name, email, preferred_language, portal_user_id from public.clients where id = $1', [clientId]);
+  return db.row<WelcomeClient>(
+    `select c.id, c.full_name, c.email, c.preferred_language, c.portal_user_id,
+            exists (select 1 from public.memberships m join public.users u on u.id = m.user_id
+                     where m.org_id = c.org_id and m.role <> 'client' and lower(u.email) = lower(c.email)) as team_email
+       from public.clients c where c.id = $1`, [clientId]);
 }
 
 /** Why no link can be made for this client, or null. */
@@ -31,6 +39,7 @@ export function welcomeLinkProblem(c: WelcomeClient | null): string | null {
   if (!c) return 'Client not found.';
   if (c.portal_user_id) return 'This client already has portal access. They sign in at your client sign-in page.';
   if (!c.email) return 'Add the client’s email address first: the portal account is made for it.';
+  if (c.team_email) return 'This email is a sign-in for your team, so the client cannot use it for their portal: one email is one sign-in. Change the client’s email (Edit client) to an address only they use, then make the link again. To be your own client, use another email address of yours.';
   return null;
 }
 

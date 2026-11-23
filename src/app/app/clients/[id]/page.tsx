@@ -1,7 +1,9 @@
 import Link from 'next/link';
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
-import { AlertTriangle, ArrowLeft, Check as CheckIcon, CheckCircle2, ChevronDown, ChevronRight, Download, FileText, Gavel, Mail, MapPin, Pencil, Phone, Pin, ScanSearch } from 'lucide-react';
+import { loadProgressFacts, suggestProgress, syncClientProgress } from '@/lib/client-progress';
+import { ProgressPicker } from './progress-picker';
+import { AlertTriangle, ArrowLeft, Check as CheckIcon, CheckCircle2, ChevronDown, ChevronRight, Download, FileText, Gavel, Mail, MapPin, Pencil, Phone, Pin, ScanSearch, Trash2 } from 'lucide-react';
 import { ActionForm, Check, ConfirmButton, Field, Select, SubmitButton, TextArea } from '@/components/forms';
 import { AiTag, Avatar, Badge, DayMeter, DefinitionList, EmptyState, Notice, Section, StatusBadge, Tabs } from '@/components/ui';
 import { SplitBar } from '@/components/charts';
@@ -59,7 +61,10 @@ export default async function ClientPage({ params, searchParams }: { params: Pro
   const ctx = await requireStaff('clients:read');
   const tab: Tab = (TAB_KEYS as readonly string[]).includes(sp.tab ?? '') ? (sp.tab as Tab) : 'overview';
 
+  // Status and stage follow the client's file (src/lib/client-progress.ts): forward only, never over a person's choice.
+  if (ctx.can('clients:write')) await ctx.tx((db) => syncClientProgress(db, ctx, id));
   const base = await ctx.tx(async (db) => {
+    const facts = await loadProgressFacts(db, id);
     const c = await db.row<{
       id: string; full_name: string; email: string | null; phone: string | null; preferred_language: 'en' | 'es'; status: string; stage: (typeof CLIENT_STAGES)[number]; source: string | null; goals: string | null;
       address: { line1?: string; line2?: string; city?: string; state?: string; zip?: string }; ssn_last4: string | null; tags: string[]; assigned_to: string | null; assignee_name: string | null;
@@ -75,10 +80,10 @@ export default async function ClientPage({ params, searchParams }: { params: Pro
               (select count(*)::int from public.tasks where client_id = $1 and status = 'open') as tasks,
               (select count(*)::int from public.communications where client_id = $1 and direction = 'inbound' and read_at is null) as unread,
               (select count(*)::int from public.document_requests where client_id = $1 and fulfilled_document_id is null) as requests`, [id]);
-    return { c, counts: counts ?? {} };
+    return { c, counts: counts ?? {}, suggestion: facts ? suggestProgress(facts) : null };
   });
   if (!base) notFound();
-  const { c, counts } = base;
+  const { c, counts, suggestion } = base;
   const addr = [[c.address.line1, c.address.line2].filter(Boolean).join(', '), [c.address.city, [c.address.state, c.address.zip].filter(Boolean).join(' ')].filter(Boolean).join(', ')].filter(Boolean).join(' · ');
   const stageIdx = CLIENT_STAGES.indexOf(c.stage);
   const first = c.full_name.split(' ')[0] ?? c.full_name;
@@ -121,6 +126,7 @@ export default async function ClientPage({ params, searchParams }: { params: Pro
           <div className="flex flex-wrap items-center gap-2">
             <Link href={`/app/clients/${id}/statement`} className="btn-secondary">Work statement</Link>
             <Link href={`/app/clients/${id}/edit`} className="btn-secondary"><Pencil size={15} aria-hidden /> Edit</Link>
+            {ctx.can('clients:delete') && <Link href={`/app/clients/${id}/edit#delete`} className="btn-secondary text-bad"><Trash2 size={15} aria-hidden /> Delete</Link>}
             <Link href={`/app/disputes/new?clientId=${id}`} className="btn-primary"><Gavel size={15} aria-hidden /> New dispute</Link>
           </div>
         </div>
@@ -142,6 +148,9 @@ export default async function ClientPage({ params, searchParams }: { params: Pro
               </li>
             ))}
           </ol>
+          {ctx.can('clients:write') && suggestion && (
+            <ProgressPicker clientId={id} status={c.status} stage={c.stage} suggestion={suggestion} />
+          )}
         </div>
         <dl className="flex flex-wrap items-center gap-x-8 gap-y-3 text-sm">
           <div><dt className="text-[0.8125rem] text-muted">Specialist</dt><dd className="font-medium">{c.assignee_name ?? 'Unassigned'}</dd></div>

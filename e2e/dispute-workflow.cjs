@@ -138,8 +138,11 @@ async function signUpAgency(browser, label) {
     await check('reports are uploaded, read, reviewed by a person and approved', async () => {
       for (const [name, text, bureau] of [['experian.txt', EXPERIAN, 'Experian'], ['equifax.txt', EQUIFAX, 'Equifax']]) {
         await staff.goto(clientUrl + '?tab=reports');
-        await staff.setInputFiles('input[name=file]', { name, mimeType: 'text/plain', buffer: Buffer.from(text) });
-        await staff.getByRole('button', { name: 'Upload & read' }).click();
+        // The drop box on the Reports tab: the file is read on arrival, and its row links to the report.
+        await staff.setInputFiles('input[type=file][multiple]', { name, mimeType: 'text/plain', buffer: Buffer.from(text) });
+        const opened = staff.locator('li', { hasText: name }).getByRole('link', { name: 'Open' });
+        await opened.waitFor({ timeout: 20000 });
+        await opened.click();
         await staff.waitForURL(/\/app\/reports\//, { timeout: 20000 });
         await see(staff, `${bureau} report`); await see(staff, 'Review before this is used');
         if (bureau === 'Experian') reportUrl = staff.url();

@@ -30,6 +30,7 @@ export default async function EditClientPage({ params }: { params: Promise<{ id:
         </ActionForm>
 
         {ctx.can('clients:delete') && (
+          <div id="delete" className="scroll-mt-24">
           <Section plain title="Delete client" hint="Permanently removes the client, their documents, reports, disputes and letters. This cannot be undone.">
             <Notice tone="warn">Consider exporting their data first, and check your retention obligations before deleting.</Notice>
             <ActionForm action={deleteClientAction} className="mt-4 flex flex-wrap items-end gap-3">
@@ -39,6 +40,7 @@ export default async function EditClientPage({ params }: { params: Promise<{ id:
             </ActionForm>
             <p className="mt-3 text-sm"><a className="link" href={`/api/clients/${id}/export`}>Download this client’s data (JSON)</a></p>
           </Section>
+          </div>
         )}
       </div>
     </>
