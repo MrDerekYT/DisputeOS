@@ -1,3 +1,4 @@
+import { queueClientUpdate } from '../client-updates/service';
 import type { Db } from '../db';
 import { UserError } from '../errors';
 import { audit } from '../audit';
@@ -123,6 +124,8 @@ export async function decideReport(db: Db, actor: Actor, reportId: string, decis
     const c = await db.row<{ full_name: string; address: { line1?: string; city?: string } }>('select full_name, address from public.clients where id = $1', [rep.client_id]);
     await regenerateFindings(db, actor, rep.client_id, c?.full_name ?? '', c?.address?.line1 ?? '');
     await db.run("update public.clients set stage = case when stage = 'intake' then 'analysis' else stage end where id = $1", [rep.client_id]);
+    // One "review done" message per approved report (switched on in Settings → Client updates).
+    await queueClientUpdate(db, { orgId: actor.orgId, clientId: rep.client_id, event: 'report_reviewed', subjectId: reportId });
   }
   await logEvent(db, actor, rep.client_id, 'report_reviewed', `${rep.bureau} report ${decision}`);
   await audit(db, { orgId: actor.orgId, actorId: actor.userId, action: `report.${decision}`, entityType: 'credit_report', entityId: reportId, ip: actor.meta?.ip });

@@ -10,6 +10,7 @@ import { sha256Hex } from '@/lib/crypto';
 import { logEvent } from '@/lib/crm';
 import { parseMoneyToCents, normalizeDate } from '@/lib/reports/parser';
 import { staffReportRefusal } from '@/lib/credit/authorization';
+import { queueClientUpdate } from '@/lib/client-updates/service';
 import { ocrEnabled } from '@/lib/reports/ocr';
 import { readReportFile, ReportReadError, reportMimes, SCANS_OFF_IMAGE, type ReadResult } from '@/lib/reports/read-file';
 import { requestReportPull } from '@/lib/credit/pull';
@@ -80,6 +81,7 @@ async function importUploadedReport(ctx: Awaited<ReturnType<typeof requireStaff>
            values ($1,$2,'credit_report',$3,$4,$5,$6,$7,$8,'staff','accepted') returning id`, [ctx.orgId, d.clientId, up.name, up.mime, up.bytes.length, sha256Hex(up.bytes), key, ctx.userId]);
         const ids = await storeParsedReport(db, ctx, { clientId: d.clientId, parsed, bureau: d.bureau || null, documentId: doc!.id, source: up.mime === 'text/csv' ? 'csv' : 'upload' });
         firstId = ids[0]!;
+        await queueClientUpdate(db, { orgId: ctx.orgId, clientId: d.clientId, event: 'report_received', subjectId: doc!.id });
       });
     } catch (e) {
       await deleteObject(key).catch(() => undefined);
