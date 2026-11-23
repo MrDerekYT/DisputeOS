@@ -5,7 +5,7 @@ import { brandCss } from '@/lib/brand';
 import { guideLabels, guideStarters } from '@/lib/guide/labels';
 import { portalContext } from '@/lib/portal';
 
-// Server actions under this layout may wait on an AI provider for up to 30 s (TIMEOUT_MS in src/lib/ai/provider.ts).
+// Server actions under this layout may wait on an AI provider for up to 45 s, retries included (AI_CALL_DEADLINE_MS in src/lib/ai/provider.ts).
 // The host must not stop the request before that call returns and its charge is settled or refunded.
 export const maxDuration = 60;
 

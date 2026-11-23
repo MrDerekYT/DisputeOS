@@ -7,6 +7,7 @@
 const { chromium } = require('playwright');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
+const { Client: PgClient } = require('pg');
 
 const BASE = process.env.BASE || 'http://localhost:3100';
 const SHOTS = process.env.SHOTS || 'screenshots/e2e';
@@ -59,6 +60,59 @@ const watch = (page, who) => {
   page.on('response', (r) => { if (r.status() >= 500) problems.push(`[${who} http ${r.status()}] ${r.url()}`); });
 };
 const expectText = async (page, text, timeout = 8000) => page.getByText(text, { exact: false }).first().waitFor({ timeout });
+/** Waits for a field to hold `want` (a form is emptied, or put back, a moment after its message appears). */
+const fieldHolds = async (field, want, ms = 4000) => { const until = Date.now() + ms; while (Date.now() < until) { if ((await field.inputValue()) === want) return true; await new Promise((r) => setTimeout(r, 50)); } return false; };
+/**
+ * Whether an element is on screen, clear of the bar that stays at the top of the staff app: all of it, or (`top: true`)
+ * its start in the upper part of the screen. Polled, because the page scrolls to a new result a moment after it appears.
+ */
+const inView = async (locator, { top = false, ms = 3000 } = {}) => {
+  const until = Date.now() + ms;
+  for (;;) {
+    const ok = await locator.evaluate((el, startOnly) => {
+      const r = el.getBoundingClientRect();
+      const bar = document.querySelector('header.sticky');
+      const clear = r.height > 0 && r.top >= (bar ? bar.getBoundingClientRect().bottom : 0) - 1;
+      return clear && (startOnly ? r.top < window.innerHeight * 0.6 : r.bottom <= window.innerHeight + 1);
+    }, top);
+    if (ok || Date.now() > until) return ok;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+};
+
+/**
+ * No dispute can be recorded as submitted while the client's 3-business-day cancellation period runs (15 U.S.C.
+ * § 1679d(a)(2)), and nothing in the app can date a signature in the past. So, after checking that the app refuses,
+ * the test client's agreements are dated 10 days back directly in the database the server uses: E2E_DATABASE_URL, or
+ * DATABASE_URL (from the environment, or read from .env.local as the dev server does).
+ */
+function e2eDatabaseUrl() {
+  if (!process.env.E2E_DATABASE_URL && !process.env.DATABASE_URL && fs.existsSync('.env.local')) process.loadEnvFile('.env.local');
+  const url = process.env.E2E_DATABASE_URL || process.env.DATABASE_URL;
+  if (!url) throw new Error('Set E2E_DATABASE_URL to the database the server under test uses (needed to date the test agreements before the cancellation period)');
+  return url;
+}
+async function backdateAgreements(clientId, days = 10) {
+  const db = new PgClient({ connectionString: e2eDatabaseUrl() });
+  await db.connect();
+  try {
+    // The days stored with each signature move back with it: the day the client signed (the paper's date) and the last day
+    // of the cancellation period fixed when the agreement was signed, which a recount never shortens.
+    const r = await db.query("update public.client_consents set signed_at = signed_at - make_interval(days => $2::int), signed_on = signed_on - $2::int, cancellation_ends_on = cancellation_ends_on - $2::int where client_id = $1", [clientId, days]);
+    if (!r.rowCount) throw new Error('no agreements found to date back');
+  } finally { await db.end(); }
+}
+/** The agency's client agreement terms (Settings → Client agreement): the service agreement is built from them. */
+async function saveAgreementTerms(page) {
+  await page.goto(BASE + '/app/settings#agreement');
+  await page.getByLabel('Principal business address').fill('500 Bayshore Blvd, Suite 210, Tampa, FL 33606');
+  await page.locator('textarea[name=services]').fill('We review your three credit reports with you, prepare dispute letters for the items you choose, track each investigation and report every response to you in your portal.');
+  await page.locator('textarea[name=paymentTerms]').fill('A monthly fee of $99.00, charged on the 1st of each month for the work fully performed in the month before.');
+  await page.getByLabel('Total of all payments (USD)').fill('594.00');
+  await page.getByLabel('How long the services should take').fill('About 6 months from the date you sign.');
+  await page.getByRole('button', { name: 'Save client agreement' }).click();
+  await expectText(page, 'Client agreement saved');
+}
 
 const EXPERIAN = `Experian Credit Report
 Report Date: 01/15/2026
@@ -147,8 +201,25 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
       if (/\$\d|score|612/i.test(body.replace(/Welcome back/, ''))) throw new Error('Unexpected figures on an empty dashboard: ' + body.slice(0, 200));
     });
 
-    await check('create a client with consents recorded', async () => {
+    await check('the service agreement cannot be recorded before the agency saves its client agreement terms; then it can', async () => {
+      await staff.goto(BASE + '/app/settings');
+      await expectText(staff, 'Not saved yet: no client can sign the service agreement');
+      // New client says so before anyone is invited, and sends an owner to the place to save them.
       await staff.goto(BASE + '/app/clients/new');
+      await expectText(staff, 'Your client agreement terms are not saved yet.');
+      await staff.getByRole('link', { name: 'Open Settings → Client agreement' }).waitFor();
+      await saveAgreementTerms(staff);
+      await expectText(staff, 'Clients can sign the service agreement');
+      await staff.goto(BASE + '/app/clients/new');
+      await expectText(staff, 'Invite a client');
+      if (await staff.getByText('Your client agreement terms', { exact: false }).count()) throw new Error('New client still says the client agreement terms are not saved');
+    });
+
+    await check('create a client with consents recorded', async () => {
+      // New client opens on the quick invite; the full form is one link away, at the same address with ?manual=1.
+      await staff.goto(BASE + '/app/clients/new');
+      await staff.getByRole('link', { name: 'Enter everything yourself' }).click();
+      await staff.waitForURL(/\/app\/clients\/new\?manual=1$/);
       await staff.getByLabel('Full legal name').fill('E2E Client');
       await staff.getByLabel('Email', { exact: true }).fill(clientEmail);
       await staff.getByLabel('Phone').fill('813-555-0142');
@@ -160,19 +231,88 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
       await staff.getByLabel('Date of birth').fill('1985-03-03'); await staff.getByLabel('Social Security number').fill('000-00-4321');
       await staff.check('input[name=consentDisclosure]'); await staff.check('input[name=consentContract]'); await staff.check('input[name=consentAuthorization]');
       await staff.getByLabel('Name the client signed with').fill('E2E Client');
+      // Paper signatures are recorded with the date written on the paper (today, in UTC: never in the future for the app).
+      await staff.getByLabel('Date written on the signed paper').fill(new Date().toISOString().slice(0, 10));
       await staff.getByRole('button', { name: 'Create client' }).click();
       await staff.waitForURL(/\/app\/clients\/[0-9a-f-]{36}$/);
       clientUrl = staff.url();
       await expectText(staff, 'E2E Client');
-      await expectText(staff, 'Signed');
+      await expectText(staff, 'Signed on paper on');
+      await expectText(staff, 'App’s text when recorded (PDF)'); // the stored text is the app's on the recording day, not a copy of the paper
     });
 
     await check('invalid input is rejected with a clear message', async () => {
-      await staff.goto(BASE + '/app/clients/new');
+      await staff.goto(BASE + '/app/clients/new?manual=1');
       await staff.getByLabel('Full legal name').fill('Bad Input');
       await staff.getByLabel('ZIP').fill('12');
       await staff.getByRole('button', { name: 'Create client' }).click();
       await expectText(staff, 'Use a 5-digit ZIP');
+    });
+
+    await check('quick invite: a name and an email add the client and show a one-time welcome link (no email service here), in view on a laptop screen; your own email and the same email again are refused', async () => {
+      const quickEmail = `quick-${uniq}@example.test`;
+      const result = staff.locator('#quick-add-result');
+      // A common laptop screen (1366x768, less the browser's own bars): what the button did must be in view without scrolling by hand.
+      await staff.setViewportSize({ width: 1366, height: 633 });
+      try {
+        // The full form links back to the quick invite.
+        await staff.getByRole('link', { name: 'Invite a client instead' }).click();
+        await staff.waitForURL(/\/app\/clients\/new$/);
+        await expectText(staff, 'Invite a client');
+        // This step is written for a server with no email service connected (the default): say so instead of timing out.
+        if (await staff.getByRole('button', { name: 'Send welcome email' }).count()) throw new Error('this server has an email service connected; the quick invite step needs one with none (EMAIL_DRIVER=log, the default)');
+        // The page says so before the button is pressed, and the way to the full form is on screen when the page opens.
+        await expectText(staff, 'Email is not connected yet');
+        if (!(await inView(staff.getByRole('link', { name: 'Enter everything yourself' })))) throw new Error('“Enter everything yourself” is not on screen when New client opens');
+        // Your own sign-in email cannot also be a client's (its welcome link could never be used): refused, nothing added.
+        await staff.getByLabel('First name').fill('Avery');
+        await staff.getByLabel('Last name').fill('Myself');
+        await staff.getByLabel(/^Email/).fill(email);
+        await staff.getByRole('button', { name: 'Add client and get the link' }).click();
+        await expectText(staff, 'That is the email you sign in with, so it cannot also be a client’s. Nothing was added.');
+        if (!(await inView(result))) throw new Error('the refusal is not on screen after the button was pressed');
+        if (!(await fieldHolds(staff.getByLabel(/^Email/), email))) throw new Error('the form lost what was typed after the refusal');
+        await staff.getByLabel('First name').fill('Quinn');
+        await staff.getByLabel('Last name').fill('Invite');
+        await staff.getByLabel(/^Email/).fill(quickEmail);
+        await staff.getByLabel('Phone').fill('(813) 555-0177');
+        await staff.getByRole('button', { name: 'Add client and get the link' }).click();
+        await expectText(staff, 'Quinn was added. Email is not connected, so no email was sent.');
+        // The whole result (the message, the link, Copy) is on screen: the page went to it.
+        if (!(await inView(result))) throw new Error('the result is not on screen after the button was pressed');
+        const link = (await staff.locator('code', { hasText: '/invite/' }).first().innerText()).trim();
+        const sms = await staff.getByRole('link', { name: 'Text it from your phone' }).getAttribute('href');
+        if (!sms.startsWith('sms:+18135550177?body=') || !decodeURIComponent(sms).endsWith(link)) throw new Error('the text link does not carry the number and the welcome link: ' + sms);
+        // The text says which business it is from.
+        if (!decodeURIComponent(sms).includes(`this is E2E Agency ${uniq}.`)) throw new Error('the text does not name the agency: ' + decodeURIComponent(sms));
+        // Everything stays on the one page, and the form is empty again for the next client.
+        if (!/\/app\/clients\/new$/.test(staff.url())) throw new Error('left the New client page: ' + staff.url());
+        if (!(await fieldHolds(staff.getByLabel('First name'), '')) || !(await fieldHolds(staff.getByLabel(/^Email/), ''))) throw new Error('the form was not emptied for the next client');
+        for (const name of ['Open Quinn’s page', 'Enter Quinn’s details yourself']) await staff.getByRole('link', { name }).waitFor();
+        await staff.screenshot({ path: `${SHOTS}/02b-quick-invite.png`, fullPage: true, caret: 'initial' });
+        // The link opens the client's welcome page, in the agency's name.
+        const inviteeCtx = await browser.newContext({ viewport: { width: 390, height: 844 }, extraHTTPHeaders: ip() });
+        const invitee = await inviteeCtx.newPage(); watch(invitee, 'invitee');
+        await invitee.goto(link.replace(/^https?:\/\/[^/]+/, BASE));
+        await expectText(invitee, 'Welcome, Quinn!');
+        await expectText(invitee, `E2E Agency ${uniq}`);
+        await settle(invitee);
+        await inviteeCtx.close();
+        // The same email again, typed in capitals: nothing is added, what was typed stays, and the page links to the client.
+        await staff.getByLabel('First name').fill('Quincy');
+        await staff.getByLabel('Last name').fill('Again');
+        await staff.getByLabel(/^Email/).fill(quickEmail.toUpperCase());
+        await staff.getByRole('button', { name: 'Add client and get the link' }).click();
+        await expectText(staff, 'Quinn Invite was already added with this email');
+        if (!(await inView(result))) throw new Error('the refusal of the same email is not on screen after the button was pressed');
+        if (!(await fieldHolds(staff.getByLabel('First name'), 'Quincy')) || !(await fieldHolds(staff.getByLabel(/^Email/), quickEmail.toUpperCase()))) throw new Error('the form lost what was typed after the refusal');
+        // "Open Quinn's page" goes to the Welcome link card, where the message says the link can be sent from.
+        await staff.getByRole('link', { name: 'Open Quinn’s page' }).click();
+        await staff.waitForURL(/\/app\/clients\/[0-9a-f-]{36}#welcome$/);
+        await expectText(staff, 'Quinn Invite');
+        await expectText(staff, 'Making a new one ends it'); // the Welcome link card shows the link that was made
+        if (!(await inView(staff.locator('section#welcome'), { top: true }))) throw new Error('the client’s page did not open at the Welcome link card');
+      } finally { await staff.setViewportSize({ width: 1360, height: 900 }); }
     });
 
     await check('upload two bureau reports → read, review and approve each', async () => {
@@ -240,6 +380,13 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
       await staff.screenshot({ path: `${SHOTS}/05-letter.png`, fullPage: true, caret: 'initial' });
     });
 
+    await check('nothing is recorded as sent while the client can still cancel (3 business days after signing)', async () => {
+      await staff.goto(disputeUrl);
+      await expectText(staff, 'can cancel their service agreement without penalty through');
+      if (await staff.getByRole('button', { name: 'Record submission' }).count()) throw new Error('submission offered inside the cancellation period');
+      await backdateAgreements(clientUrl.split('/').pop()); // signed 10 days ago: the period is over
+    });
+
     await check('submit the dispute: 30-day clock starts, letter marked sent', async () => {
       await staff.goto(disputeUrl);
       await staff.getByLabel('Send without the identity documents').check(); // no identity documents on file yet: an explicit yes is required
@@ -265,17 +412,21 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
       for (const s of ['Ready for review', 'Approved', 'Submitted', 'Response received', 'Resolved']) await expectText(staff, s);
     });
 
-    await check('request a document, then invite the client to the portal', async () => {
+    await check('request a document, then make the client’s welcome link', async () => {
       await staff.goto(clientUrl + '?tab=documents');
       await staff.getByLabel('Note for the client').fill('A clear photo of your ID');
       await staff.getByRole('button', { name: 'Send request' }).click();
       await expectText(staff, 'Request added');
       await staff.goto(clientUrl);
-      await staff.getByRole('button', { name: /Invite to client portal/ }).click();
-      await expectText(staff, 'invitation link'.length ? 'Share this one-time link' : '');
+      await expectText(staff, 'Not invited yet');
+      await staff.getByRole('button', { name: 'Copy welcome link' }).click();
+      await expectText(staff, 'Share this one-time link');
       const t = await staff.locator('main').innerText();
       inviteLink = (t.match(/https?:\/\/\S+\/invite\/\S+/) || [])[0];
-      if (!inviteLink) throw new Error('No invite link shown');
+      if (!inviteLink) throw new Error('No welcome link shown');
+      // A second link replaces the first: only the newest one works.
+      await staff.reload();
+      await expectText(staff, 'Making a new one ends it');
     });
 
     // -------------------------------------------------------------------------------- client portal
@@ -283,20 +434,57 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
     const client = await clientCtx.newPage();
     watch(client, 'client');
 
-    await check('client accepts the invitation and lands in the portal', async () => {
+    await check('client opens the welcome link: the agency’s welcome, the four steps, English and Spanish', async () => {
       await client.goto(inviteLink.replace(/^https?:\/\/[^/]+/, BASE));
+      await expectText(client, 'Welcome, E2E!');
       await expectText(client, 'secure client portal');
       await expectText(client, `E2E Agency ${uniq}`);
       await expectText(client, 'Powered by');
+      for (const s of ['Your details', 'Your agreements', 'Your ID documents', 'about 10 minutes']) await expectText(client, s);
+      await client.getByRole('link', { name: 'Español' }).click();
+      await expectText(client, '¡Le damos la bienvenida, E2E!');
+      await client.getByRole('link', { name: 'English' }).click();
+      await expectText(client, 'Welcome, E2E!');
+    });
+
+    await check('client accepts with a confirmed password and lands in the guided welcome', async () => {
       await client.getByLabel(/^Password/).fill(PASSWORD);
+      await client.getByLabel('Confirm password').fill(PASSWORD + 'x');
       await client.getByRole('button', { name: 'Accept invitation' }).click();
+      await expectText(client, 'The two passwords do not match.');
+      await client.getByLabel(/^Password/).fill(PASSWORD);
+      await client.getByLabel('Confirm password').fill(PASSWORD);
+      await client.getByRole('button', { name: 'Accept invitation' }).click();
+      await client.waitForURL('**/portal/welcome', { timeout: 15000 });
+      await expectText(client, 'Welcome, E2E');
+      // Staff entered the address, date of birth and SSN, and recorded the three paper signatures: the consent to
+      // electronic records is what is left, and it comes first.
+      await expectText(client, 'Document 1 of 4');
+      await expectText(client, 'Consent to electronic records and signatures');
+      await expectText(client, 'Paper copies are free');
+    });
+
+    await check('client opens the PDF copy, gives their consent to electronic records, and can download what they signed', async () => {
+      const pdf = await client.request.get(BASE + '/api/consents/preview/esign');
+      if (pdf.status() !== 200 || !(await pdf.body()).subarray(0, 5).toString().startsWith('%PDF')) throw new Error('reading copy is not a PDF: ' + pdf.status());
+      await client.getByLabel('I can read this page, and I opened the PDF copy').check();
+      await client.getByLabel('Type your full legal name to sign').fill('E2E Client');
+      await client.getByLabel('I have read this and agree').check();
+      await client.getByRole('button', { name: 'Sign', exact: true }).click();
+      await client.waitForURL(/\/portal\/welcome\?step=agreements&signed=/, { timeout: 15000 });
+      await expectText(client, 'Signed. Thank you.');
+      await expectText(client, 'All four agreements are signed.');
+      const href = await client.getByRole('link', { name: 'Download a copy' }).first().getAttribute('href');
+      const copy = await client.request.get(BASE + href);
+      if (copy.status() !== 200 || !(await copy.body()).subarray(0, 5).toString().startsWith('%PDF')) throw new Error('signed copy is not a PDF: ' + copy.status());
+      await client.getByRole('link', { name: 'Finish later' }).click();
       await client.waitForURL('**/portal', { timeout: 15000 });
       await expectText(client, 'Hello, E2E');
     });
 
     await check('portal home opens with one clear next step, the stage explained, and the client’s rights', async () => {
       await expectText(client, 'Your next step');
-      await expectText(client, 'Upload what we asked for'); // the ID request is still open
+      await expectText(client, 'Upload your identity documents'); // the welcome steps are not finished: the ID documents are next
       await expectText(client, 'Your rights');
       await expectText(client, 'AnnualCreditReport.com');
       if (!(await client.getByRole('link', { name: 'Upload now' }).isVisible())) throw new Error('no upload call-to-action');
@@ -417,6 +605,9 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
       await staff.getByRole('link', { name: /API Created/ }).first().click();
       await staff.getByRole('link', { name: /^Reports/ }).click();
       await expectText(staff, 'Authorization needed first');
+      // ...and so is the upload: staff add a report only with the client's written authorization on file
+      await expectText(staff, 'before you upload a report');
+      if (await staff.getByRole('button', { name: 'Upload & read' }).count()) throw new Error('report upload offered without the client’s authorization');
       // the e2e client has it => pull works
       await staff.goto(clientUrl + '?tab=reports');
       await staff.getByRole('button', { name: 'Pull reports' }).click();
@@ -478,7 +669,7 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
         }
       }
       await client.setViewportSize({ width: 390, height: 844 });
-      for (const p of ['/portal', '/portal/disputes', '/portal/messages', '/portal/profile']) {
+      for (const p of ['/portal', '/portal/welcome', '/portal/welcome?step=documents', '/portal/disputes', '/portal/messages', '/portal/profile']) {
         await client.goto(BASE + p);
         const over = await client.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
         if (over > 2) throw new Error(`phone ${p} overflows by ${over}px`);

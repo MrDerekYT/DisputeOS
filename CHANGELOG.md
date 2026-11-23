@@ -1,5 +1,186 @@
 # Changelog
 
+## New client is a quick invite (unreleased)
+
+For an agency, New client opens on "Invite a client": first name, last name, email, an optional phone number and the
+client's language. One button creates the client (status Onboarding, assigned to whoever adds them, with the same
+timeline entry, audit entry and "a client is created" automations as the full form), makes the welcome link and sends
+the welcome email, and the page stays open with an empty form for the next client. No schema change.
+
+- **What happened is said plainly, and brought into view** (on a laptop screen the result would otherwise sit below
+  the bottom edge, and an emptied form looks the same whether the email went out or not):
+  - the email was sent, said only when the email service took it;
+  - email is not connected: the page says so before the click, the button reads "Add client and get the link", and a
+    one-time link is shown with Copy and, when a phone number was typed, "Text it from your phone" (the text names the
+    agency; a number that cannot be read as a full number is said so instead of the link being dropped);
+  - the email was held back by the claims check (the message says when the wording is in the business name, which
+    every welcome email carries) or was not accepted by the email service (said in the app's words, with the service's
+    own sentence quoted after them and no status code): its link is ended and a fresh one is shown the same way, with
+    "Enter their details yourself";
+  - the email service did not answer: it may or may not have arrived, so no second link is handed out, and "Open …'s
+    page" goes straight to the Welcome link card, where the buttons are.
+- **Refused before anything is created**: an email a client of the workspace already has (with a link to that client,
+  and what to do when it is someone else who shares the address); an email that already signs in to the workspace
+  (your own, a colleague's, a client's portal account), because a welcome link for it could never be accepted; the
+  hourly email limit of a workspace that is not approved. Two submissions at the same moment cannot both create the
+  client (a lock on the workspace and the email).
+- **Said before the click**: that email is not connected, and that the agency's client agreement terms are not saved
+  yet (or no longer pass the checks), in which case a client can be invited but cannot sign the service agreement
+  until they are.
+- **The full form is one button away** ("Enter everything yourself" in the page header, `/app/clients/new?manual=1`)
+  and unchanged; a personal workspace sees only the full form.
+- Making the link, sending the email and logging the outcome is one function (`src/lib/welcome-send.ts`), shared with
+  "Email welcome link" on the client page. Once the email service has the email, its answer is the outcome: a log
+  entry that cannot be written afterwards is printed for the operator and no longer turns "sent" into "try again".
+
+## Review fixes for the client intake and the Claude connection (unreleased)
+
+An independent review of the two entries below confirmed 31 defects; each fix was verified again by a second reviewer.
+Migration `0031_client_intake.sql` was edited before release (new columns `signed_on`, `cancellation_ends_on`,
+`revoked_reason` on `client_consents`, a client's own payment terms and total, and the functions
+`app.cancel_own_contract()` and `app.client_signed_again()`). A development database that ran an earlier copy must run
+it again by hand (`psql -v ON_ERROR_STOP=1 -f db/migrations/0031_client_intake.sql`; it is safe to run again) or be
+rebuilt; production never ran it.
+
+- **A credit report staff add needs the client's written authorization**, as automatic import already did: uploading
+  one, filing one in the client's documents, or reading a file staff uploaded as a report. The Reports tab says so in
+  place of the upload form. A report the client uploads in the portal can still be read, and a personal workspace needs
+  no authorization for its own reports.
+- **No service without a contract in force.** Recording a letter as sent now needs the same agreements as submitting a
+  dispute, so a contract the client cancelled, or none, stops both. A sent date before the contract was signed, or
+  inside its cancellation period, is refused with the dates named.
+- **Personal workspaces** ("I am repairing my own credit") have no service agreement, no cancellation period, no
+  2-year retention block, no Client agreement card and no Welcome link card; the person's own authorization for
+  report imports is recorded as given by the account holder, and names the software and any report provider they
+  connect, for their own reports (not their own workspace as if it were an agency).
+- **Paper signatures** recorded by staff need the date written on the paper. The cancellation period runs from that
+  date, and the stored text is labelled as the app's text when the paper was recorded, never as a copy of the paper.
+  Staff can no longer record the electronic-records consent: only the client gives it, in the portal.
+- **The last day to cancel is stored when the contract is signed**, so a later time-zone change cannot shorten it.
+  The evidence pack and the charge check use the agency's own day.
+- **When a client cancels in the portal**, they see "You cancelled your service agreement on <date>" instead of a
+  request to sign again; the client is marked cancelled and the owners, admins and their specialist are notified.
+  Signing a new agreement later makes them active again and tells the team.
+- **Existing clients**: those who signed the January 2026 draft documents are flagged on their page with what to do;
+  a re-papered client signs the current statement before the new contract; a missing electronic-records consent no
+  longer tells an active client that work cannot start, and the investigation stays on their portal home.
+- **Each client can have their own payment terms and total**, set by staff before the client signs, for agencies
+  with more than one plan.
+- **The terms check** refuses promises of removal in English and Spanish (including ones that name the bureaus,
+  accounts, bills, loans or inquiries, or say an item "comes off" a report or "will be history"), promises of repaired,
+  restored or clean credit, a success rate, an approval ("you'll be approved for the home loan", "lenders will start
+  approving you", "calificará para una hipoteca") and payment asked for at signing (by "you", "they" or "clients", by
+  e-signature, "upon your signature", during enrollment), on the effective date, when the account is set up or "when we
+  open your file", at the start of a month or billing period for that period's work, "to get started", or before the
+  work starts ("Before work begins, you pay $99", "payment first, then we pull your reports"). It passes how the agency
+  keeps and deletes its own records ("emails are kept for two years and then deleted", "we erase the utility bills and
+  paystubs you uploaded once your agreement ends"; a bare "file", "information" or "profile" only when the sentence
+  speaks of closing the account, the client's request or how long it is kept), requests and disclaimers ("we dispute
+  the items you select for correction or deletion", "nothing in this agreement requires a bureau to delete any item",
+  "removal of any item is not guaranteed", "our fee does not depend on how many items are removed"), outcomes and
+  results a bureau reaches or reports ("we tell you whether each account was corrected, deleted or left unchanged",
+  "we keep a log of every deletion the bureaus report to us", "we do not charge extra when an item is deleted"),
+  statements of the reporting law (the seven-year period, putting a deleted item back, a furnisher that does not
+  respond, identity theft, and the 15 U.S.C. § 1679c(a) statement word for word), security freezes and opt-outs,
+  billing that stops, fees only disclosed or confirmed ("we disclose all fees in writing before you sign", "we are
+  upfront about all of our fees"), notice given in advance ("30 days in advance of any change"), honest cancellation
+  terms and "no cobramos nada por adelantado". Each of these reads the words that govern the removal or the payment,
+  and fails when the rest of the sentence makes the removal certain or the agency's or gives it a time frame ("we
+  request deletion, and the bureaus always grant it", "…, and they agree in nearly all cases", "…, except our
+  clients", "…, usually within the first month"), or when a negated charge is followed by "and", "because", "since",
+  "which" or a cap ("we don't charge interest because you pay the full price when you sign", "we never collect more
+  than one month in advance"). Spanish words are read to their end ("eliminó", "será", "subirá"), and the rules that
+  read a long run of spaces again at every position (a score number, "your score will…") now read it once. Every
+  sentence of the four review rounds (1,410) is a regression test (`tests/unit/claims-corpus.test.ts`); the 8 the
+  rules still read the other way are listed there with the reason, and a test fails if one of them starts being read
+  right, so it is moved out of the list. It is a list of rules that catch common wordings, not every one, and counsel
+  should still read the agency's terms.
+- **Federal holidays** are computed by rule for any year, so dates after 2030 still skip them.
+- **Signed copies** say when a character could not be printed in the PDF, and the fingerprint is of the stored text.
+- **Dates of birth** that do not exist (February 31) are refused, and a stored impossible date prints as needed.
+- **Welcome links**: changing a client's email ends their unused links, a link works only while its email matches
+  the client's, and the card shows the email the portal account uses. The timeline says a welcome email was sent only
+  after the email service accepted it. An email that already has a portal with another company gets a plain message.
+- **Portal**: an agreement that changed while open is shown again with a note; no loops while the agency's terms are
+  not ready (and no promise of a notification); the credit guide's steps come from the same records as the portal home.
+- **AI**: one attempt may use the whole 45 s, the monthly spending limit has its own message, the progress note's two
+  courtesy sentences may only use courtesy words, and the credit guide masks more and refuses more predictions in
+  English and Spanish ("you're well on your way to a better score", "lo normal es que su puntaje suba", "the bureau
+  probably deletes the collection", "errors which you dispute are usually removed", "you should see a nice jump in
+  your score", "the account will be dropped", "su puntaje tiende a recuperarse"; see the entry below), including a
+  likelihood stated beside a condition ("if an item is removed, which usually happens, …") and across "U.S." or a
+  sentence that goes on ("Give it about 30 days. After that, your score goes up."). It no longer refuses an ordinary
+  explanation that names a result in an if, whether or si clause, in a which or qué question after a verb of telling,
+  after "does not" or "whether to", or as a belief it then denies ("if an item is removed, you will get a notice",
+  "lenders decide whether to approve you", "many people believe paying off a collection gets it removed, but that is
+  not how it works"), nor "your score will not drop" or "a reply will come by mail". Its rules are lists of words that
+  catch common wordings, not an understanding of the text.
+
+## Client welcome link, guided intake and the agreements (unreleased)
+
+Migration `0031_client_intake.sql`: additive and safe to run again.
+
+- **Welcome link.** On each client's page, a "Welcome link" card replaces the "Invite to client portal" button. Staff can copy a fresh one-time link, or email it when email really delivers. The email is in the client's language, from the agency's name, with replies going to the agency's address. It is checked for prohibited claims and held to the workspace's hourly limit until the operator approves the workspace. A new link ends the client's earlier unused links, with at most 10 a day per client. The card shows the state: no email, not invited, link sent and when it expires, joined with progress (details, agreements n of 4, ID documents n of 3), finished. Leads have a "Welcome link" action next to "Convert to client".
+- **Invitation page.** It shows the agency's brand, "Welcome, <first>!", the four steps ("about 10 minutes; have your photo ID and a recent bill handy"), an English/Spanish switch, and asks for the password twice. The language chosen becomes the client's. A used, expired or replaced link shows a kind message in the client's language and a button to the agency's own sign-in. Accepting opens the guided welcome.
+- **Guided welcome (/portal/welcome).** A focused page with a progress bar and "Finish later":
+  - Your details: name and email are read-only. Date of birth and SSN are written once and never shown back.
+  - Your agreements: one per screen, full text, typed name and a checkbox, then a PDF copy.
+  - Your ID documents: one upload per item. Phone photos are made smaller in the browser to fit the upload limit. "I'll do this later" is allowed.
+  - Done: "Welcome to the family", the specialist, the last day before anything goes to the credit bureaus, the signed copies, and "Cancel my agreement" while the period runs.
+  The step comes from the client's records; the portal home, Profile and the staff card use the same helper. All new portal text is in English and Spanish.
+- **Client agreement (Settings).** Owners and admins save the agency's terms: legal name, principal business address, a full description of the services, payment terms, the total of all payments, how long the services should take, and optional additional terms. Every field is checked on the server against a list of common promises of results and of payment before the work is done (a rule list: it catches the usual wordings, it does not make a contract lawful). Changes are audited.
+- **The agreements.**
+  - The server enforces the signing order in the portal: consent to electronic records, then "Consumer Credit File Rights Under State and Federal Law", then the service agreement, then the authorization.
+  - The consent to electronic records is rewritten with the disclosures of 15 U.S.C. § 7001(c)(1). The client confirms they can read the page and opened its PDF copy.
+  - The § 1679c statement is word for word and is its own document.
+  - The service agreement is built from the agency's terms with fixed parts: the parties, the date, a no-guarantee paragraph, no payment before the service is performed, the § 1679d(b)(4) statement in bold above the signature, and the § 1679e(b) Notice of Cancellation in bold with the agency's name, address and last day filled in.
+  - The authorization names the agency.
+  - The service agreement cannot be signed until the terms are saved.
+- **What is recorded.** Every new signature stores the exact text shown, its full SHA-256 (checked by the database) and the page language. A paper signature also records the staff member who recorded it. The signing page posts the hash of what it displayed, and a text that changed is refused.
+- **Copies.** /api/consents/<id>/pdf prints the stored text and the signature block. For the contract, the Notice of Cancellation is printed twice, each on its own page, and the statement and notice are in bold. Letters print exactly as before.
+- **The cancellation period** now runs through the 3rd business day on the agency's own day, with weekends and federal holidays skipped; it used to end a day early. While it runs, no dispute can be recorded as submitted and no letter recorded as sent. The client can cancel from the portal: their written notice goes to their specialist and the agreement is revoked.
+- **Retention.** A client whose signed statement is less than 2 years old cannot be deleted. Mark them cancelled instead.
+
+**Changed:**
+
+- The consent to electronic records is now required and comes first. Disputes still need only the statement, the contract and the authorization, so a paper signature or a withdrawn e-consent does not stop the service.
+- Staff recording paper signatures keep the statement → contract → authorization order, and the contract needs saved terms.
+- The browser scripts now save the client agreement terms first. They check that a submission inside the cancellation period is refused, then date the test signatures back in the database the server uses (E2E_DATABASE_URL, or DATABASE_URL).
+
+## Claude through the official SDK, a Setup connection test, and a live proof (unreleased)
+
+No migration. New dependency: `@anthropic-ai/sdk` 1.5.0, pinned (a release from 4 November 2026). The Claude connection is built to the current Anthropic API. It is proven live only once `npm run ai:prove` has passed with a real key; until then it has been tested against a mocked API and a local stand-in only.
+
+- **The Anthropic adapter uses the official SDK** (`src/lib/ai/provider.ts`).
+  - Default model `claude-opus-5-5` (was `claude-sonnet-5-5`). `AI_MODEL` overrides it; cheaper choices are `claude-sonnet-5-5` ($2 / $10 per million input / output tokens) and `claude-haiku-5-5` ($0.10 / $0.50), against $4 / $20 for Opus 5.5.
+  - New `AI_EFFORT` (low, the default, medium or high), sent as `output_config.effort`.
+  - `max_tokens` 16000 by default, because the model's thinking counts toward it. No sampling or thinking parameters.
+  - Server-side refusal fallback is on (`server-side-fallback-2026-07-01`, `fallbacks: "default"`).
+  - Only text after the last fallback block is read. A refusal, a reply cut off at `max_tokens`, or any stop other than `end_turn` is "AI unavailable", and the credits are given back.
+- **Time limits:** one attempt may use the whole 45 s deadline; a fast failure (429, 5xx or a dropped connection) is retried once within it, honouring `retry-after`. The layouts' 60 s `maxDuration` still leaves time to settle the credits.
+- **Errors** are read from the SDK's typed errors and shown in plain words: "the AI key was refused", "the AI service is busy, try again in a minute", "the AI model … was not found", "the AI account has reached its monthly spending limit" (not retried), "HTTP <status>".
+- **One log line per call:** `[ai] anthropic model=… stop=… in=… out=… ms=… request=req_…`, with the API's structured error `code=` on a failure. It never includes the prompt, the reply or the key. `ANTHROPIC_LOG=debug` and trace-span content settings cannot override this.
+- **Progress note polish no longer sends the client's first name.** The greeting now sits on its own line in the drafted note and is locked; only the connective sentences are sent. A reply is discarded if it:
+  - changes the lines or adds wording around a protected passage,
+  - adds or drops a sentence,
+  - adds formatting,
+  - rewords its two courtesy sentences with any word outside a fixed list of courtesy words (English and Spanish), so a promise cannot be slipped in.
+
+  The four replies an earlier probe saw accepted (a Spanish removal promise, a vague promise, an echoed `<source>` tag, a preface) are now rejected.
+- **Credit guide:** the 400-token cap is gone. Questions now also have masked: dates (a date of birth in any common form), city-state-ZIP lines, unit numbers, SSNs written in 3-2-4 groups, more street forms, and the address, ZIP, SSN last four and date of birth the app holds for that client. An answer is refused when a sentence pairs a word of likelihood or of what usually happens with a result (a score change, a removal, an approval).
+- **Get set up → "Test the AI connection"** (owners and admins):
+  - One fixed, tiny request with no client data. It is free.
+  - Limited to 5 an hour per person, 10 per workspace and 100 a day for the deployment, and audited as `setup.test_ai`.
+  - A pass records when it passed and with which model. The AI step is done only after a pass with the model in use now.
+  - A provider chosen without its key is a step to do, and Settings → Integrations shows "Needs credentials".
+- **Wording:** the AI assistant page, the marketing features and security pages and docs/SECURITY_AND_COMPLIANCE.md now say exactly what is sent and what is masked.
+- **Live proof:** `npm run ai:prove` runs `tests/live/ai.live.test.ts`, which is skipped unless `AI_LIVE=1`.
+  - It makes one real call per AI feature on a synthetic client and runs the Setup test.
+  - It prints each request, the raw reply, the stop reason, tokens, time and request id.
+  - It fails if any of that client's personal data appears in a request.
+  - The same privacy check runs offline on every test run (`tests/unit/ai-no-pii.test.ts`).
+- **Docs:** docs/INTEGRATIONS.md ("AI provider (Claude)"), docs/DEPLOY-VERCEL.md ("8. Connect AI (optional) and grant AI credits"), .env.example, README.md.
+
 ## Review fixes, third round: letters, disputes and outreach (unreleased)
 
 Migration `0030_partner_opt_outs.sql`: additive, safe to run again, needs no superuser. A development database that ran

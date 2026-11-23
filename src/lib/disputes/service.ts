@@ -2,7 +2,7 @@ import type { Db, Param } from '../db';
 import { UserError } from '../errors';
 import { audit } from '../audit';
 import { fireTrigger } from '../automation/engine';
-import { consentStatus } from '../compliance/disclosures';
+import { loadServiceStatus, sentDateRefusal, serviceRefusal } from '../agreements';
 import { logEvent } from '../crm';
 import { can, PermissionError, type Role } from '../rbac';
 import { BUREAU_LABEL, type Bureau } from '../util';
@@ -220,7 +220,8 @@ interface DisputeRow {
 /**
  * Move a dispute along the pipeline. Gates (all enforced here, not just in the UI):
  *  - the transition must be legal; approving needs the approve permission
- *  - submitting needs an APPROVED letter and the client's required consents on file
+ *  - submitting needs an APPROVED letter, the client's required consents in force, the cancellation period over and a
+ *    sent date after it (src/lib/agreements.ts; not in a personal workspace)
  *  - nothing is sent by the system: "submitted" records that a person mailed it
  */
 export async function transitionDispute(
@@ -248,13 +249,19 @@ export async function transitionDispute(
   if (to === 'submitted') {
     const letter = await db.row<{ id: string }>("select id from public.letters where dispute_id = $1 and status in ('approved', 'sent') and kind <> 'method_of_verification' order by created_at desc limit 1", [id]);
     if (!letter) throw new DisputeError('This dispute has no approved letter. A person must approve the letter before it can be submitted.');
-    const consents = await db.rows<{ kind: string; signed_at: string; revoked_at: string | null }>('select kind, signed_at, revoked_at from public.client_consents where client_id = $1', [d.client_id]);
-    const cs = consentStatus(consents);
-    if (cs.missing.length) throw new DisputeError(`Required consents are missing for this client: ${cs.missing.join(', ').replace(/_/g, ' ')}. Record them before submitting.`);
+    // 15 U.S.C. § 1679d(a): the statement, the service agreement and the authorization in force (an agreement the client
+    // cancelled is not), and its 3-business-day cancellation period over, judged on the agency's day (src/lib/agreements.ts).
+    // None of it applies in a personal workspace.
+    const service = await loadServiceStatus(db, d.client_id);
+    const refused = service ? serviceRefusal(service, 'submit') : null;
+    if (refused) throw new DisputeError(refused);
     const received = opts.receivedOn ? new Date(`${opts.receivedOn}T12:00:00Z`) : new Date();
     // When no sent date is given it defaults to today — or to the received date, if that is earlier (it cannot have arrived before it was sent).
     const receivedDay = received.toISOString().slice(0, 10);
     const sentOn = checkSentOn(opts.sentOn ?? (opts.receivedOn && receivedDay < businessToday() ? receivedDay : null));
+    // Nor a sent date before the agreement was signed or inside its cancellation period.
+    const early = service ? sentDateRefusal(service, sentOn, 'submit') : null;
+    if (early) throw new DisputeError(early);
     // submitted_at is the day the letter was actually sent (as recorded by staff), not the moment someone clicked.
     // A date that is not in the past (today, or "today" for someone ahead of the agency's zone) is recorded as now — never a future time.
     const submitted = sentOn >= businessToday() ? new Date() : new Date(`${sentOn}T12:00:00Z`);

@@ -6,7 +6,8 @@
  */
 import { snapshot, type WAccount } from './credit/what-if';
 import type { Db } from './db';
-import { consentStatus, CONSENT_DOCS } from './compliance/disclosures';
+import { loadServiceStatus } from './agreements';
+import { CONSENT_DOCS } from './compliance/disclosures';
 import { loadIntake } from './intake-load';
 import { intakeSummary } from './intake';
 import { BUREAU_LABEL, fmtDate, money, type Bureau } from './util';
@@ -23,7 +24,10 @@ export interface PlanInput {
   /** Reports on file that are usable or awaiting review; rejected ones do not count. */
   reports: number;
   reportsPendingReview: number;
-  /** Titles of required consents that are not on file. */
+  /**
+   * Titles of the documents the service needs that are not in force: what the server's gate refuses a submission
+   * without (src/lib/agreements.ts, loadServiceStatus). Always empty in a personal workspace.
+   */
   missingConsents: string[];
   /** Labels of required identity documents that are not accepted yet (missing, awaiting review, rejected or out of date). */
   missingIdentityDocs?: string[];
@@ -68,7 +72,8 @@ export function buildPlan(x: PlanInput): PlanStep[] {
       detail: 'Confirm the accounts were read correctly and approve the report. Findings and the steps below use approved reports only.' });
   }
 
-  if (x.missingConsents.length > 0) {
+  // A personal workspace is no credit repair organization and makes no agreement with itself: nothing to collect.
+  if (!x.self && x.missingConsents.length > 0) {
     steps.push({ key: 'consents', tone: 'warn', href: `${tab('overview')}#compliance`, title: `Collect ${n(x.missingConsents.length, 'required consent')}`,
       detail: `Not on file: ${x.missingConsents.join('; ')}. A dispute cannot be submitted until these are signed.` });
   }
@@ -139,7 +144,8 @@ export async function loadPlanInput(db: Db, clientId: string): Promise<Omit<Plan
             (select count(*)::int from public.disputes where client_id = $1 and status in ('submitted','under_investigation') and due_at < now()) as overdue,
             (select count(*)::int from public.disputes where client_id = $1 and status in ('submitted','under_investigation') and due_at >= now() and due_at < now() + interval '7 days') as due_soon,
             (select count(*)::int from public.letters where client_id = $1 and status = 'approved') as letters`, [clientId]);
-  const consents = await db.rows<{ kind: string; signed_at: string; revoked_at: string | null }>('select kind, signed_at, revoked_at from public.client_consents where client_id = $1', [clientId]);
+  // The documents the gate on submitting and sending requires: none in a personal workspace.
+  const service = await loadServiceStatus(db, clientId);
   // Latest approved report per bureau, newest first.
   const latest = await db.rows<{ id: string; bureau: Bureau }>(
     `select id, bureau from (select distinct on (bureau) id, bureau, coalesce(report_date, created_at::date) as d, created_at from public.credit_reports
@@ -158,7 +164,7 @@ export async function loadPlanInput(db: Db, clientId: string): Promise<Omit<Plan
   const c = counts!;
   return {
     clientId, reports: c.reports, reportsPendingReview: c.pending, findingsToReview: c.findings, disputesOverdue: c.overdue, disputesDueSoon: c.due_soon, lettersToSend: c.letters,
-    missingConsents: consentStatus(consents).missing.map((k) => CONSENT_DOCS.find((d) => d.kind === k)?.title.split(' (')[0] ?? k),
+    missingConsents: (service?.missing ?? []).map((k) => CONSENT_DOCS.find((d) => d.kind === k)?.title.split(' (')[0] ?? k),
     missingIdentityDocs: intakeSummary(await loadIntake(db, clientId)).notAccepted.map((st) => st.item.label.en),
     collections: collections.map((r) => r.creditor_name),
     accounts: rows.map((r) => ({ creditor: r.creditor_name, type: r.account_type, status: r.account_status, balanceCents: r.balance_cents == null ? null : Number(r.balance_cents), limitCents: r.credit_limit_cents == null ? null : Number(r.credit_limit_cents), opened: r.date_opened })),

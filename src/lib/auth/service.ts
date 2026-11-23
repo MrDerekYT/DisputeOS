@@ -352,18 +352,51 @@ export async function createInviteToken(db: Db, args: { orgId: string; email: st
   return token;
 }
 
+/**
+ * An invitation that can still be accepted: issued, not used, not expired, of an active organization. A client's
+ * invitation also needs its client, in the same organization, and works only while it was made for that client's email
+ * as it is now (compared without case or surrounding spaces): a link sent to an address staff later corrected or
+ * cleared is not valid, so whoever reads that mailbox cannot become the client's portal account. The invitation page
+ * then shows its "can't be used" message (inviteNotice).
+ */
 export async function getInvite(token: string): Promise<InviteView | null> {
   const r = await withSystem((db) =>
     db.row<{ id: string; org_id: string; org_name: string; email: string; role: Role; client_id: string | null; client_name: string | null; client_lang: string | null }>(
       `select i.id, i.org_id, o.name as org_name, i.email, i.role, i.client_id, c.full_name as client_name, c.preferred_language as client_lang
          from public.invites i join public.organizations o on o.id = i.org_id left join public.clients c on c.id = i.client_id
-        where i.token_hash = $1 and i.accepted_at is null and i.expires_at > now() and o.status = 'active'`, [hashToken(token)]));
+        where i.token_hash = $1 and i.accepted_at is null and i.expires_at > now() and o.status = 'active'
+          and (i.role <> 'client' or (c.org_id = i.org_id and lower(trim(c.email)) = lower(trim(i.email))))`, [hashToken(token)]));
   return r ? { id: r.id, orgId: r.org_id, orgName: r.org_name, email: r.email, role: r.role, clientId: r.client_id, clientName: r.client_name, clientLang: r.client_lang === 'es' ? 'es' : 'en' } : null;
 }
 
-export async function acceptInvite(token: string, input: { fullName: string; password: string }, meta: RequestMeta = {}): Promise<{ ok: true; token: string; role: Role } | Fail> {
+/**
+ * What the invitation page may say about a link that no longer works (used, expired, replaced by a newer one, or made
+ * for an email the client no longer has): which
+ * agency sent it and the client's language, so the message is kind and points to the agency's own sign-in page. Null
+ * for a token that was never issued: nothing is said about it.
+ */
+export async function inviteNotice(token: string): Promise<{ role: Role; orgId: string; orgName: string; orgSlug: string; orgMode: string; clientLang: 'en' | 'es' } | null> {
+  if (!token || token.length < 20 || token.length > 200) return null;
+  const r = await withSystem((db) => db.row<{ role: Role; org_id: string; org_name: string; org_slug: string; org_mode: string; client_lang: string | null }>(
+    `select i.role, i.org_id, o.name as org_name, o.slug as org_slug, o.mode as org_mode, c.preferred_language as client_lang
+       from public.invites i join public.organizations o on o.id = i.org_id left join public.clients c on c.id = i.client_id
+      where i.token_hash = $1 and o.status = 'active'`, [hashToken(token)]));
+  return r ? { role: r.role, orgId: r.org_id, orgName: r.org_name, orgSlug: r.org_slug, orgMode: r.org_mode, clientLang: r.client_lang === 'es' ? 'es' : 'en' } : null;
+}
+
+const INVITE_INVALID = 'This invitation is invalid or has expired.';
+/** One person has one client portal: a portal account is linked to a single client record (clients.portal_user_id is unique). */
+const otherPortal = (orgName: string) => `This email already has a client portal with another company. Ask ${orgName} to use a different email.`;
+class AlreadyLinked extends Error {}
+
+/**
+ * Accepts an invitation: makes (or, with its password, uses) the account for the invited email, adds the membership
+ * and, for a client, links the portal account to the client record. Every refusal is a known message (translated for
+ * the client by portalMessage), never a database error.
+ */
+export async function acceptInvite(token: string, input: { fullName: string; password: string; lang?: 'en' | 'es' }, meta: RequestMeta = {}): Promise<{ ok: true; token: string; role: Role } | Fail> {
   const inv = await getInvite(token);
-  if (!inv) return { ok: false, error: 'This invitation is invalid or has expired.' };
+  if (!inv) return { ok: false, error: INVITE_INVALID };
   const rl = await rateLimit(`invite:ip:${meta.ip ?? 'unknown'}`, 20, 3600);
   if (!rl.allowed) return { ok: false, error: 'Too many attempts. Try again later.' };
 
@@ -373,6 +406,8 @@ export async function acceptInvite(token: string, input: { fullName: string; pas
     if (existing) {
       if (!(await verifyPassword(input.password, existing.password_hash))) return { ok: false, error: 'An account with this email exists; enter its current password to join.' };
       userId = existing.id;
+      // Already the portal account of a client of another agency: said plainly, and nothing is changed.
+      if (inv.role === 'client' && (await db.row('select 1 from public.clients where portal_user_id = $1 and org_id <> $2', [userId, inv.orgId]))) return { ok: false, error: otherPortal(inv.orgName) };
     } else {
       const problem = passwordProblem(input.password, inv.email);
       if (problem) return { ok: false, error: problem };
@@ -389,14 +424,23 @@ export async function acceptInvite(token: string, input: { fullName: string; pas
       const linked = await db.run(
         `update public.clients set portal_user_id = $2, status = case when status = 'lead' then 'onboarding' else status end
           where id = $1 and org_id = $3 and portal_user_id is null`, [inv.clientId, userId, inv.orgId]);
-      if (!linked) throw new Error('Client record is already linked to a portal account');
+      if (!linked) throw new AlreadyLinked('Client record is already linked to a portal account');
+      // The language the client chose on the invitation page becomes the language of their portal.
+      if (input.lang) await db.run('update public.clients set preferred_language = $2 where id = $1', [inv.clientId, input.lang]);
       await db.run(
         `insert into public.client_events (org_id, client_id, actor_id, kind, summary) values ($1, $2, $3, 'portal_joined', 'Client activated their portal account')`,
         [inv.orgId, inv.clientId, userId]);
     }
     await db.run('update public.invites set accepted_at = now() where id = $1', [inv.id]);
     return { ok: true, userId };
-  }).catch((e: Error) => ({ ok: false, error: e.message }) as Fail);
+  }).catch((e: Error & { code?: string; constraint?: string }): Fail => {
+    // The transaction is rolled back. A portal account linked meanwhile (two links, or two agencies, at once) is said in
+    // words; anything else is logged for the operator and the person is asked to try again.
+    if (e.code === '23505' && e.constraint === 'clients_portal_user_id_key') return { ok: false, error: otherPortal(inv.orgName) };
+    if (e instanceof AlreadyLinked) return { ok: false, error: INVITE_INVALID };
+    console.error('[auth] accepting an invitation failed:', e);
+    return { ok: false, error: 'Something went wrong. Please try again.' };
+  });
   if (!result.ok) return result;
   const session = await createSession(result.userId, inv.orgId, inv.role, meta, false);
   await auditSystem({ orgId: inv.orgId, actorId: result.userId, action: 'invite.accepted', entityType: 'invite', entityId: inv.id, ip: meta.ip, meta: { role: inv.role } });

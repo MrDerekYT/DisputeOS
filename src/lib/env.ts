@@ -70,9 +70,11 @@ const schema = z.object({
   TWILIO_AUTH_TOKEN: z.string().optional(),
   TWILIO_MESSAGING_SERVICE_SID: z.string().optional(),
   TWILIO_FROM_NUMBER: z.string().optional(),
-  // AI
+  // AI (src/lib/ai/provider.ts). With anthropic, AI_MODEL defaults to claude-opus-5-5 and AI_EFFORT to low.
   AI_PROVIDER: z.enum(['rules', 'anthropic', 'openai']).default('rules'),
   AI_MODEL: z.string().optional(),
+  // How hard Claude thinks before it answers: low (default), medium or high. Higher costs more and takes longer.
+  AI_EFFORT: z.enum(['low', 'medium', 'high']).optional(),
   AI_BASE_URL: z.string().url().optional(),
   AI_API_KEY: z.string().optional(),
   ANTHROPIC_API_KEY: z.string().optional(),

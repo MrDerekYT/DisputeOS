@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
-import { AlertTriangle, ArrowLeft, Check as CheckIcon, CheckCircle2, ChevronDown, ChevronRight, Download, FileText, Gavel, Mail, MapPin, Pencil, Phone, Pin, ScanSearch, UserPlus } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, Check as CheckIcon, CheckCircle2, ChevronDown, ChevronRight, Download, FileText, Gavel, Mail, MapPin, Pencil, Phone, Pin, ScanSearch } from 'lucide-react';
 import { ActionForm, Check, ConfirmButton, Field, Select, SubmitButton, TextArea } from '@/components/forms';
 import { AiTag, Avatar, Badge, DayMeter, DefinitionList, EmptyState, Notice, Section, StatusBadge, Tabs } from '@/components/ui';
 import { SplitBar } from '@/components/charts';
@@ -11,13 +11,14 @@ import { AI_COSTS, getBalance, polishOffer } from '@/lib/ai/credits';
 import { providerStatus } from '@/lib/ai/provider';
 import { PolishNote } from '@/components/polish-note';
 import { requireStaff } from '@/lib/auth/context';
-import { CONSENT_DOCS, consentStatus } from '@/lib/compliance/disclosures';
+import { CONSENT_DOCS, consentTitle, isDraftEraSignature, isRendered, SERVICE_CONSENTS, signatureSource, type ConsentDoc } from '@/lib/compliance/disclosures';
 import { CLIENT_STAGES, DOC_KIND_LABEL, DOC_KINDS, memberLabel, STAGE_LABEL, staffMembers } from '@/lib/crm';
 import type { DisputeStatus } from '@/lib/disputes/workflow';
-import { BUREAU_LABEL, cn, fmtDate, isUuid, money, relTime, type Bureau } from '@/lib/util';
+import { BUREAU_LABEL, cn, dayInZone, fmtDate, isUuid, money, relTime, type Bureau } from '@/lib/util';
 import { cancelSubscriptionAction, refundPaymentAction, subscribeClientAction } from '../../billing/actions';
-import { addNoteAction, createTaskAction, invitePortalAction, markInboundReadAction, polishProgressAction, recordConsentAction, requestDocumentAction, reviewDocumentAction, revokeConsentAction, sendMessageAction, setTaskStatusAction, togglePinAction, uploadDocumentAction } from '../actions';
+import { addNoteAction, createTaskAction, markInboundReadAction, polishProgressAction, recordConsentAction, requestDocumentAction, reviewDocumentAction, revokeConsentAction, sendMessageAction, setTaskStatusAction, togglePinAction, uploadDocumentAction } from '../actions';
 import { importDocumentAsReportAction, pullReportAction, uploadReportAction } from '../../reports/actions';
+import { currentAuthorization } from '@/lib/credit/authorization';
 import { listProviders } from '@/lib/credit/providers';
 import { ScoreHistory, type ScoreRow } from '@/components/score-history';
 import { PRODUCT } from '@/lib/product';
@@ -38,6 +39,10 @@ import { ReferredByBlock } from './referred-by-block';
 import { ChargeBlock } from './charge-block';
 import { loadSpecialty } from '@/lib/credit/specialty-reports';
 import { businessToday } from '@/lib/letters/service';
+import { loadClientAgreements, loadServiceStatus, paperDateRange, renderFor, revokeConfirmation } from '@/lib/agreements';
+import { sayDay } from '@/lib/business-days';
+import { WelcomeBlock } from './welcome-block';
+import { AgreementTermsBlock } from './agreement-terms-block';
 
 export const metadata: Metadata = { title: 'Client' };
 
@@ -164,25 +169,45 @@ type Ctx = Awaited<ReturnType<typeof requireStaff>>;
 type C = { id: string; full_name: string; email: string | null; phone: string | null; preferred_language: 'en' | 'es'; goals: string | null; source: string | null; created_at: string; last_activity_at: string; portal_user_id: string | null; assigned_to: string | null; ssn_last4: string | null; address: Record<string, string | undefined> };
 
 // ------------------------------------------------------------------ overview
+/**
+ * What staff record here: signatures the client gave on paper, never the consent to electronic records (the client
+ * gives it in the portal); in a personal workspace the account holder's own consents, never the CROA statement or
+ * service agreement.
+ */
+const recordableIn = (personal: boolean) => (x: ConsentDoc) => x.kind !== 'esign' && !(personal && (x.kind === 'croa_disclosure' || x.kind === 'croa_contract'));
+
 async function Overview({ id, ctx, c, first }: { id: string; ctx: Ctx; c: C; first: string }) {
   const d = await ctx.tx(async (db) => {
     const outcomes = await db.row<{ total: number; deleted: number; updated: number; verified: number; waiting: number; unresolved: number }>(
       `select count(*) filter (where status in ('submitted','under_investigation','response_received','resolved'))::int as total, count(*) filter (where outcome = 'deleted')::int as deleted, count(*) filter (where outcome = 'updated')::int as updated,
               count(*) filter (where outcome = 'verified')::int as verified, count(*) filter (where outcome in ('unresolved','no_response'))::int as unresolved,
               count(*) filter (where status in ('submitted','under_investigation'))::int as waiting from public.disputes where client_id = $1`, [id]);
-    const consents = await db.rows<{ id: string; kind: string; signed_name: string; signed_at: string; revoked_at: string | null; version: string }>('select id, kind, signed_name, signed_at, revoked_at, version from public.client_consents where client_id = $1 order by signed_at desc', [id]);
+    const consents = await db.rows<{ id: string; kind: string; signed_name: string; signed_at: string; revoked_at: string | null; version: string; has_text: boolean; recorded_by: string | null; signed_on: string | null; revoked_reason: string | null }>(
+      'select id, kind, signed_name, signed_at, revoked_at, version, text_shown is not null as has_text, recorded_by, signed_on::text, revoked_reason from public.client_consents where client_id = $1 order by signed_at desc', [id]);
     const events = await db.rows<{ id: string; summary: string; created_at: string; actor: string | null }>(`select e.id, e.summary, e.created_at, u.full_name as actor from public.client_events e left join public.users u on u.id = e.actor_id where e.client_id = $1 order by e.created_at desc limit 8`, [id]);
     const requests = await db.rows<{ id: string; kind: string; due_at: string | null }>('select id, kind, due_at from public.document_requests where client_id = $1 and fulfilled_document_id is null', [id]);
     const upcoming = await db.rows<{ id: string; item_label: string; due_at: string; deadline_extended: boolean }>("select id, item_label, due_at, deadline_extended from public.disputes where client_id = $1 and status in ('submitted','under_investigation') and due_at is not null order by due_at limit 3", [id]);
     const tasks = await db.rows<{ id: string; title: string; due_at: string | null }>("select id, title, due_at from public.tasks where client_id = $1 and status = 'open' order by due_at nulls last limit 4", [id]);
     const scores = await db.rows<ScoreRow>('select bureau, model, score, scored_on from public.credit_scores where client_id = $1 order by scored_on', [id]);
-    return { o: outcomes!, consents, events, requests, upcoming, tasks, scores, plan: await loadPlanInput(db, id) };
+    // The gate the server applies (src/lib/agreements.ts): the documents missing and the cancellation period, counted on
+    // the agency's own calendar day with the days stored at signing. A personal workspace has none of it.
+    const cs = (await loadServiceStatus(db, id))!;
+    // In a personal workspace the account holder reads each document before giving it: its exact text, as it is stored.
+    const ag = cs.personal ? await loadClientAgreements(db, ctx.orgId, id) : null;
+    const toGive = ag ? CONSENT_DOCS.filter((x) => recordableIn(true)(x) && !ag.inForce.includes(x.kind)).map((x) => renderFor(ag, x.kind)).filter(isRendered) : [];
+    return { o: outcomes!, consents, events, requests, upcoming, tasks, scores, plan: await loadPlanInput(db, id), cs, toGive };
   });
-  const cs = consentStatus(d.consents);
-  const plan = buildPlan({ ...d.plan, firstName: first, self: ctx.session.orgMode === 'personal' });
+  const cs = d.cs;
+  const personal = cs.personal;
+  // A personal workspace makes no agreement with itself, so its plan never asks for the CROA documents.
+  const plan = buildPlan({ ...d.plan, missingConsents: personal ? [] : d.plan.missingConsents, firstName: first, self: ctx.session.orgMode === 'personal' });
   const pct = d.o.total ? Math.round(((d.o.deleted + d.o.updated) / d.o.total) * 100) : 0;
   const now = new Date();
   const quiet = !cs.missing.length && !d.requests.length && !d.tasks.length && !cs.inCancellationWindow;
+  const paperDates = paperDateRange(dayInZone(cs.tz));
+  const recordable = CONSENT_DOCS.filter(recordableIn(personal));
+  // Which documents the record lists: an agency's required ones and whatever is on file; in a personal workspace only what is on file.
+  const listed = CONSENT_DOCS.filter((x) => (!personal && x.required) || d.consents.some((k) => k.kind === x.kind));
   return (
     <div className="grid gap-x-8 gap-y-6 lg:grid-cols-3">
       {/* The plan is the one thing to read first: a numbered list, most pressing on top, each row goes where the work is. */}
@@ -241,42 +266,92 @@ async function Overview({ id, ctx, c, first }: { id: string; ctx: Ctx; c: C; fir
 
         <Section plain title="Details">
           <DefinitionList items={[['Email', c.email], ['Phone', c.phone], ['Preferred language', c.preferred_language === 'es' ? 'Español' : 'English'], ['SSN on file', c.ssn_last4 ? `••• •• ${c.ssn_last4}` : null], ['Source', c.source], ['Client since', fmtDate(c.created_at)], ['Last activity', relTime(c.last_activity_at)], ['Goals', c.goals]]} />
-          {!c.portal_user_id && c.email && (
-            <ActionForm action={invitePortalAction} className="mt-5"><input type="hidden" name="clientId" value={id} /><SubmitButton variant="secondary"><UserPlus size={15} aria-hidden /> Invite to client portal</SubmitButton></ActionForm>
-          )}
         </Section>
       </div>
 
       <div className="space-y-6">
+        {/* A personal workspace has no client to invite: the person works on their own file. */}
+        {!personal && <WelcomeBlock ctx={ctx} clientId={id} first={first} email={c.email} portalUserId={c.portal_user_id} />}
+
+        {/* What the service agreement states this client will pay: the agency's figures or the client's own (LEG-9). */}
+        {!personal && <AgreementTermsBlock ctx={ctx} clientId={id} first={first} />}
+
         <Section title="Needs attention">
           <ul className="space-y-3 text-sm">
+            {cs.clientCancelledOn && <li className="flex gap-2.5"><AlertTriangle size={16} aria-hidden className="mt-0.5 shrink-0 text-warn" /><span><strong className="font-semibold">Agreement cancelled:</strong> {first} cancelled the service agreement in the portal on {sayDay(cs.clientCancelledOn)}. No dispute can be submitted and no letter recorded as sent unless {first} signs a new one.</span></li>}
             {cs.missing.length > 0 && <li className="flex gap-2.5"><AlertTriangle size={16} aria-hidden className="mt-0.5 shrink-0 text-warn" /><span><strong className="font-semibold">Missing consents:</strong> {cs.missing.map((k) => CONSENT_DOCS.find((x) => x.kind === k)?.title.split(' (')[0] ?? k).join('; ')}</span></li>}
-            {cs.inCancellationWindow && <li className="flex gap-2.5"><AlertTriangle size={16} aria-hidden className="mt-0.5 shrink-0 text-warn" /><span>Within the 3-business-day cancellation window.</span></li>}
+            {cs.inCancellationWindow && cs.cancellationEndsOn && <li className="flex gap-2.5"><AlertTriangle size={16} aria-hidden className="mt-0.5 shrink-0 text-warn" /><span><strong className="font-semibold">Cancellation period:</strong> {first} can cancel without penalty through {sayDay(cs.cancellationEndsOn)}. No dispute can be submitted and no letter recorded as sent before then.</span></li>}
             {d.requests.map((r) => <li key={r.id} className="flex gap-2.5"><FileText size={16} aria-hidden className="mt-0.5 shrink-0 text-muted" /><span>Waiting for {DOC_KIND_LABEL[r.kind] ?? r.kind}{r.due_at ? ` (due ${fmtDate(r.due_at)})` : ''}</span></li>)}
             {d.tasks.map((t) => <li key={t.id} className="flex gap-2.5"><CheckIcon size={16} aria-hidden className="mt-0.5 shrink-0 text-muted" /><span>{t.title}{t.due_at ? <span className="text-muted"> · {fmtDate(t.due_at)}</span> : ''}</span></li>)}
             {quiet && <li className="flex gap-2.5 text-muted"><CheckCircle2 size={16} aria-hidden className="mt-0.5 shrink-0 text-ok" />Nothing needs attention.</li>}
           </ul>
         </Section>
 
-        <Section plain id="compliance" title="Compliance record" hint="What this client has received and signed.">
-          <ul className="space-y-3">
-            {CONSENT_DOCS.filter((x) => x.required || d.consents.some((k) => k.kind === x.kind)).map((doc) => {
+        <Section plain id="compliance" title="Compliance record" hint={personal ? 'In a personal workspace no credit repair agreement is needed: you are working on your own file. Record the authorization only if you use automatic report import.' : 'What this client has received and signed.'}>
+          {listed.length > 0 && <ul className="space-y-3">
+            {listed.map((doc) => {
               const rec = d.consents.find((k) => k.kind === doc.kind && !k.revoked_at);
+              const cancelled = !rec ? d.consents.find((k) => k.kind === doc.kind && k.revoked_at && k.revoked_reason === 'client_cancelled') : undefined;
+              // Only the statement, the service agreement and the authorization stop disputes when revoked (SERVICE_CONSENTS).
+              const gates = !personal && SERVICE_CONSENTS.includes(doc.kind);
+              // The client gives the E-SIGN consent in the portal; a client with no portal account signs on paper and needs none.
+              // In a personal workspace no CROA document is needed at all (one may be on file from before).
+              const notNeeded = !rec && ((doc.kind === 'esign' && !c.portal_user_id) || (personal && (doc.kind === 'croa_disclosure' || doc.kind === 'croa_contract')));
+              const recordedOn = rec ? fmtDate(dayInZone(cs.tz, new Date(rec.signed_at))) : '';
+              // How it was given: e-signed in the portal, on paper recorded by staff, or by the account holder of a personal workspace.
+              const src = rec ? signatureSource(rec, personal) : null;
               return (
                 <li key={doc.kind} className="flex items-start justify-between gap-3 text-sm">
-                  <div className="min-w-0"><div className="font-medium leading-snug">{doc.title}</div><div className="text-xs text-muted">{rec ? `Signed ${fmtDate(rec.signed_at)} as “${rec.signed_name}”` : doc.required ? 'Not on file — required' : 'Not on file'}</div></div>
-                  {rec ? <form action={revokeConsentAction}><input type="hidden" name="id" value={rec.id} /><input type="hidden" name="clientId" value={id} /><ConfirmButton className="text-xs text-muted underline hover:text-ink" message={`Revoke “${doc.title}”? The signed record is marked revoked and cannot be restored${doc.required ? ', and disputes cannot be submitted for this client until it is signed again' : ''}.`}>Revoke</ConfirmButton></form> : <Badge tone={doc.required ? 'warn' : 'neutral'}>Missing</Badge>}
+                  <div className="min-w-0"><div className="font-medium leading-snug">{consentTitle(doc.kind, personal)}</div>
+                    <div className="text-xs text-muted">{rec ? (src === 'paper'
+                      ? <>Signed on paper{rec.signed_on ? ` on ${fmtDate(rec.signed_on)}` : ''} as “{rec.signed_name}” · recorded by staff on {recordedOn}{rec.has_text && <> · <a className="link" href={`/api/consents/${rec.id}/pdf`}>App’s text when recorded (PDF)</a></>}</>
+                      : src === 'self'
+                        ? <>Given by the account holder on {recordedOn} as “{rec.signed_name}”{rec.has_text && <> · <a className="link" href={`/api/consents/${rec.id}/pdf`}>Copy (PDF)</a></>}</>
+                        : <>Signed {recordedOn} as “{rec.signed_name}”{rec.has_text && <> · e-signed in the portal · <a className="link" href={`/api/consents/${rec.id}/pdf`}>Copy (PDF)</a></>}</>)
+                      : notNeeded ? (personal ? 'Not needed in a personal workspace.' : 'Not needed for paper signatures. If the client joins the portal, they give it there first.')
+                        : cancelled ? `Cancelled by the client in the portal on ${fmtDate(dayInZone(cs.tz, new Date(cancelled.revoked_at!)))}`
+                          : doc.kind === 'esign' ? 'Not on file — the client gives it first, in the portal' : gates ? 'Not on file — required' : 'Not on file'}</div>
+                    {/* A personal workspace needs no current statement or agreement, so one from the 2026-01 drafts asks for nothing. */}
+                    {rec && !personal && isDraftEraSignature(rec) && (
+                      <p className="mt-1 text-xs font-medium text-warn">
+                        {doc.kind === 'croa_contract' ? 'Signed before the current agreement: it has no terms or notice of cancellation.' : 'Signed before the current statement: it is not the full Consumer Credit File Rights statement.'}{' '}
+                        <span className="font-normal text-muted">Revoke it, then {c.portal_user_id ? `ask ${first} to sign in: the portal asks for the current one` : `send a welcome link (or record a new paper signature) so ${first} signs the current one`}.</span>
+                      </p>
+                    )}
+                  </div>
+                  {rec ? <form action={revokeConsentAction}><input type="hidden" name="id" value={rec.id} /><input type="hidden" name="clientId" value={id} /><ConfirmButton className="text-xs text-muted underline hover:text-ink" message={revokeConfirmation(doc.kind, personal)}>Revoke</ConfirmButton></form>
+                    : <Badge tone={notNeeded || personal || !doc.required ? 'neutral' : 'warn'}>{notNeeded ? 'Not needed' : 'Missing'}</Badge>}
                 </li>);
             })}
-          </ul>
+          </ul>}
           <details className="mt-4">
             <summary className="link cursor-pointer text-sm">Record a consent</summary>
             <ActionForm action={recordConsentAction} className="mt-3 space-y-3">
               <input type="hidden" name="clientId" value={id} />
-              <Select label="Document" name="kind" required options={CONSENT_DOCS.map((x) => ({ value: x.kind, label: x.title }))} />
-              <Field label="Name the client signed with" name="signedName" defaultValue={c.full_name} required />
-              <SubmitButton variant="secondary">Record</SubmitButton>
-              <p className="text-xs text-muted">Records that the client received and signed the document. The client can also e-sign in their portal.</p>
+              <Select label="Document" name="kind" required options={recordable.map((x) => ({ value: x.kind, label: consentTitle(x.kind, personal) }))} />
+              {personal ? (
+                <>
+                  {/* A personal workspace: the account holder gives their own consent here, today. No paper, no staff. They read the text first. */}
+                  {d.toGive.length > 0 && (
+                    <div role="group" aria-label="The text you give" className="space-y-3 rounded-lg border border-line bg-raised/40 p-3 text-sm">
+                      {d.toGive.map((r) => (
+                        <div key={r.doc.kind}>
+                          <p className="font-semibold leading-snug">{r.doc.title}</p>
+                          {r.blocks.map((b, i) => <p key={i} className="mt-1 text-muted">{b.text}</p>)}
+                        </div>))}
+                    </div>)}
+                  <Field label="Your full legal name" name="signedName" defaultValue={c.full_name} required />
+                  <SubmitButton variant="secondary">Record</SubmitButton>
+                  <p className="text-xs text-muted">Records that you, the account holder, give the document you choose yourself, today, with the text shown above. The exact text and its fingerprint are kept with the record.</p>
+                </>
+              ) : (
+                <>
+                  <Field label="Name the client signed with" name="signedName" defaultValue={c.full_name} required />
+                  <Field label="Date written on the signed paper" name="paperSignedOn" type="date" min={paperDates.min} max={paperDates.max} required />
+                  <SubmitButton variant="secondary">Record</SubmitButton>
+                  <p className="text-xs text-muted">Records that the client signed this document on paper, on the date written on it. What is stored with the record is the app’s text of the document today, dated with the date on the paper, not a copy of the paper: keep the signed paper, or upload a scan under Documents. The statement comes before the service agreement, and the agreement before the authorization; a service agreement’s cancellation period runs from the date on the paper. The consent to electronic records is not recorded here: the client gives it in their portal, where they can also e-sign the others.</p>
+                </>
+              )}
             </ActionForm>
           </details>
         </Section>
@@ -301,10 +376,13 @@ async function ReportsTab({ id, ctx }: { id: string; ctx: Ctx }) {
     specialtyFiles: await db.rows<{ id: string; file_name: string }>("select id, file_name from public.documents where client_id = $1 and kind = 'specialty_report' order by created_at desc", [id]),
     reports: await db.rows<{ id: string; bureau: Bureau; status: string; report_date: string | null; created_at: string; n: number; source: string }>(
       `select r.id, r.bureau, r.status, r.report_date, r.created_at, r.source, (select count(*)::int from public.tradelines t where t.report_id = r.id) as n from public.credit_reports r where r.client_id = $1 order by r.created_at desc`, [id]),
-    authorized: !!(await db.row("select 1 from public.client_consents where client_id = $1 and kind = 'fcra_authorization' and revoked_at is null", [id])),
+    authorized: !!(await currentAuthorization(db, id)),
     pulls: await db.rows<{ id: string; provider: string; mode: string; status: string; created_at: string; error: string | null }>('select id, provider, mode, status, created_at, error from public.report_pulls where client_id = $1 order by created_at desc limit 5', [id]),
   }));
   const providers = listProviders().filter((p) => p.status === 'available');
+  // Staff add a report only with the client's written authorization on file; a personal workspace needs none
+  // (src/lib/credit/authorization.ts). The server refuses the same way.
+  const canAddReport = authorized || ctx.session.orgMode === 'personal';
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_22rem]">
       <div className="space-y-4">
@@ -348,6 +426,9 @@ async function ReportsTab({ id, ctx }: { id: string; ctx: Ctx }) {
       </div>
       <div className="space-y-6">
       <Section title="Upload a report">
+        {!canAddReport ? (
+          <Notice tone="warn" title="Authorization needed first">Record the client’s written authorization to review their credit reports (Overview → Compliance record) before you upload a report. A report the client uploads in their portal can still be read.</Notice>
+        ) : (
         <ActionForm action={uploadReportAction} className="space-y-4">
           <input type="hidden" name="clientId" value={id} />
           <div><label className="label" htmlFor="file">File</label><FileInput id="file" accept=".pdf,.txt,.html,.htm,.csv" maxBytes={maxUploadBytes()} tooLarge={tooLargeMessage(maxUploadMb())} /><p className="hint">PDF, HTML, TXT or CSV · max {maxUploadMb()} MB.</p></div>
@@ -355,6 +436,7 @@ async function ReportsTab({ id, ctx }: { id: string; ctx: Ctx }) {
           <SubmitButton pendingText="Reading report…">Upload & read</SubmitButton>
           <p className="text-xs text-muted">Best results: text-based PDF or the CSV template. Scanned images are not read (no OCR). Files are stored encrypted. <a className="link" href="/templates/report-import.csv">CSV template</a></p>
         </ActionForm>
+        )}
       </Section>
       <Section plain title="Pull automatically" hint="Credit Connect">
         {!authorized ? (
@@ -397,13 +479,17 @@ async function DisputesTab({ id, ctx }: { id: string; ctx: Ctx }) {
 
 // ------------------------------------------------------------------ documents
 async function DocumentsTab({ id, ctx }: { id: string; ctx: Ctx }) {
-  const { docs, reqs, intake } = await ctx.tx(async (db) => ({
+  const { docs, reqs, intake, authorized } = await ctx.tx(async (db) => ({
     intake: await loadIntake(db, id),
+    authorized: !!(await currentAuthorization(db, id)),
     docs: await db.rows<{ id: string; kind: string; file_name: string; size_bytes: number; source: string; review_status: string; review_note: string | null; created_at: string; uploader: string | null; mime_type: string; report_id: string | null }>(
       `select d.id, d.kind, d.file_name, d.size_bytes, d.source, d.review_status, d.review_note, d.created_at, u.full_name as uploader, d.mime_type, (select r.id from public.credit_reports r where r.document_id = d.id order by r.created_at limit 1) as report_id from public.documents d left join public.users u on u.id = d.uploaded_by where d.client_id = $1 order by d.created_at desc`, [id]),
     reqs: await db.rows<{ id: string; kind: string; note: string | null; due_at: string | null; fulfilled_document_id: string | null }>('select id, kind, note, due_at, fulfilled_document_id from public.document_requests where client_id = $1 order by created_at desc', [id]),
   }));
   const kindOpts = DOC_KINDS.map((k) => ({ value: k, label: DOC_KIND_LABEL[k]! }));
+  // A credit report staff uploaded is read (or a new one uploaded) only with the client's written authorization on
+  // file; one the client uploaded can always be read. The server refuses the same way (src/lib/credit/authorization.ts).
+  const canAddReport = authorized || ctx.session.orgMode === 'personal';
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_22rem]">
       <div className="space-y-6">
@@ -421,7 +507,9 @@ async function DocumentsTab({ id, ctx }: { id: string; ctx: Ctx }) {
                   <div className="text-xs text-muted">{DOC_KIND_LABEL[x.kind] ?? x.kind} · {(x.size_bytes / 1024).toFixed(0)} KB · {x.source === 'client' ? 'uploaded by client' : `by ${x.uploader ?? 'staff'}`} · {relTime(x.created_at)}{x.review_status === 'rejected' && x.review_note ? ` · ${x.review_note}` : ''}</div></div>
                 <div className="flex flex-wrap items-center gap-2"><StatusBadge status={x.review_status} />
                   {x.report_id && <Link href={`/app/reports/${x.report_id}`} className="btn-ghost btn-sm">Open report</Link>}
-                  {!x.report_id && x.kind === 'credit_report' && x.review_status !== 'rejected' && ['application/pdf', 'text/plain', 'text/html', 'text/csv'].includes(x.mime_type) && (
+                  {!x.report_id && x.kind === 'credit_report' && x.review_status !== 'rejected' && ['application/pdf', 'text/plain', 'text/html', 'text/csv'].includes(x.mime_type) && x.source !== 'client' && !canAddReport && (
+                    <span className="text-xs text-muted">Reading it needs the client’s authorization</span>)}
+                  {!x.report_id && x.kind === 'credit_report' && x.review_status !== 'rejected' && ['application/pdf', 'text/plain', 'text/html', 'text/csv'].includes(x.mime_type) && (x.source === 'client' || canAddReport) && (
                     <ActionForm action={importDocumentAsReportAction} className="inline-flex flex-col items-end gap-1.5"><input type="hidden" name="id" value={x.id} /><input type="hidden" name="clientId" value={id} />
                       <select name="bureau" defaultValue="" aria-label="Bureau this report is from" className="field !w-auto !py-1 text-xs"><option value="">Detect bureau from file</option>{(Object.keys(BUREAU_LABEL) as Bureau[]).map((b) => <option key={b} value={b}>{BUREAU_LABEL[b]}</option>)}</select><SubmitButton className="btn-sm" pendingText="Reading…">Read as credit report</SubmitButton></ActionForm>)}
                   {x.review_status === 'pending_review' && (<><form action={reviewDocumentAction}><input type="hidden" name="id" value={x.id} /><input type="hidden" name="clientId" value={id} /><input type="hidden" name="decision" value="accepted" /><button className="btn-secondary btn-sm">Accept</button></form>
@@ -435,7 +523,7 @@ async function DocumentsTab({ id, ctx }: { id: string; ctx: Ctx }) {
           <ActionForm action={uploadDocumentAction} resetOnSuccess className="space-y-3">
             <input type="hidden" name="clientId" value={id} />
             <Select label="Type" name="kind" options={kindOpts} defaultValue="other" />
-            <div><label className="label" htmlFor="docfile">File</label><FileInput id="docfile" accept=".pdf,.png,.jpg,.jpeg,.txt,.csv" maxBytes={maxUploadBytes()} tooLarge={tooLargeMessage(maxUploadMb())} /><p className="hint">PDF, PNG, JPG, TXT or CSV · max {maxUploadMb()} MB. Type is checked from the file’s contents.</p></div>
+            <div><label className="label" htmlFor="docfile">File</label><FileInput id="docfile" accept=".pdf,.png,.jpg,.jpeg,.txt,.csv" maxBytes={maxUploadBytes()} tooLarge={tooLargeMessage(maxUploadMb())} /><p className="hint">PDF, PNG, JPG, TXT or CSV · max {maxUploadMb()} MB. Type is checked from the file’s contents.{!canAddReport && ' A credit report can be added once the client’s written authorization is on file.'}</p></div>
             <SubmitButton pendingText="Encrypting…">Upload</SubmitButton>
           </ActionForm>
         </Section>

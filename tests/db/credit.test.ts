@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { authenticateApiKey, createApiKey, revokeApiKey } from '@/lib/api/keys';
+import { currentAuthorization, STAFF_REPORT_AUTHORIZATION_NEEDED, staffReportRefusal } from '@/lib/credit/authorization';
 import { ingestInbound, requestReportPull, type CActor } from '@/lib/credit/pull';
 import { ingestBody, toParsed } from '@/lib/credit/schema';
 import { getProvider, listProviders, sandboxReports } from '@/lib/credit/providers';
@@ -31,7 +32,11 @@ describe('API keys', () => {
     const k = await asUser(org.ownerId, (db) => createApiKey(db, ADMIN_ACTOR(), { name: 'Zapier', scopes: ['clients:read', 'reports:write'] }));
     expect(k.key).toMatch(/^dosk_[a-z0-9]{8}_/);
     const stored = await withSystem((db) => db.rows<Record<string, unknown>>('select * from public.api_keys where id = $1', [k.id]));
-    expect(JSON.stringify(stored)).not.toContain(k.key.split('_')[2]); // the secret is nowhere in the database
+    // The secret is nowhere in the database, whole or in part. It is everything after the prefix, and may itself hold
+    // "_" (it is base64url), so it is not split on that: a secret that began with "_" used to leave nothing to look for.
+    const secret = k.key.slice(`dosk_${k.prefix}_`.length);
+    expect(secret).toHaveLength(43);
+    for (const part of [secret, secret.slice(0, 12), secret.slice(-12)]) expect(JSON.stringify(stored), part).not.toContain(part);
     const auth = await authenticateApiKey(`Bearer ${k.key}`, testIp());
     expect(auth).toMatchObject({ ok: true, principal: { orgId: org.orgId, userId: org.ownerId, role: 'owner', scopes: ['clients:read', 'reports:write'] } });
   });
@@ -90,6 +95,36 @@ describe('payload validation', () => {
     ['two reports for one bureau', { reports: [{ bureau: 'equifax' }, { bureau: 'equifax' }] }], ['empty creditor', { reports: [{ bureau: 'equifax', tradelines: [{ creditor_name: '' }] }] }],
     ['no reports', { reports: [] }], ['score out of range', { reports: [{ bureau: 'equifax', scores: [{ model: 'x', score: 1200 }] }] }],
   ])('rejects %s', (_n, body) => expect(ingestBody.safeParse(body).success).toBe(false));
+});
+
+describe('a report staff add needs the client’s written authorization (a personal workspace does not)', () => {
+  let clientId: string;
+  beforeAll(async () => { clientId = await addClient(org.orgId, 'Upload Client'); });
+
+  it('is refused with no authorization, allowed with one on file, and refused again once it is revoked', async () => {
+    expect(await asUser(manager.id, (db) => staffReportRefusal(db, clientId))).toBe(STAFF_REPORT_AUTHORIZATION_NEEDED);
+    expect(STAFF_REPORT_AUTHORIZATION_NEEDED).toMatch(/written authorization/);
+    expect(STAFF_REPORT_AUTHORIZATION_NEEDED).toMatch(/uploads in their portal can still be read/);
+    await recordConsentRows(org.orgId, clientId);
+    expect(await asUser(specialist.id, (db) => staffReportRefusal(db, clientId))).toBeNull();
+    expect(await asUser(specialist.id, (db) => currentAuthorization(db, clientId))).not.toBeNull();
+    await withSystem((db) => db.run("update public.client_consents set revoked_at = now() where client_id = $1 and kind = 'fcra_authorization'", [clientId]));
+    expect(await asUser(manager.id, (db) => staffReportRefusal(db, clientId))).toBe(STAFF_REPORT_AUTHORIZATION_NEEDED);
+    expect(await asUser(manager.id, (db) => currentAuthorization(db, clientId))).toBeNull();
+  });
+
+  it('is never refused in a personal workspace, where the account holder works on their own file', async () => {
+    const personal = await makeOrg('Personal Upload');
+    await withSystem((db) => db.run("update public.organizations set mode = 'personal' where id = $1", [personal.orgId]));
+    const self = await addClient(personal.orgId, 'Account Holder');
+    expect(await asUser(personal.ownerId, (db) => staffReportRefusal(db, self))).toBeNull();
+  });
+
+  it('cannot be read across workspaces: another workspace’s client is “not found”', async () => {
+    const other = await makeOrg('Other Upload');
+    const theirs = await addClient(other.orgId, 'Their Client');
+    expect(await asUser(manager.id, (db) => staffReportRefusal(db, theirs))).toBe('Client not found.');
+  });
 });
 
 describe('automatic import is gated by the client’s written authorization', () => {

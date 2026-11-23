@@ -9,14 +9,14 @@ third-party service from this codebase. None of the paid third-party integration
 | Document storage | **Active, verified** | Encrypted files on a server volume (`STORAGE_DRIVER=disk`, `STORAGE_DIR`) or, for hosts with no persistent disk such as Vercel, encrypted rows in the database (`STORAGE_DRIVER=db`, table `stored_objects`). Both verified by tests. **S3-compatible storage is not built.** |
 | Email — Resend | Implemented, **not verified live** | `EMAIL_DRIVER=resend` + `RESEND_API_KEY` + verified domain. The default `log` driver writes to `.storage/outbox/` and delivers nothing; the UI marks such messages "Not delivered". It is for development and test only: staging/production refuse to start unless `EMAIL_DRIVER=resend`. |
 | Email — none (`EMAIL_DRIVER=disabled`) | **Manual**, verified by tests | The explicit way to run staging/production without an email provider. Nothing is sent or logged; invitations show a one-time link to pass on; client emails are recorded as not delivered; lead follow-up stays off; **password reset by email is unavailable** and the reset page says so. |
-| AI — Anthropic / OpenAI-compatible | Implemented, **verified against a mocked API only** | `AI_PROVIDER=anthropic` + `ANTHROPIC_API_KEY` (model via `AI_MODEL`, default `claude-sonnet-5-5`), or `AI_PROVIDER=openai` + `AI_BASE_URL` + `AI_API_KEY` + `AI_MODEL`. The deterministic engine is complete without them. |
+| AI — Anthropic (Claude) / OpenAI-compatible | Built to the current Anthropic API with the official SDK, **verified against a mocked API only**; proven live only once `npm run ai:prove` has passed with a real key | `AI_PROVIDER=anthropic` + `ANTHROPIC_API_KEY` (model via `AI_MODEL`, default `claude-opus-5-5`; `AI_EFFORT` low/medium/high, default low), or `AI_PROVIDER=openai` + `AI_BASE_URL` + `AI_API_KEY` + `AI_MODEL`. The deterministic engine is complete without them. See [AI provider (Claude)](#ai-provider-claude). |
 | AI credits (metering) | **Works, tested; buying online is not connected** | Every AI result that is returned costs credits from the workspace's balance (`src/lib/ai/credits.ts` holds the price list; ledger in `ai_credit_ledger`, migration 0012). A workspace with no credits, or with no AI provider, gets the standard non-AI wording. There is no checkout: the platform operator adds credits with `npm run credits:grant -- <org-slug> <amount> [note]`. Selling credits in the app needs a payment processor (e.g. Stripe), a checkout and a webhook that writes `purchase` rows. |
 | Text messages — Twilio | Implemented, **verified against a mocked API only**; off by default (`SMS_DRIVER=disabled`) | Short “there is an update, sign in to see it” texts to clients who agreed to them, for the events an agency switches on under Settings → Client updates. Needs `SMS_DRIVER=twilio`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` and `TWILIO_MESSAGING_SERVICE_SID` or `TWILIO_FROM_NUMBER`, plus the provider-side registration. See “Client updates by text message and email” below. The same driver sends the two follow-up texts to leads who ticked the text-message box on the enquiry form (“Referral partners and lead text follow-up”). Until the Twilio variables are set, Settings shows “Not connected” and staff log calls and texts by hand. Every text goes to a US number only, and none leaves for a workspace the platform operator has not approved (`npm run outreach:approve`); Settings says so when that is what holds texts back. |
 | Payment processing (Stripe etc.) | **Manual** (no processor integration) | Payments are recorded manually; there are no Stripe settings. Also constrained by the CROA advance-fee rule. |
 | Credit Connect (consent-gated import pipeline) | **Pipeline works, tested; no live provider** | Upload, inbound REST API, and an adapter framework with a dev-only sandbox. Nothing is imported automatically from a real provider, so Settings shows "Test stand-in only" in development and "Manual path in use" in staging/production. See `docs/CREDIT_CONNECT.md` |
 | Public REST API + API keys | **Works, tested** | `/api/v1/*`, OpenAPI at `/api/v1/openapi.json` |
 | Live provider adapters (Array, IDIQ, bureaus) | **Manual** (no adapter; needs partner approval) | Provider APIs are partner-gated and require a permissible purpose and client authorization; there is no legitimate unauthenticated access. Import by upload/CSV today. |
-| Electronic signatures (external provider) | **Manual** (no provider integration) | Typed-name e-signature in the portal with timestamp/IP/text hash is provided. |
+| Electronic signatures (external provider) | **Manual** (no provider integration) | Typed-name e-signature in the portal is provided: each signature stores the exact text shown, its SHA-256, the page language, the time and the IP address, and a PDF copy can be downloaded (`/api/consents/<id>/pdf`). |
 | Certified mail (Lob, etc.) | **Manual** (no provider integration) | The approved PDF is produced; a person mails it and records tracking. |
 | Custom domains for agency websites | **Automatic** with `VERCEL_API_TOKEN` + `VERCEL_PROJECT_ID` (`VERCEL_TEAM_ID` for a team project); otherwise **manual** | An agency connects a domain it already owns on its Website page; its `/a/<workspace-slug>` address keeps working. With the Vercel variables set, the app adds the domain to the project, shows the DNS records and marks it connected only when Vercel reports it verified and correctly configured and the workspace's own TXT record (`_disputeos.<domain>`) is in the domain's DNS: that record is what shows the workspace controls the domain. Without the variables the domain stays "not connected yet" until the platform operator adds it in Vercel and runs `npm run domain:verify -- <domain>`, which checks the same TXT record and needs `PII_ENCRYPTION_KEY` in its environment. Buying a domain is not built in. Steps: docs/DEPLOY-VERCEL.md. Tested against a mocked API only. |
 | Specialty reporting agencies (ChexSystems, Early Warning, LexisNexis, Innovis, NCTUE, TeleCheck, Clarity) | **Manual** (no data feed, no integration) | Disputes with these agencies go through the normal pipeline, but nothing is connected to them. See "Specialty reporting agencies" below. |
@@ -71,7 +71,7 @@ Settings → Integrations labels every integration by what happens **in the conf
 | Certified mail | Manual | Download the approved PDF, mail it, record method + date sent + optional tracking. Stored as `delivery_source = staff_recorded` and shown as "Recorded by staff" | A print-and-mail account (e.g. Lob), API key, sender address, and an integration that sends approved letters and reads delivery events. Only that integration may set `carrier_confirmed` |
 | Payments | Manual | Record payments collected elsewhere on the client's Billing tab (requires the CROA "service already performed" confirmation) | Stripe (or similar) account, API keys, webhook secret, Checkout + webhook integration |
 | SMS | Manual until Twilio is connected (the default) | Text/call from your own phone and log it on the client's Messages tab ("nothing is sent") | A Twilio account with a sending number registered for US messaging and the four variables in “Client updates by text message and email”; the operator's approval of the workspace (`npm run outreach:approve`); each client's own agreement to texts, for a US number. Two-way texting from the Messages tab is not built: the integration only sends the automatic client updates and the consented lead follow-up texts, and records replies |
-| External e-signature | Manual | Typed-name signature in the portal (name, time, IP, hash of the text shown), or staff record a paper consent | Only if counsel requires a third-party signing service: an account with it and the integration |
+| External e-signature | Manual | Typed-name signature in the portal's welcome steps (name, time, IP, the exact text shown and its SHA-256, a PDF copy), or staff record a paper signature (the date written on the paper, the staff member who recorded it, and the app's text on the recording day, which is not a copy of the paper, are stored) | Only if counsel requires a third-party signing service: an account with it and the integration |
 
 ## Leads follow-up and the credit guide: what they need
 
@@ -81,7 +81,7 @@ Settings → Integrations labels every integration by what happens **in the conf
 | Automatic follow-up email to leads | **No.** With the `log` driver nothing is sent and nothing is recorded as sent; the Leads page says why (not approved yet, or "Email is not connected") | `EMAIL_DRIVER=resend` + `RESEND_API_KEY` + a verified sending domain for `EMAIL_FROM`; the platform operator's approval of the workspace (`npm run outreach:approve`); the agency's postal address and reply address saved on the Leads page; the switch on. The welcome is sent right after the enquiry; the follow-up and last note need the scheduled job below to be running | **Replies are not read.** They go to the agency's reply address; staff press "They replied" or "Asked to stop". Reading them needs an inbound-email webhook, which does not exist. The From line is `"<Agency name>" <address from EMAIL_FROM>`; the Resend driver, including this, is not verified against the live service. A step whose result was never recorded stays "not confirmed" and is not re-sent |
 | Text follow-up to leads | **No.** Off by default, and nothing is texted or offered on the form until a text service is connected and the workspace is approved | The platform operator's approval of the workspace (`npm run outreach:approve`), the lead follow-up switch on, the text switch on (Leads page), `SMS_DRIVER=twilio` with its credentials, and **the lead's own tick** in the separate text-message box on the enquiry form. See “Referral partners and lead text follow-up” | No tick, no text: that lead gets email only. Two texts at most (welcome, follow-up after 3 days). Not verified against live Twilio |
 | Referral partner email sequence | **No.** Off by default; with the `log` driver nothing is sent and nothing is recorded as sent | The platform operator's approval of the workspace (`npm run outreach:approve`), the switch on (Partners page), the same postal and reply addresses as the lead follow-up, `EMAIL_DRIVER=resend`, and the scheduled job running on business days | **Email only: partners are never texted or called.** Replies are not read: staff press “They replied”, “Interested” or “Not interested”. Bounces and spam complaints are read only when the Resend webhook is set up; without it staff press “Bounced”. No scraping, bought lists or directory import: the agency adds partners itself. Not verified against live Resend |
-| Credit guide (chat box) | Yes — answers come from the vetted knowledge base by keyword match | Nothing. Optional: `AI_PROVIDER` (same settings as the AI row above) lets a model re-phrase the retrieved entries | With AI on, the question (names, numbers, amounts and addresses masked) is sent to the provider. Output is discarded and the vetted text shown when a pattern rule matches a promise, an unknown number or web address, or a prompt marker; the rules are patterns, not a proof. Tested against a fake provider only |
+| Credit guide (chat box) | Yes — answers come from the vetted knowledge base by keyword match | Nothing. Optional: `AI_PROVIDER` (same settings as the AI row above) lets a model re-phrase the retrieved entries | With AI on, the question is sent to the provider with the client's own details on file (address, city, ZIP code, SSN last four, date of birth), the names the app knows, contact details, Social Security, card and account numbers, dates, street addresses with a common street type, city-state-ZIP lines and amounts masked by matching; anything else in it is sent as written. Output is discarded and the vetted text shown when a pattern rule matches a promise or a prediction of a result, an unknown number or web address, or a prompt marker; the rules are patterns, not a proof. Tested against a stand-in provider; live only through `npm run ai:prove` |
 
 ## Referral partners and lead text follow-up
 
@@ -160,7 +160,7 @@ where does its partner list come from. The Partners and Leads pages tell the age
 The lead follow-up emails need the approval for the same reason as the rest: the enquiry form is public and takes any
 address, and the business name is the From name and part of the subject of every such email, so without the gate a
 workspace nobody has looked at could put a name of its choice in a stranger's inbox. The approval, the switch and both
-addresses are read again with every email that is claimed. Until a workspace is approved, the emails its staff send by hand to a client or lead ("Invite to client portal", an email from the Messages tab, "New client" with the invitation ticked) are limited to 50 an hour for the whole workspace. What does not need the approval: emails to the workspace's
+addresses are read again with every email that is claimed. Until a workspace is approved, the emails its staff send by hand to a client or lead ("Email welcome link", an email from the Messages tab, the welcome email that "New client" sends, the full New client form with the invitation ticked) are limited to 50 an hour for the whole workspace. What does not need the approval: emails to the workspace's
 own team and clients (invitations, sign-in emails, client updates by email).
 Before it records an approval the command prints the mailing address and the reply address the workspace has saved:
 besides the name they are what its automatic emails carry, and the workspace can change both later without a new approval.
@@ -446,9 +446,163 @@ Call it every 15–60 minutes from your host's scheduler.
   (Automations → Scheduled checks), and the organization's owners/admins get one in-app notification per day while it lasts.
   Other organizations still run (tested).
 
+## AI provider (Claude)
+
+**Status: built to the current API, not yet proven live.** The Anthropic adapter (`src/lib/ai/provider.ts`) calls the
+Messages API through the official SDK, `@anthropic-ai/sdk` 1.5.0 (pinned). It is tested against a mocked API
+(`tests/unit/ai-anthropic.test.ts`). It is proven live only once `npm run ai:prove` has passed with a real key (below);
+until then, treat the connection as unverified.
+
+- **Turning it on.** `AI_PROVIDER=anthropic` and `ANTHROPIC_API_KEY` (a secret). Optional: `AI_MODEL` (default
+  `claude-opus-5-5`) and `AI_EFFORT` (`low`, the default, `medium` or `high`). Cheaper models for `AI_MODEL`:
+  `claude-sonnet-5-5` ($2 / $10 per million input / output tokens) and `claude-haiku-5-5` ($0.10 / $0.50), against
+  $4 / $20 for Claude Opus 5.5. Write a model id exactly so, never with a date suffix. A provider chosen without its key
+  changes nothing: the built-in wording is used, Settings → Integrations shows "Needs credentials" and the setup page
+  names the missing variable. Every workspace starts with 0 AI credits, so nothing calls the model until the operator
+  grants some. Steps for Vercel: docs/DEPLOY-VERCEL.md, "Connect AI".
+- **The request.** One call per use of a feature, on the beta Messages endpoint: `model`; `max_tokens` 16000 (the
+  model's thinking counts toward it, so it is generous; how long a reply should be is said in each prompt); `output_config:
+  { effort }`; the server-side refusal fallback (`anthropic-beta: server-side-fallback-2026-07-01` with `fallbacks:
+  "default"`: if the model declines, the API re-runs the request on a fallback model); the system prompt; one user
+  message. No `temperature`, `top_p`, `top_k` or `thinking`: current models reject them, and Opus 5.5 always thinks,
+  adaptively. The Setup test's call has a 4000-token cap.
+- **The reply.** Only `text` blocks after the last `fallback` block are read; thinking blocks never are. Nothing but
+  `stop_reason: end_turn` is used: `refusal` (the fallback declined too), `max_tokens` (cut off) and every other reason
+  become "AI unavailable" with a plain reason, the standard wording is kept and the credits are given back.
+- **Time.** One overall deadline of 45 s ends the whole call, retries and waits included. One attempt may use all of it:
+  a reply that is not streamed arrives only once it is complete, so a slow but valid reply is used if it comes within
+  45 s. The SDK retries once after a rate limit, an overload, a server error or a dropped connection, waiting as
+  `retry-after` asks, within what is left of the 45 s. Pages and actions allow 60 s (`maxDuration`).
+- **Errors.** Read from the SDK's typed errors, never from message text: 401 "the AI key was refused", 403 "the AI key
+  is not allowed to make this request", 404 "the AI model “…” was not found", 400 "the AI service rejected the request
+  (HTTP 400)", the monthly spend limit of the Anthropic account (429 with the error code `enforced_spend_limit_reached`)
+  "the AI account has reached its monthly spending limit; it resumes when the limit resets or is raised in the
+  Anthropic Console", any other 429 and 529 "the AI service is busy, try again in a minute", other 5xx "the AI service
+  had a problem (HTTP n)", any other status "HTTP n", no answer within the deadline "the AI service took too long to
+  answer", no connection "the AI service could not be reached". Only busy, failing, slow and unreachable count as
+  passing on their own; the spend limit does not. Staff see it inside the "AI unavailable (…)" note; portal clients
+  never do.
+- **Logs.** One line per call: `[ai] anthropic model=… effort=… stop=… in=… out=… ms=… served=… fallback=yes|no
+  request=req_…`, or `error=… status=… type=… code=…` when the call failed (`code` is the API's structured error code,
+  such as `enforced_spend_limit_reached`, when it sent one); info level, warn when the reply was not used. Never the
+  prompt, the reply, the key or the API's wording of an error. The SDK's own log level is fixed at `warn`, so
+  `ANTHROPIC_LOG=debug` cannot make it print request bodies, and its trace spans (only when the app registers an
+  OpenTelemetry tracer) carry metadata only.
+- **What is sent, feature by feature.**
+  - *Letter wording suggestion* (5 credits): the letter with every line except its connective wording (salutation,
+    linking sentence, closing courtesy, sign-off) replaced by a marker, and a fixed instruction. No name, address,
+    account, amount, date, reason or status leaves the server.
+  - *Progress note polish* (2 credits): the note's two connective sentences ("Here is where your case stands." and "We
+    will let you know about each response.", or the Spanish), with markers for the greeting, the counts and the
+    results-vary sentence, and a goal that lists the courtesy words below. The client's name is not sent: the greeting
+    is built with a placeholder and locked. A reply is used only if it keeps every marker in place, the same lines and
+    the same number of sentences in each stretch of wording (no preface, no echoed tag, no added or dropped sentence),
+    adds no number, and passes two word checks. First, the reworded sentences (only the wording between the markers,
+    so the locked counts and results-vary sentence are not read) may use only the courtesy words of the note's
+    language, compared without letter case or accents, with spaces and ordinary punctuation between them and no other
+    character (no digit, symbol, emoji or formatting); any other word or character discards the reply (`COURTESY_WORDS`,
+    `BESIDE` and `COURTESY_PHRASES` in `src/lib/ai/assistant.ts`):
+    - English: a, about, all, an, and, answer, answers, any, are, arrive, arrives, as, at, be, below, can, case, come,
+      comes, contact, each, every, file, for, from, get, gets, has, have, hear, here, here's, how, i, i'll, if, in,
+      informed, is, it, it's, keep, know, let, let's, look, message, messages, news, notify, now, of, on, once, or, our,
+      overview, patience, please, posted, question, questions, receive, replies, reply, response, responses, share,
+      status, summary, tell, thank, thanks, that, that's, the, things, this, to, touch, update, updates, us, we, we'll,
+      we're, what, when, where, will, with, you, you'll, your; "quick", "short" and "brief" only next to update,
+      updates, summary, overview or look; "updated" only right after "you"; "stand" and "stands" only after "where";
+      and the phrase "as soon as".
+    - Spanish: a, actualización, ahora, al, aquí, así, avisaremos, avisarle, cada, caso, cómo, compartimos,
+      compartiremos, comunicaremos, con, contacto, contaremos, cuando, cuanto, de, del, el, en, enviaremos, es,
+      escríbanos, escribiremos, escribirnos, esta, está, están, estado, estaremos, este, esto, expediente, gracias,
+      haremos, informada, informadas, informado, informados, informamos, informaremos, informarle, la, las, le, les,
+      llega, llegue, lleguen, lo, los, mantendremos, mantenerle, más, mensaje, mensajes, nosotros, noticias,
+      notificaremos, novedades, nuestras, nuestros, o, paciencia, para, por, pregunta, preguntas, presentamos, puede,
+      que, recibamos, recibimos, reciente, respuesta, respuestas, resumen, sabrá, saber, si, situación, sobre, su, sus,
+      tanto, tiene, todas, todos, un, una, usted, va, vamos, y; "breve" only next to resumen or actualización; and the
+      phrase "tan pronto como".
+
+    The lists have no word for a result (credit, a score, an item, an account, a report, a removal, an improvement, an
+    approval, a win), for a prediction or for how soon something will happen ("soon" and "pronto" only inside the two
+    phrases), no praise or feeling, no negation, and no pair that says something goes away ("off", "away", "up" and
+    the Spanish "se" are not on them), so a promise worded in a new way is refused as well: it would need a word that
+    is not on them ("We will win your case.", "Those negative items are history.", "Ganaremos su caso." are refused). A refused reply is not charged (the credits are given back) and the drafted note is used. Second, the
+    whole note must pass the claims the guide rejects in model-written text (below).
+  - *Credit guide answer* (1 credit): the matched knowledge entries, generic step labels (never the person's own steps)
+    and the question, masked in this order: Social Security numbers (9 digits, or 3-2-4 groups split by spaces,
+    dashes or dots), card numbers, email addresses and phone numbers; what the app holds about the client, wherever it
+    appears as written on file (the address's first and second lines, city, ZIP code, SSN last four, and the date of
+    birth in common formats such as 1985-03-14, 03/14/1985, 3/14/85, 14/03/1985, March 14, 1985 and 14 de marzo de
+    1985: in the portal the signed-in client's, for staff asking from a client's page that client's); the names the app
+    knows (in the portal the client's own name parts; for staff asking from a client's page also the creditors and
+    collectors on file; for staff asking anywhere else none); dates; street addresses written as a number, one to four
+    words and a street type (St, Ave, Rd, Blvd, Dr, Ln, Ct, Way, Circle, Place, Parkway, Terrace, Highway, Trail,
+    Square, Plaza, Loop, Pike, Row, Cove, Crossing, Crescent, Expressway, Freeway, Turnpike, Alley, and their
+    abbreviations), or in Spanish order ("Calle Mayor 12", "Avenida Reforma 222, depto 4"), with a unit; city-state-ZIP
+    lines; amounts; and any other number of 4 or more digits. Masking works by matching, so anything else typed is sent
+    as written: an address, name or city the app does not hold and that is written another way (an address with no
+    street type, for example), the state on its own, short numbers, and in the portal a creditor's name. The model's
+    answer is then shown only if it passes the claims guard and the stricter rules for model-written text
+    (`findGeneratedClaims` in `src/lib/guide/llm.ts`): no promise ("we promise", "for sure", "le prometemos"); no
+    "will", "going to" or Spanish future with a score rising, an item coming off or being removed, or an approval
+    ("this will raise your score", "your score will…" but not "what your score will be", "su puntaje subirá", "will be
+    approved"); no sentence that pairs a word of likelihood, timing or what usually happens (should, expect, likely,
+    probably, about to, on track, soon, will, going to, usually, typically, normally, often, oftentimes, frequently,
+    generally, commonly, regularly, routinely, in most, many or a lot of cases or instances, most of the time, most times,
+    nearly or almost always, chances or odds are, a good chance, nine times out of ten, tend to, as a rule, "it is (very)
+    common, typical, usual or normal", not unusual, the majority, a lot of, many or most people, clients or borrowers;
+    debería, probablemente, lo más probable, a punto de, pronto, esperar, va a, a verb in the future, normalmente,
+    generalmente, habitualmente, frecuentemente, comúnmente, por lo general, suele, a menudo, casi siempre, la mayoría de
+    las veces, en muchos casos or muchas ocasiones, "es (muy) común, frecuente, habitual o normal", muchas personas,
+    muchos or la mayoría de nuestros clientes) with a result (a score going up, credit or a history getting better or
+    clean, an item coming off or being removed, "are removed", "have negative items removed", "see collections
+    deleted", "son eliminadas", an approval, good results or loving them: "great results", "you will love the results",
+    "excelentes resultados", "le encantarán los resultados"); and no suggestion to dispute accurate information. Every
+    vetted entry passes all of these rules (tested), so a faithful rewording of it is not discarded. These are
+    patterns, not an understanding of the text: a false alarm shows the vetted entry instead (a negated result beside one
+    of those words, "in many cases, accurate information does not come off your report", is flagged), and a result stated
+    with none of those words ("once the errors are fixed, your score improves", "your score could improve") or with
+    another word for how often ("nine in ten clients see…") is not caught.
+  - *Setup connection test* (free): one fixed request, "Reply with the single word CONNECTED and nothing else." No
+    client or workspace data.
+- **Setup test.** "Test the AI connection" on the Get set up page, for owners and admins (`settings:manage`). Limits: 5
+  an hour per person, 10 an hour per workspace and 100 a day for the deployment, spent only when a call is made. A pass
+  records the time and the provider and model (`settings.setup_ai_test_at`, `settings.setup_ai_test_provider`) and ticks
+  the AI step; a failure that will not pass on its own (the key, the model or effort, a rejected request, the account's
+  monthly spending limit, a refusal, a wrong answer) removes that record, and a busy, failing or unreachable service
+  leaves it. The message says what to do next. Only a model that was not found (404), or a rejected request (400) while
+  `AI_MODEL` or `AI_EFFORT` is set to something other than the default and the API gave no error code, points to
+  `AI_MODEL` and `AI_EFFORT`. A rejected request with the defaults says the cause is elsewhere (a beta feature the
+  organization is not enabled for, for example); one with an error code names it (such as `organization_on_hold`); both
+  point to the `[ai]` log line and to `npm run ai:prove`. The spending limit says AI wording is off until the limit
+  resets or is raised in the Anthropic Console. Every attempt writes a `setup.test_ai` audit entry with the provider and
+  the outcome only (`settings` or `request` for a rejected request, `spend_limit` for the limit). The AI step is done
+  only after a pass with the provider and model in use now.
+- **Proving it live.** From a checkout with the test database (`npm run env:setup`), with the key in the shell for that
+  one command (never in a file):
+
+  ```bash
+  AI_PROVIDER=anthropic ANTHROPIC_API_KEY=<key> AI_MODEL=claude-opus-5-5 npm run ai:prove
+  ```
+
+  `tests/live/ai.live.test.ts` makes one real call per feature on the synthetic client Jordan Rivera
+  (`tests/fixtures/jordan-rivera.ts`): the letter suggestion, the progress note in English and in Spanish, the guide for
+  staff and for the portal (with the fixture's identifiers on file, as the app passes them), then the Setup connection
+  test. For each it prints the request (system and user text), the raw reply, the stop reason, tokens, time and request
+  id, and what the feature did with the reply; for a call that failed, the API's own explanation too, which the app
+  itself never shows or logs. It asserts that
+  every call finished (`end_turn`), that the Setup test passed and was recorded, and that no personal data of the fixture
+  (names, address, account and SSN digits, date of birth, email) is in any request. Six short calls cost a few cents. A
+  reply the safety checks discard is printed, not failed. Under `npm test` (no `AI_LIVE=1`) the file is skipped; the same
+  privacy assertion runs on every test run against a stand-in (`tests/unit/ai-no-pii.test.ts`).
+- **Not verified.** No call has reached the real API from this codebase: the request shape, the beta header, the
+  fallback, the error mapping and the stop-reason handling are tested against a mocked API and a local stand-in only.
+  How often real replies pass the checks, and real latency and token use, are unknown until the proof and the first
+  weeks of use. The OpenAI-compatible adapter is unchanged apart from its error kinds and the 45 s deadline, and is
+  tested against a mocked API only.
+
 ## AI credits
 
-AI wording is metered so the platform operator can charge for it. Nothing about AI is free.
+AI wording is metered so the platform operator can charge for it. Nothing about AI is free, apart from the Setup
+page's connection test: one tiny fixed request, rate limited, paid by the deployment.
 
 - **Prices** (one place: `AI_COSTS` in `src/lib/ai/credits.ts`): letter wording suggestion 5, client progress note polish 2,
   credit guide answer worded by AI 1. These are credits, not money; what a credit costs is the operator's decision and is
@@ -462,7 +616,8 @@ AI wording is metered so the platform operator can charge for it. Nothing about 
   cannot be written, the scheduled jobs (`POST /api/jobs/run`, see above) refund every charge that has had no outcome for
   10 minutes; the response reports the count as `aiRefunds`. **This needs the scheduler to be running** (`CRON_SECRET` set
   and the host calling the route). Without it such a charge stays until `npm run jobs:run` is run by hand. The staff
-  and portal layouts set `maxDuration = 60`, above the 30 s provider timeout; the host plan must allow 60 s functions.
+  and portal layouts set `maxDuration = 60`, above the 45 s limit on one AI call (retries included); the host plan must
+  allow 60 s functions.
 - **Paid results are kept.** A letter suggestion is stored for the letter version it was made from (`letter_suggestions`,
   migration 0013) and shown again from the letter page, so a reload or a lost response does not lose it and asking again for
   the same version is not charged again. It is not shown once the letter has a newer version; that is not refunded. The
@@ -496,4 +651,5 @@ AI wording is metered so the platform operator can charge for it. Nothing about 
   entries for owners and admins. The balance is also shown beside "Suggest better wording" on a letter.
 - **Not built.** Online purchase, invoices, a money price per credit, low-balance alerts, caps for staff or per workspace, and a
   cross-workspace usage report for the operator (query `ai_credit_ledger` directly for now). The provider's own bill is
-  not reconciled against credits. Not exercised against a live AI provider — fake provider in tests only.
+  not reconciled against credits. The credit flow is tested against a stand-in provider; the provider calls themselves
+  are proven live only by `npm run ai:prove` (see [AI provider (Claude)](#ai-provider-claude)).

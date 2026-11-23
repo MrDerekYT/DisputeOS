@@ -4,10 +4,10 @@ import { Badge, Section } from '@/components/ui';
 import { MonthPicker, monthLabel } from '@/components/work-statement';
 import type { requireStaff } from '@/lib/auth/context';
 import { loadChargeCheck } from '@/lib/billing/records';
+import { agencyZone } from '@/lib/agreements';
 import { isMonth, monthsBack, sayDay } from '@/lib/business-days';
-import { getEnv } from '@/lib/env';
-import { businessToday } from '@/lib/letters/service';
 import { PRODUCT } from '@/lib/product';
+import { dayInZone } from '@/lib/util';
 import { recordPaymentAction, setSoldByPhoneAction } from '../../billing/actions';
 
 type Ctx = Awaited<ReturnType<typeof requireStaff>>;
@@ -18,10 +18,14 @@ type Ctx = Awaited<ReturnType<typeof requireStaff>>;
  * The check and its legal basis are in src/lib/billing/eligibility.ts.
  */
 export async function ChargeBlock({ id, ctx, period, subscription }: { id: string; ctx: Ctx; period?: string; subscription?: { id: string; price_cents: number } | null }) {
-  const tz = getEnv().APP_TIMEZONE;
-  const thisMonth = businessToday().slice(0, 7);
-  const month = isMonth(period) && period <= thisMonth ? period : thisMonth;
-  const check = await ctx.tx((db) => loadChargeCheck(db, id, month, tz));
+  // Counted on the agency's own calendar day (Settings → Client updates → time zone), like the cancellation period the
+  // client's Notice of Cancellation states and the service gate (src/lib/agreements.ts).
+  const { thisMonth, month, check } = await ctx.tx(async (db) => {
+    const tz = await agencyZone(db, ctx.orgId);
+    const thisMonth = dayInZone(tz).slice(0, 7);
+    const month = isMonth(period) && period <= thisMonth ? period : thisMonth;
+    return { thisMonth, month, check: await loadChargeCheck(db, id, month, tz) };
+  });
   if (!check) return null;
   const hold = check.status === 'hold';
   const months = monthsBack(thisMonth, '2000-01', 12);

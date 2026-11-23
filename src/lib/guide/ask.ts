@@ -63,7 +63,7 @@ export async function buildGuideReply(
     return { ok: true, answer: fallbackText(audience, lang), topic: null, topics: [], steps, links: [], mode: 'unsure' };
   }
   const phrased = await phraseGuideAnswer(
-    { question: x.question, lang, entries: [entry, ...match.related], stepLabels: genericStepLabels(steps), redact: x.personal?.redact },
+    { question: x.question, lang, entries: [entry, ...match.related], stepLabels: genericStepLabels(steps), redact: x.personal?.redact, identifiers: x.personal?.identifiers },
     entry.answer[lang], provider);
   return {
     ok: true, answer: phrased.text, topic: entry.question[lang], topics: match.related.map((e) => topic(e, lang)), steps, links,

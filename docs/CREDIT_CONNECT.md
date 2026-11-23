@@ -5,14 +5,18 @@ entry points that all end in the same place — the **pending review** queue:
 
 | Entry point | Status | Use it when |
 |---|---|---|
-| **Upload** (PDF / HTML / text / CSV) | Works today | You have the report as a file |
+| **Upload** (PDF / HTML / text / CSV) | Works today | You have the report as a file. Staff need the client's written authorization on file; a report the client uploads in the portal does not |
 | **Inbound REST API** `POST /api/v1/clients/{id}/reports` | **Works today, tested** | A provider webhook, Zapier/Make, or your own system can send normalized JSON |
 | **Provider adapter** ("Pull reports" button) | Framework + sandbox work today; **live providers need partner access** | You hold a contract/API credentials with a provider |
 
 ## The rules the pipeline enforces (in code, with tests)
 
 1. **No import without written authorization.** Pulled *or* pushed, a current un-revoked `fcra_authorization` consent must exist
-   for the client. The consent used is recorded on the pull. Revoke it and automatic import stops.
+   for the client. The consent used is recorded on the pull. Revoke it and automatic import stops. The same consent is
+   needed before staff add a report by hand: uploading one, filing a credit report in the vault, or reading a file staff
+   uploaded as a report (`src/lib/credit/authorization.ts`). Two cases need none: a report the client uploads in the
+   portal (the consumer gives it to the agency; nothing is obtained from a bureau), and a personal workspace, where the
+   account holder works on their own file.
 2. **A person reviews every import.** Reports arrive as `pending_review`; nothing is analysed, compared or disputed until someone approves.
 3. **Strict validation.** Provider output and API bodies must satisfy the same schema (`src/lib/credit/schema.ts`). Anything else is rejected.
 4. **Data minimisation.** Full account numbers are accepted only to be cut to their last four characters; they are never stored or logged.

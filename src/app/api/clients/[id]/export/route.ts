@@ -21,7 +21,7 @@ export async function GET(_: Request, { params }: { params: Promise<{ id: string
     const q = (sql: string) => db.rows(sql, [id]);
     const data = {
       exported_at: new Date().toISOString(), client,
-      consents: await q('select kind, version, signed_name, signed_at, revoked_at from public.client_consents where client_id = $1 order by signed_at'),
+      consents: await q('select kind, version, signed_name, signed_at, revoked_at, text_shown, text_sha256, page_lang from public.client_consents where client_id = $1 order by signed_at'),
       notes: await q('select body, pinned, created_at from public.client_notes where client_id = $1 order by created_at'),
       tasks: await q('select title, detail, kind, status, due_at, created_at from public.tasks where client_id = $1 order by created_at'),
       communications: await q('select direction, channel, subject, body, status, created_at from public.communications where client_id = $1 order by created_at'),

@@ -11,6 +11,7 @@
 const { chromium } = require('playwright');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
+const { Client: PgClient } = require('pg');
 
 const BASE = process.env.BASE || 'http://localhost:3100';
 const SHOTS = process.env.SHOTS || 'screenshots/e2e-workflow';
@@ -35,6 +36,29 @@ const watch = (page, who) => {
   page.on('response', (r) => { if (r.status() >= 500) problems.push(`[${who} http ${r.status()}] ${r.url()}`); });
 };
 const see = (page, text, timeout = 10000) => page.getByText(text, { exact: false }).first().waitFor({ timeout });
+
+/**
+ * No dispute can be recorded as submitted while the client's 3-business-day cancellation period runs (15 U.S.C.
+ * § 1679d(a)(2)), and nothing in the app can date a signature in the past. So, after checking that the app refuses,
+ * the test client's agreements are dated 10 days back directly in the database the server uses: E2E_DATABASE_URL, or
+ * DATABASE_URL (from the environment, or read from .env.local as the dev server does).
+ */
+function e2eDatabaseUrl() {
+  if (!process.env.E2E_DATABASE_URL && !process.env.DATABASE_URL && fs.existsSync('.env.local')) process.loadEnvFile('.env.local');
+  const url = process.env.E2E_DATABASE_URL || process.env.DATABASE_URL;
+  if (!url) throw new Error('Set E2E_DATABASE_URL to the database the server under test uses (needed to date the test agreements before the cancellation period)');
+  return url;
+}
+async function backdateAgreements(clientId, days = 10) {
+  const db = new PgClient({ connectionString: e2eDatabaseUrl() });
+  await db.connect();
+  try {
+    // The days stored with each signature move back with it: the day the client signed (the paper's date) and the last day
+    // of the cancellation period fixed when the agreement was signed, which a recount never shortens.
+    const r = await db.query("update public.client_consents set signed_at = signed_at - make_interval(days => $2::int), signed_on = signed_on - $2::int, cancellation_ends_on = cancellation_ends_on - $2::int where client_id = $1", [clientId, days]);
+    if (!r.rowCount) throw new Error('no agreements found to date back');
+  } finally { await db.end(); }
+}
 const isoDaysAgo = (n) => new Date(Date.now() - n * 86400000).toISOString().slice(0, 10);
 const usDate = (iso) => new Date(`${iso}T00:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
 
@@ -84,9 +108,18 @@ async function signUpAgency(browser, label) {
   console.log(`\nDispute workflow (synthetic data) → ${BASE}\n`);
   try {
     let staff, staffCtx;
-    await check('an agency signs up with two-step verification and onboards a client with consents', async () => {
+    await check('an agency signs up with two-step verification, saves its client agreement terms and onboards a client with consents', async () => {
       ({ ctx: staffCtx, p: staff } = await signUpAgency(browser, 'Alpha'));
-      await staff.goto(BASE + '/app/clients/new');
+      // The service agreement is built from the agency's own terms (Settings → Client agreement); none, no contract.
+      await staff.goto(BASE + '/app/settings#agreement');
+      await staff.getByLabel('Principal business address').fill('700 Sample Road, Suite 4, Tampa, FL 33602');
+      await staff.locator('textarea[name=services]').fill('We review your credit reports with you, prepare dispute letters for the items you choose, follow each investigation and report every response in your portal.');
+      await staff.locator('textarea[name=paymentTerms]').fill('A monthly fee, charged after the work of each month is fully performed.');
+      await staff.getByLabel('Total of all payments (USD)').fill('450.00');
+      await staff.getByLabel('How long the services should take').fill('About 5 months from the date you sign.');
+      await staff.getByRole('button', { name: 'Save client agreement' }).click();
+      await see(staff, 'Client agreement saved');
+      await staff.goto(BASE + '/app/clients/new?manual=1'); // the full form; New client itself opens on the quick invite
       await staff.getByLabel('Full legal name').fill('Workflow Client');
       await staff.getByLabel('Email', { exact: true }).fill(`wf-client-${uniq}@example.test`);
       await staff.getByLabel('Street').fill('700 Sample Road'); await staff.getByLabel('City').fill('Tampa');
@@ -95,6 +128,8 @@ async function signUpAgency(browser, label) {
       await staff.getByLabel('Date of birth').fill('1985-03-03'); await staff.getByLabel('Social Security number').fill('000-00-4321');
       await staff.check('input[name=consentDisclosure]'); await staff.check('input[name=consentContract]'); await staff.check('input[name=consentAuthorization]');
       await staff.getByLabel('Name the client signed with').fill('Workflow Client');
+      // Paper signatures are recorded with the date written on the paper (today, in UTC: never in the future for the app).
+      await staff.getByLabel('Date written on the signed paper').fill(isoDaysAgo(0));
       await staff.getByRole('button', { name: 'Create client' }).click();
       await staff.waitForURL(/\/app\/clients\/[0-9a-f-]{36}$/);
       clientUrl = staff.url();
@@ -164,6 +199,13 @@ async function signUpAgency(browser, label) {
       if (dl.status() !== 200 || !(await dl.body()).subarray(0, 5).toString().startsWith('%PDF')) throw new Error('approved letter PDF not available');
     });
 
+    await check('nothing is recorded as sent while the client can still cancel; once the period is over it can be', async () => {
+      await staff.goto(disputeUrl);
+      await see(staff, 'can cancel their service agreement without penalty through');
+      if (await staff.getByRole('button', { name: 'Record submission' }).count()) throw new Error('submission offered inside the cancellation period');
+      await backdateAgreements(clientUrl.split('/').pop()); // the agreements were signed 10 days ago: the period is over
+    });
+
     await check('delivery is recorded with method, sent date and tracking, and shown as a staff record — not carrier-confirmed', async () => {
       await staff.goto(disputeUrl);
       await staff.getByLabel('How was it sent?').selectOption('first_class_mail');
@@ -202,16 +244,19 @@ async function signUpAgency(browser, label) {
     let client, clientCtx;
     await check('the client is invited, signs in to the portal and sees the outcome and the delivery record in plain language', async () => {
       await staff.goto(clientUrl);
-      await staff.getByRole('button', { name: /Invite to client portal/ }).click();
+      await staff.getByRole('button', { name: 'Copy welcome link' }).click();
       await see(staff, 'Share this one-time link');
       inviteLink = ((await staff.locator('main').innerText()).match(/https?:\/\/\S+\/invite\/\S+/) || [])[0];
-      if (!inviteLink) throw new Error('no invite link shown');
+      if (!inviteLink) throw new Error('no welcome link shown');
       clientCtx = await browser.newContext({ viewport: { width: 390, height: 844 }, extraHTTPHeaders: ip() });
       client = await clientCtx.newPage(); watch(client, 'client');
       await client.goto(inviteLink.replace(/^https?:\/\/[^/]+/, BASE));
       await client.getByLabel(/^Password/).fill(PASSWORD);
+      await client.getByLabel('Confirm password').fill(PASSWORD);
       await client.getByRole('button', { name: 'Accept invitation' }).click();
-      await client.waitForURL('**/portal', { timeout: 15000 });
+      await client.waitForURL('**/portal/welcome', { timeout: 15000 }); // a new client starts in the guided welcome
+      await see(client, 'Welcome, Workflow');
+      await client.goto(BASE + '/portal');
       await see(client, 'Hello, Workflow');
       await client.goto(BASE + '/portal/disputes');
       await see(client, 'SYNTHETIC BANK NA'); await see(client, 'Corrected'); await see(client, 'cannot guarantee any result');
@@ -225,6 +270,8 @@ async function signUpAgency(browser, label) {
       await staff.goto(clientUrl + '?tab=messages');
       await staff.getByLabel('Message').fill('Synthetic update: Experian replied and updated the balance on this account.');
       await staff.getByRole('button', { name: 'Send' }).click();
+      // Wait until the message is saved before the client opens the portal: the page is read once, not reloaded.
+      await see(staff, 'Message sent to the client portal');
       await client.goto(BASE + '/portal');
       await see(client, 'Synthetic update: Experian replied and updated the balance');
       await client.goto(BASE + '/portal/messages');

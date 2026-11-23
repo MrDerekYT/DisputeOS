@@ -35,31 +35,69 @@ export const daysBetween = (from: Day, to: Day) => Math.round((utc(to).getTime()
 // ---------------------------------------------------------------- business days
 
 /**
- * US federal legal public holidays (5 U.S.C. § 6103), on the day they are observed: a holiday on a Saturday is observed
- * the Friday before, one on a Sunday the Monday after. Source: U.S. Office of Personnel Management, "Federal Holidays",
- * https://www.opm.gov/policy-data-oversight/pay-leave/federal-holidays/ — the unit test rebuilds every date from the
- * statutory rules and compares. Inauguration Day (Washington, DC area only) is left out.
+ * US federal legal public holidays, computed for any year from the rules of 5 U.S.C. § 6103(a), each on the day it is
+ * observed: a holiday on a Saturday is observed the Friday before, one on a Sunday the Monday after (§ 6103(b) and
+ * Executive Order 11582, as the U.S. Office of Personnel Management lists them:
+ * https://www.opm.gov/policy-data-oversight/pay-leave/federal-holidays/). So a New Year's Day on a Saturday is observed
+ * on December 31 of the year before, and counts in that year. The unit test compares the result with OPM's published
+ * dates and with a second, independent reading of the rules. Inauguration Day (Washington, DC area only) is left out.
+ *
+ * The rules are today's. The two holidays added most recently count from their first year: Martin Luther King, Jr.'s
+ * Birthday from 1986 and Juneteenth from 2021 (Pub. L. 117-17). Changes before 1986 (for example Veterans Day on a
+ * Monday in October, 1971 to 1977) are not modelled: the app counts business days around recent dates only.
  *
  * § 1681i does not define "business day". Weekends and these holidays are skipped, which can only make a computed
  * deadline later, never earlier.
  */
-export const FEDERAL_HOLIDAYS: Record<number, Day[]> = {
-  2025: ['2025-01-01', '2025-01-20', '2025-02-17', '2025-05-26', '2025-06-19', '2025-07-04', '2025-09-01', '2025-10-13', '2025-11-11', '2025-11-27', '2025-12-25'],
-  2026: ['2026-01-01', '2026-01-19', '2026-02-16', '2026-05-25', '2026-06-19', '2026-07-03', '2026-09-07', '2026-10-12', '2026-11-11', '2026-11-26', '2026-12-25'],
-  2027: ['2027-01-01', '2027-01-18', '2027-02-15', '2027-05-31', '2027-06-18', '2027-07-05', '2027-09-06', '2027-10-11', '2027-11-11', '2027-11-25', '2027-12-24', '2027-12-31'],
-  2028: ['2028-01-17', '2028-02-21', '2028-05-29', '2028-06-19', '2028-07-04', '2028-09-04', '2028-10-09', '2028-11-10', '2028-11-23', '2028-12-25'],
-  2029: ['2029-01-01', '2029-01-15', '2029-02-19', '2029-05-28', '2029-06-19', '2029-07-04', '2029-09-03', '2029-10-08', '2029-11-12', '2029-11-22', '2029-12-25'],
-  2030: ['2030-01-01', '2030-01-21', '2030-02-18', '2030-05-27', '2030-06-19', '2030-07-04', '2030-09-02', '2030-10-14', '2030-11-11', '2030-11-28', '2030-12-25'],
-};
-/** The last year the table covers. After it only weekends are skipped, and holidayTableCovers() says so. */
-export const HOLIDAYS_THROUGH = 2030;
-const HOLIDAY_SET = new Set(Object.values(FEDERAL_HOLIDAYS).flat());
+const ymd = (y: number, m: number, d: number): Day => new Date(Date.UTC(y, m - 1, d)).toISOString().slice(0, 10);
+const weekdayOf = (y: number, m: number, d: number) => new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+
+/** The n-th `weekday` (0 = Sunday) of month `m` (1–12); n = -1 for the last one. */
+function nthWeekday(y: number, m: number, weekday: number, n: number): Day {
+  if (n > 0) return ymd(y, m, 1 + ((weekday - weekdayOf(y, m, 1) + 7) % 7) + (n - 1) * 7);
+  const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  return ymd(y, m, last - ((weekdayOf(y, m, last) - weekday + 7) % 7));
+}
+
+/** A holiday on a fixed date, on the day it is observed: a Saturday moves to the Friday before, a Sunday to the Monday after. */
+function observedDay(y: number, m: number, d: number): Day {
+  const w = weekdayOf(y, m, d);
+  return ymd(y, m, d + (w === 6 ? -1 : w === 0 ? 1 : 0));
+}
+
+/** The § 6103(a) holidays of year `y` on their observed days (a New Year's Day may move back into the year before). */
+function holidaysOfYear(y: number): Day[] {
+  return [
+    observedDay(y, 1, 1), // New Year's Day
+    ...(y >= 1986 ? [nthWeekday(y, 1, 1, 3)] : []), // Birthday of Martin Luther King, Jr.: third Monday in January
+    nthWeekday(y, 2, 1, 3), // Washington's Birthday: third Monday in February
+    nthWeekday(y, 5, 1, -1), // Memorial Day: last Monday in May
+    ...(y >= 2021 ? [observedDay(y, 6, 19)] : []), // Juneteenth National Independence Day
+    observedDay(y, 7, 4), // Independence Day
+    nthWeekday(y, 9, 1, 1), // Labor Day: first Monday in September
+    nthWeekday(y, 10, 1, 2), // Columbus Day: second Monday in October
+    observedDay(y, 11, 11), // Veterans Day
+    nthWeekday(y, 11, 4, 4), // Thanksgiving Day: fourth Thursday in November
+    observedDay(y, 12, 25), // Christmas Day
+  ];
+}
+
+/** Every federal holiday observed during calendar year `y`, in date order, including the next New Year's Day when it is observed on December 31. */
+export function federalHolidays(y: number): Day[] {
+  return [...new Set([...holidaysOfYear(y), ...holidaysOfYear(y + 1)])].filter((d) => d.startsWith(`${y}-`)).sort();
+}
+
+const OBSERVED = new Map<number, ReadonlySet<Day>>();
+/** True on a day a federal holiday is observed, in any year. */
+export function isFederalHoliday(day: Day): boolean {
+  const y = Number(day.slice(0, 4));
+  let days = OBSERVED.get(y);
+  if (!days) OBSERVED.set(y, (days = new Set(federalHolidays(y))));
+  return days.has(day);
+}
 
 export const isWeekend = (day: Day) => { const w = utc(day).getUTCDay(); return w === 0 || w === 6; };
-export const isFederalHoliday = (day: Day) => HOLIDAY_SET.has(day);
 export const isBusinessDay = (day: Day) => !isWeekend(day) && !isFederalHoliday(day);
-/** False when a date falls after the holiday table ends, so the caller can say holidays were not counted. */
-export const holidayTableCovers = (day: Day) => Number(day.slice(0, 4)) <= HOLIDAYS_THROUGH;
 
 /** The n-th business day after `day`. The starting day itself is never counted. */
 export function addBusinessDays(day: Day, n: number): Day {
@@ -169,7 +207,7 @@ export function disputeClock(i: ClockInput, today: Day): ClockRow[] {
     const d = resultsNoticeDue(i.completedOn);
     rows.push({
       key: 'results', label: 'Written results due', cite: '§ 1681i(a)(6)(A)', date: d, state: answered ? 'done' : d < today ? 'passed' : 'ahead',
-      note: `5 business days after the agency completed its reinvestigation on ${sayDay(i.completedOn)}${holidayTableCovers(d) ? '' : ` (federal holidays after ${HOLIDAYS_THROUGH} are not counted)`}.`,
+      note: `5 business days after the agency completed its reinvestigation on ${sayDay(i.completedOn)}.`,
     });
   }
   const p = i.procedure;

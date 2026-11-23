@@ -10,6 +10,7 @@ import { sha256Hex } from '@/lib/crypto';
 import { logEvent } from '@/lib/crm';
 import { parseReportText, parseTradelineCsv, parseMoneyToCents, normalizeDate } from '@/lib/reports/parser';
 import { pdfToText, PdfTextError } from '@/lib/reports/pdf-text';
+import { staffReportRefusal } from '@/lib/credit/authorization';
 import { requestReportPull } from '@/lib/credit/pull';
 import { decideReport, regenerateFindings, ReportError, storeParsedReport } from '@/lib/reports/service';
 import type { ParsedReport } from '@/lib/reports/types';
@@ -21,6 +22,10 @@ export async function uploadReportAction(_: ActionState, fd: FormData): Promise<
   const ctx = await requireStaff('reports:write');
   return run(async () => {
     const d = parseForm(z.object({ clientId: zUuid, bureau: z.enum(BUREAUS).optional().or(z.literal('')) }), fd);
+    // A report staff add needs the client's written authorization on file (src/lib/credit/authorization.ts); checked
+    // before the file is read or stored, and again in the transaction that records it.
+    const refused = await ctx.tx((db) => staffReportRefusal(db, d.clientId));
+    if (refused) throw new UserError(refused);
     let up;
     try { up = await readUpload(fd.get('file') as File | null, ['application/pdf', 'text/plain', 'text/html', 'text/csv']); }
     catch (e) { if (e instanceof UploadError) throw new UserError(e.message); throw e; }
@@ -41,6 +46,8 @@ export async function uploadReportAction(_: ActionState, fd: FormData): Promise<
     let firstId = '';
     try {
       await ctx.tx(async (db) => {
+        const again = await staffReportRefusal(db, d.clientId);
+        if (again) throw new UserError(again);
         const doc = await db.row<{ id: string }>(
           `insert into public.documents (org_id, client_id, kind, file_name, mime_type, size_bytes, sha256, storage_key, uploaded_by, source, review_status)
            values ($1,$2,'credit_report',$3,$4,$5,$6,$7,$8,'staff','accepted') returning id`, [ctx.orgId, d.clientId, up.name, up.mime, up.bytes.length, sha256Hex(up.bytes), key, ctx.userId]);
@@ -60,6 +67,8 @@ export async function uploadReportAction(_: ActionState, fd: FormData): Promise<
  * Reads a file that is already in the client's vault as a credit report — typically the free report the client
  * downloaded from AnnualCreditReport.com and uploaded through the portal. Nothing is re-uploaded. The result lands in
  * the same review queue as any other import: a person checks it against the original and approves it before use.
+ * A file the client uploaded can be read at any time; one staff uploaded needs the client's written authorization on
+ * file, like any report staff add (src/lib/credit/authorization.ts).
  */
 export async function importDocumentAsReportAction(_: ActionState, fd: FormData): Promise<ActionState> {
   const ctx = await requireStaff('reports:write');
@@ -68,11 +77,13 @@ export async function importDocumentAsReportAction(_: ActionState, fd: FormData)
     const USED = 'This file has already been read as a report. Open it from the Reports tab.';
     const REJECTED = 'This document was rejected, so it cannot be read as a report.';
     // Only a document filed as a credit report qualifies; the button is shown for those only, and the same rule applies here.
-    const doc = await ctx.tx((db) => db.row<{ id: string; mime_type: string; storage_key: string; review_status: string; used: boolean }>(
-      "select d.id, d.mime_type, d.storage_key, d.review_status, exists (select 1 from public.credit_reports r where r.document_id = d.id) as used from public.documents d where d.id = $1 and d.client_id = $2 and d.kind = 'credit_report'", [d.id, d.clientId]));
+    const doc = await ctx.tx((db) => db.row<{ id: string; mime_type: string; storage_key: string; review_status: string; used: boolean; source: string }>(
+      "select d.id, d.mime_type, d.storage_key, d.review_status, d.source, exists (select 1 from public.credit_reports r where r.document_id = d.id) as used from public.documents d where d.id = $1 and d.client_id = $2 and d.kind = 'credit_report'", [d.id, d.clientId]));
     if (!doc) throw new UserError('Document not found.');
     if (doc.review_status === 'rejected') throw new UserError(REJECTED);
     if (doc.used) throw new UserError(USED);
+    const byStaff = doc.source !== 'client';
+    if (byStaff) { const refused = await ctx.tx((db) => staffReportRefusal(db, d.clientId)); if (refused) throw new UserError(refused); }
     if (!['application/pdf', 'text/plain', 'text/html', 'text/csv'].includes(doc.mime_type)) throw new UserError('Only a PDF, text, HTML or CSV file can be read as a report. A photo or scan cannot be read automatically.');
     const bytes = await getObject(doc.storage_key);
     let parsed: ParsedReport;
@@ -95,6 +106,7 @@ export async function importDocumentAsReportAction(_: ActionState, fd: FormData)
         if (!cur) throw new UserError('Document not found.');
         if (cur.review_status === 'rejected') throw new UserError(REJECTED);
         if (cur.used) throw new UserError(USED);
+        if (byStaff) { const again = await staffReportRefusal(db, d.clientId); if (again) throw new UserError(again); }
         if (cur.review_status !== 'accepted') {
           await db.run("update public.documents set review_status = 'accepted' where id = $1", [doc.id]);
           await logEvent(db, ctx, d.clientId, 'document_reviewed', 'Document accepted (read as credit report)');

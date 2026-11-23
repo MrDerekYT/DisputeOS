@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { chargeEligibility, TSR_CAUTION, type ChargeInput } from '@/lib/billing/eligibility';
-import { addBusinessDays, cancellationEndsOn, FEDERAL_HOLIDAYS, isBusinessDay, isMonth, monthRange, monthsBack } from '@/lib/business-days';
+import { addBusinessDays, cancellationEndsOn, federalHolidays, isBusinessDay, isFederalHoliday, isMonth, monthRange, monthsBack } from '@/lib/business-days';
 import * as clock from '@/lib/disputes/clock';
 import { findBlockedClaims } from '@/lib/compliance/claims';
 
 describe('business days (shared module)', () => {
-  it('is the dispute clock’s table and helpers, not a second copy', () => {
-    expect(FEDERAL_HOLIDAYS).toBe(clock.FEDERAL_HOLIDAYS);
+  it('is the dispute clock’s holiday rule and helpers, not a second copy', () => {
+    expect(federalHolidays).toBe(clock.federalHolidays);
+    expect(isFederalHoliday).toBe(clock.isFederalHoliday);
     expect(addBusinessDays).toBe(clock.addBusinessDays);
   });
   it('skips weekends and observed federal holidays', () => {
@@ -34,6 +35,10 @@ describe('cancellation period: 3 business days after signing (15 U.S.C. § 1679e
     ['2026-11-24', '2026-11-30', 'Tuesday before Thanksgiving: the holiday and the weekend are skipped'],
     ['2026-12-31', '2027-01-06', 'New Year’s Eve: New Year’s Day and the weekend are skipped'],
     ['2026-07-01', '2026-07-07', 'Independence Day observed on Friday July 3'],
+    // LEG-16: holidays are computed by rule, so they still count after 2030 (the old table ended there).
+    ['2030-12-27', '2031-01-02', 'Friday before New Year’s Day 2031: the weekend and the holiday are skipped'],
+    ['2031-11-26', '2031-12-02', 'Wednesday before Thanksgiving 2031: the holiday and the weekend are skipped'],
+    ['2032-12-29', '2033-01-04', 'New Year’s Day 2033 is a Saturday, observed on Friday December 31, 2032'],
   ])('signed %s → last day to cancel %s (%s)', (signed, ends) => {
     expect(cancellationEndsOn(signed)).toBe(ends);
   });

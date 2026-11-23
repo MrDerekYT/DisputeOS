@@ -8,26 +8,28 @@ import { parseForm, run, UserError, zBool, zDate, zOpt, zText, zUuid } from '@/l
 import { audit } from '@/lib/audit';
 import { loadDisputeCounts, polishedProgress } from '@/lib/ai/assistant';
 import { AI_OFF, notChargedNote, withAiCredits } from '@/lib/ai/credits';
-import { requireStaff, type Ctx } from '@/lib/auth/context';
-import { rateLimit } from '@/lib/auth/rate-limit';
+import { requireStaff } from '@/lib/auth/context';
 import { createInviteToken } from '@/lib/auth/service';
 import { fireTrigger } from '@/lib/automation/engine';
-import { consentDoc, type ConsentKind } from '@/lib/compliance/disclosures';
+import { AgreementError, deletionBlock, notReadyMessage, signAgreement } from '@/lib/agreements';
+import { clientTermsIssue, dollars, parseDollars } from '@/lib/compliance/agreement-terms';
+import { CONSENT_KINDS, type ConsentKind } from '@/lib/compliance/disclosures';
+import { staffReportRefusal } from '@/lib/credit/authorization';
 import { DOC_KINDS, CLIENT_STAGES, CLIENT_STATUSES, logEvent } from '@/lib/crm';
 import { intakeSummary } from '@/lib/intake';
 import { loadIntake } from '@/lib/intake-load';
 import { encryptPII } from '@/lib/crypto';
 import { getEnv } from '@/lib/env';
-import { greetingName } from '@/lib/lead-emails';
-import { emailIsLive } from '@/lib/lead-outreach';
 import { delivers, sendEmail } from '@/lib/mailer';
-import { APPROVAL_COLS, outreachApproved, type ApprovalRow } from '@/lib/outreach-approval';
 import { deleteObject, putObject } from '@/lib/storage';
 import { readUpload, UploadError } from '@/lib/upload';
 import { sha256Hex } from '@/lib/crypto';
-import { portalLoginPath } from '@/lib/org-brand';
 import { PRODUCT } from '@/lib/product';
 import { dayBucket, hourBucket, queueClientUpdate } from '@/lib/client-updates/service';
+import { isRealDay } from '@/lib/real-day';
+import { holdUnapprovedEmail } from '@/lib/staff-email';
+import { expireWelcomeLinks, portalSignInUrl, welcomeEmail, welcomeEmailIssue } from '@/lib/welcome-link';
+import { emailWelcomeLinkAction } from './welcome-actions';
 
 /** What staff are told when the email service gave no answer: the email may have gone out, so it is not simply "failed". */
 const UNANSWERED = 'The email service did not answer, so it may or may not have arrived.';
@@ -46,40 +48,38 @@ const profileShape = {
   line1: zOpt(120), line2: zOpt(120), city: zOpt(80),
   state: z.string().trim().toUpperCase().regex(/^[A-Z]{2}$/, 'Use a two-letter state code').optional().or(z.literal('')),
   zip: z.string().trim().regex(/^\d{5}(-\d{4})?$/, 'Use a 5-digit ZIP').optional().or(z.literal('')),
-  dob: zDate.optional().or(z.literal('')),
+  // A day that exists: 2000-02-31 would otherwise be stored and printed in bureau letters as 2 March 2000.
+  dob: zDate.refine(isRealDay, 'Enter a real date of birth').optional().or(z.literal('')),
   ssn: z.string().trim().regex(/^(\d{3}-?\d{2}-?\d{4})?$/, 'SSN must be 9 digits').optional(),
   assignedTo: zUuid.optional().or(z.literal('')),
   tags: zOpt(200),
 };
-
-/**
- * Staff email to an address on a client or lead record (the portal invitation, a message, a new client with the
- * invitation box ticked) leaves through the deployment's one email service, and the address may be one a stranger
- * typed into the public enquiry form. Until the platform operator has approved the workspace (src/lib/outreach-approval.ts),
- * those three share a limit of UNAPPROVED_EMAILS_PER_HOUR for the whole workspace; an approved workspace has none.
- * Counted only while email is connected, since nothing leaves otherwise. Call before anything is created or sent, and
- * outside a transaction: the counter has a connection of its own.
- */
-const UNAPPROVED_EMAILS_PER_HOUR = 50;
-async function holdUnapprovedEmail(ctx: Pick<Ctx, 'orgId' | 'tx'>): Promise<void> {
-  if (!emailIsLive()) return;
-  if (outreachApproved(await ctx.tx((db) => db.row<ApprovalRow>(`select ${APPROVAL_COLS} from public.organizations where id = $1`, [ctx.orgId])))) return;
-  const limit = await rateLimit(`staff-email:org:${ctx.orgId}`, UNAPPROVED_EMAILS_PER_HOUR, 3600);
-  if (!limit.allowed) throw new UserError(`This workspace can send ${UNAPPROVED_EMAILS_PER_HOUR} emails an hour until the platform operator has approved it. Try again later.`);
-}
 
 function addressOf(d: { line1?: string; line2?: string; city?: string; state?: string; zip?: string }) {
   return { line1: d.line1 ?? '', line2: d.line2 ?? '', city: d.city ?? '', state: d.state ?? '', zip: d.zip ?? '' };
 }
 const tagsOf = (t?: string) => (t ? t.split(',').map((x) => x.trim().toLowerCase()).filter(Boolean).slice(0, 10) : []);
 
-async function recordConsent(db: Parameters<Parameters<Awaited<ReturnType<typeof requireStaff>>['tx']>[0]>[0], ctx: Awaited<ReturnType<typeof requireStaff>>, clientId: string, kind: ConsentKind, signedName: string) {
-  const doc = consentDoc(kind);
-  await db.run(
-    `insert into public.client_consents (org_id, client_id, kind, version, signed_name, ip, user_agent) values ($1, $2, $3, $4, $5, $6, $7)`,
-    [ctx.orgId, clientId, kind, `${doc.version}:${sha256Hex(doc.text).slice(0, 12)}`, signedName, ctx.meta.ip ?? null, ctx.meta.userAgent?.slice(0, 300) ?? null],
-  );
-  await logEvent(db, ctx, clientId, 'consent', `${doc.title} recorded`, { kind });
+type StaffCtx = Awaited<ReturnType<typeof requireStaff>>;
+type TxDb = Parameters<Parameters<StaffCtx['tx']>[0]>[0];
+
+/**
+ * A signature the client gave on paper, recorded by staff, with the date written on the paper. It stores the app's
+ * text of the document on the recording day (with its hash), dated with the date on the paper, not a copy of the paper,
+ * and the staff member who recorded it; the order rule and the need for saved agreement terms apply as they do in the
+ * portal (src/lib/agreements.ts), except that paper needs no consent to electronic records (staff never record that one).
+ * In a personal workspace it is the account holder's own consent, given in the app that day: no paper and no paper date.
+ * The refusal while the agency's terms are not saved says who can save them, and on New client how to go on without.
+ */
+async function recordConsent(db: TxDb, ctx: StaffCtx, clientId: string, kind: ConsentKind, signedName: string, paperSignedOn: string | undefined, onNewClient = false) {
+  try {
+    const { rendered, source, signedOn } = await signAgreement(db, { orgId: ctx.orgId, clientId, userId: ctx.userId, ip: ctx.meta.ip, userAgent: ctx.meta.userAgent, by: 'staff' }, { kind, signedName, lang: 'en', paperSignedOn });
+    if (source === 'self') await logEvent(db, ctx, clientId, 'consent', `${rendered.doc.title} given by the account holder`, { kind });
+    else await logEvent(db, ctx, clientId, 'consent', `${rendered.doc.title} recorded (signed on paper on ${signedOn})`, { kind, paper_signed_on: signedOn });
+  } catch (e) {
+    if (e instanceof AgreementError && e.code === 'not_ready') throw new UserError(notReadyMessage(ctx.can('settings:manage'), onNewClient));
+    throw e;
+  }
 }
 
 // ---------------------------------------------------------------- create / edit
@@ -93,15 +93,19 @@ export async function createClientAction(_: ActionState, fd: FormData): Promise<
         status: z.enum(CLIENT_STATUSES).default('onboarding'),
         consentDisclosure: zBool, consentContract: zBool, consentAuthorization: zBool,
         signedName: zOpt(160),
+        // The date written on the signed paper (checked in src/lib/agreements.ts: a real day, not in the future, not over a year back).
+        paperSignedOn: zOpt(10),
         invite: zBool,
       }),
       fd,
     );
+    // Recorded in signing order, so ticking all three works; a later one ticked without the one before it is refused.
     const consents: ConsentKind[] = [];
     if (d.consentDisclosure) consents.push('croa_disclosure');
     if (d.consentContract) consents.push('croa_contract');
     if (d.consentAuthorization) consents.push('fcra_authorization');
     if (consents.length && !d.signedName) throw new UserError('Enter the name the client signed with to record consents.');
+    if (consents.length && !d.paperSignedOn) throw new UserError('Enter the date written on the signed paper to record consents.');
     if (d.invite && !d.email) throw new UserError('An email address is required to invite the client to the portal.');
     if (d.assignedTo && !ctx.can('clients:assign') && d.assignedTo !== ctx.userId) throw new UserError('You can only assign clients to yourself.');
     if (d.invite && d.email) await holdUnapprovedEmail(ctx);
@@ -118,7 +122,12 @@ export async function createClientAction(_: ActionState, fd: FormData): Promise<
       );
       newId = c!.id;
       await logEvent(db, ctx, newId, 'client_created', 'Client created');
-      for (const k of consents) await recordConsent(db, ctx, newId, k, d.signedName!);
+      try {
+        for (const k of consents) await recordConsent(db, ctx, newId, k, d.signedName!, d.paperSignedOn, true);
+      } catch (e) {
+        if (e instanceof AgreementError && e.code === 'order') throw new UserError('Tick the Consumer Credit File Rights disclosure before the service agreement, and the service agreement before the authorization: they are signed in that order.');
+        throw e;
+      }
       if (d.invite && d.email) {
         const token = await createInviteToken(db, { orgId: ctx.orgId, email: d.email, role: 'client', clientId: newId, invitedBy: ctx.userId });
         inviteLink = `${getEnv().APP_URL}/invite/${token}`;
@@ -129,12 +138,11 @@ export async function createClientAction(_: ActionState, fd: FormData): Promise<
     });
     revalidatePath('/app/clients');
     if (inviteLink && d.email) {
-      const name = greetingName(d.fullName);
-      const sent = await sendEmail({
-        to: d.email,
-        subject: `${ctx.session.orgName}: your secure client portal`,
-        text: `Hello${name ? ` ${name}` : ''},\n\n${ctx.session.orgName} has invited you to your secure client portal, where you can see progress, upload documents and message your specialist.\n\nCreate your account: ${inviteLink}\n\nThis link expires in 7 days.`,
-      });
+      const mail = welcomeEmail({ lang: d.preferredLanguage, fullName: d.fullName, orgName: ctx.session.orgName, link: inviteLink, signIn: portalSignInUrl({ mode: ctx.session.orgMode, slug: ctx.session.orgSlug }, d.preferredLanguage) });
+      const issue = welcomeEmailIssue(mail);
+      if (issue) return { ok: `Client created, but the invitation email was not sent: ${issue}. Share this one-time invitation link with the client instead: ${inviteLink} — then open the client from the Clients list.` };
+      const replyTo = await ctx.tx((db) => db.row<{ r: string | null }>("select nullif(trim(settings->>'lead_reply_email'), '') as r from public.organizations where id = $1", [ctx.orgId]));
+      const sent = await sendEmail({ to: d.email, ...mail, fromName: ctx.session.orgName, ...(replyTo?.r ? { replyTo: replyTo.r } : {}) });
       if (!delivers(sent)) {
         return { ok: `Client created, but email delivery is not configured. Share this one-time invitation link with the client: ${inviteLink} — then open the client from the Clients list.` };
       }
@@ -160,9 +168,18 @@ export async function updateClientAction(_: ActionState, fd: FormData): Promise<
     );
     if (d.assignedTo && !ctx.can('clients:assign') && d.assignedTo !== ctx.userId) throw new UserError('You do not have permission to reassign clients.');
     const ssn = d.ssn?.replace(/\D/g, '') ?? '';
+    let linksEnded = 0;
     await ctx.tx(async (db) => {
-      const before = await db.row<{ status: string; stage: string; assigned_to: string | null }>('select status, stage, assigned_to from public.clients where id = $1', [d.id]);
+      const before = await db.row<{ status: string; stage: string; assigned_to: string | null; email: string | null }>('select status, stage, assigned_to, email from public.clients where id = $1', [d.id]);
       if (!before) throw new UserError('Client not found.');
+      // A welcome link sent to the old (perhaps mistyped) address must not stay usable once the email changes or is
+      // cleared: whoever reads that mailbox could otherwise become this client's portal account. The client is sent a
+      // new link to the new address. Same transaction, so the change and the end of the old links go together.
+      const was = (before.email ?? '').trim().toLowerCase();
+      if (was !== (d.email ?? '')) {
+        linksEnded = await expireWelcomeLinks(db, d.id);
+        if (linksEnded) await logEvent(db, ctx, d.id, 'portal_invite_ended', 'Unused welcome link ended because the client’s email changed');
+      }
       await db.run(
         `update public.clients set full_name = $2, email = $3, phone = $4, preferred_language = $5, source = $6, goals = $7, address = $8,
                 status = $9, stage = $10, assigned_to = $11, tags = $12,
@@ -176,10 +193,10 @@ export async function updateClientAction(_: ActionState, fd: FormData): Promise<
       if (before.status !== d.status) await logEvent(db, ctx, d.id, 'status_changed', `Status changed: ${before.status} → ${d.status}`);
       if (before.stage !== d.stage) await logEvent(db, ctx, d.id, 'stage_changed', `Stage changed: ${before.stage} → ${d.stage}`);
       if (before.assigned_to !== (d.assignedTo || null) && ctx.can('clients:assign')) await logEvent(db, ctx, d.id, 'assigned', 'Specialist assignment changed');
-      await audit(db, { orgId: ctx.orgId, actorId: ctx.userId, action: 'client.updated', entityType: 'client', entityId: d.id, ip: ctx.meta.ip, meta: { fields: 'profile', ssn_changed: !!ssn } });
+      await audit(db, { orgId: ctx.orgId, actorId: ctx.userId, action: 'client.updated', entityType: 'client', entityId: d.id, ip: ctx.meta.ip, meta: { fields: 'profile', ssn_changed: !!ssn, welcome_links_ended: linksEnded } });
     });
     revalidatePath(`/app/clients/${d.id}`);
-    return { ok: 'Client updated.' };
+    return { ok: linksEnded ? 'Client updated. The welcome link sent to the old email no longer works: send a new one from the client page.' : 'Client updated.' };
   });
 }
 
@@ -192,6 +209,9 @@ export async function deleteClientAction(_: ActionState, fd: FormData): Promise<
       const c = await db.row<{ full_name: string }>('select full_name from public.clients where id = $1', [d.id]);
       if (!c) throw new UserError('Client not found.');
       if (d.confirm.trim() !== c.full_name) throw new UserError('Type the client’s full name exactly to confirm deletion.');
+      // 15 U.S.C. § 1679c(c): the signed Consumer Credit File Rights statement is kept 2 years (the database holds the same rule).
+      const keep = await deletionBlock(db, d.id);
+      if (keep) throw new UserError(keep);
       keys.push(...(await db.rows<{ storage_key: string }>('select storage_key from public.documents where client_id = $1', [d.id])).map((r) => r.storage_key));
       await db.run('delete from public.clients where id = $1', [d.id]);
       await audit(db, { orgId: ctx.orgId, actorId: ctx.userId, action: 'client.deleted', entityType: 'client', entityId: d.id, ip: ctx.meta.ip, meta: { documents_removed: keys.length } });
@@ -329,6 +349,9 @@ export async function uploadDocumentAction(_: ActionState, fd: FormData): Promis
   const ctx = await requireStaff('clients:write');
   return run(async () => {
     const d = parseForm(z.object({ clientId: zUuid, kind: z.enum(DOC_KINDS) }), fd);
+    // A credit report staff add needs the client's written authorization on file (src/lib/credit/authorization.ts).
+    const isReport = d.kind === 'credit_report';
+    if (isReport) { const refused = await ctx.tx((db) => staffReportRefusal(db, d.clientId)); if (refused) throw new UserError(refused); }
     let up;
     try {
       up = await readUpload(fd.get('file') as File | null, ['application/pdf', 'image/png', 'image/jpeg', 'text/plain', 'text/csv']);
@@ -339,6 +362,7 @@ export async function uploadDocumentAction(_: ActionState, fd: FormData): Promis
     const key = await putObject(ctx.orgId, d.clientId, up.bytes);
     try {
       await ctx.tx(async (db) => {
+        if (isReport) { const again = await staffReportRefusal(db, d.clientId); if (again) throw new UserError(again); }
         const doc = await db.row<{ id: string }>(
           `insert into public.documents (org_id, client_id, kind, file_name, mime_type, size_bytes, sha256, storage_key, uploaded_by, source, review_status)
            values ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'staff', 'accepted') returning id`,
@@ -425,10 +449,14 @@ export async function requestMissingIntakeAction(_: ActionState, fd: FormData): 
 export async function recordConsentAction(_: ActionState, fd: FormData): Promise<ActionState> {
   const ctx = await requireStaff('clients:write');
   return run(async () => {
-    const d = parseForm(z.object({ clientId: zUuid, kind: z.enum(['croa_disclosure', 'croa_contract', 'fcra_authorization', 'esign', 'communications', 'data_processing']), signedName: zText(160) }), fd);
+    // Every kind is accepted here and judged in signAgreement, which refuses the consent to electronic records (the
+    // client gives that one in the portal) and, in a personal workspace, the two CROA documents.
+    const d = parseForm(z.object({ clientId: zUuid, kind: z.enum(CONSENT_KINDS), signedName: zText(160), paperSignedOn: zOpt(10) }), fd);
+    // In a personal workspace there is no paper: the account holder gives their own consent (signAgreement ignores a date).
+    const personal = ctx.session.orgMode === 'personal';
     await ctx.tx(async (db) => {
-      await recordConsent(db, ctx, d.clientId, d.kind, d.signedName);
-      await audit(db, { orgId: ctx.orgId, actorId: ctx.userId, action: 'consent.recorded', entityType: 'client', entityId: d.clientId, ip: ctx.meta.ip, meta: { kind: d.kind } });
+      await recordConsent(db, ctx, d.clientId, d.kind, d.signedName, personal ? undefined : d.paperSignedOn);
+      await audit(db, { orgId: ctx.orgId, actorId: ctx.userId, action: 'consent.recorded', entityType: 'client', entityId: d.clientId, ip: ctx.meta.ip, meta: { kind: d.kind, paper_signed_on: personal ? null : d.paperSignedOn ?? null } });
     });
     revalidatePath(`/app/clients/${d.clientId}`);
     return { ok: 'Consent recorded.' };
@@ -439,38 +467,68 @@ export async function revokeConsentAction(fd: FormData) {
   const ctx = await requireStaff('clients:write');
   const d = parseForm(z.object({ id: zUuid, clientId: zUuid }), fd);
   await ctx.tx(async (db) => {
-    await db.run('update public.client_consents set revoked_at = now() where id = $1 and revoked_at is null', [d.id]);
+    // revoked_reason tells the client's portal and the staff pages that staff, not the client, revoked it.
+    await db.run("update public.client_consents set revoked_at = now(), revoked_reason = 'staff' where id = $1 and revoked_at is null", [d.id]);
     await logEvent(db, ctx, d.clientId, 'consent_revoked', 'A consent was revoked');
     await audit(db, { orgId: ctx.orgId, actorId: ctx.userId, action: 'consent.revoked', entityType: 'client', entityId: d.clientId, ip: ctx.meta.ip });
   });
   revalidatePath(`/app/clients/${d.clientId}`);
 }
 
-export async function invitePortalAction(_: ActionState, fd: FormData): Promise<ActionState> {
-  const ctx = await requireStaff('clients:write');
+// ---------------------------------------------------------------- this client's own payment terms (15 U.S.C. § 1679d(b)(1))
+const TERMS_LOCKED = 'This client has a service agreement in force, signed with the payment terms and total shown. They cannot be changed while it is in force: revoke it first, then the client signs a new one with the new figures.';
+
+/** Holds the client row for the change and says whether a service agreement is in force (the database refuses the change then, too). */
+async function lockForTerms(db: TxDb, clientId: string): Promise<boolean> {
+  if (!(await db.row('select id from public.clients where id = $1 for update', [clientId]))) throw new UserError('Client not found.');
+  return !!(await db.row("select 1 from public.client_consents where client_id = $1 and kind = 'croa_contract' and revoked_at is null", [clientId]));
+}
+
+/**
+ * This client's own payment terms and total of all payments, for an agency with several plans: the service agreement
+ * the client signs states these instead of the agency's (Settings → Client agreement). Checked as the agency's payment
+ * terms are (no promise of a result, no payment asked for before the work is done); refused while a service agreement
+ * is in force, so the figures on file are the ones that agreement was signed with. Owners, admins and managers, who set
+ * up the client's billing.
+ */
+export async function saveClientTermsAction(_: ActionState, fd: FormData): Promise<ActionState> {
+  const ctx = await requireStaff('billing:write');
+  return run(async () => {
+    if (ctx.session.orgMode === 'personal') throw new UserError('A personal workspace has no service agreement.');
+    const d = parseForm(z.object({ clientId: zUuid, paymentTerms: z.string().trim().max(2000), total: z.string().trim().max(20) }), fd);
+    const totalCents = parseDollars(d.total);
+    if (totalCents === null) throw new UserError('Total of all payments: enter the amount in dollars, for example 594.00.');
+    const terms = { paymentTerms: d.paymentTerms, totalCents };
+    const issue = clientTermsIssue(terms);
+    if (issue) throw new UserError(issue);
+    await ctx.tx(async (db) => {
+      if (await lockForTerms(db, d.clientId)) throw new UserError(TERMS_LOCKED);
+      await db.run('update public.clients set agreement_payment_terms = $2, agreement_total_cents = $3 where id = $1', [d.clientId, terms.paymentTerms, totalCents]);
+      await logEvent(db, ctx, d.clientId, 'agreement_terms', `Own payment terms set for the service agreement (total of all payments ${dollars(totalCents)})`, { total_cents: totalCents });
+      await audit(db, { orgId: ctx.orgId, actorId: ctx.userId, action: 'client.agreement_terms_set', entityType: 'client', entityId: d.clientId, ip: ctx.meta.ip, meta: { total_cents: totalCents } });
+    });
+    revalidatePath(`/app/clients/${d.clientId}`);
+    return { ok: `Saved. This client’s service agreement will state these payment terms and a total of all payments of ${dollars(totalCents)}.` };
+  });
+}
+
+/** Back to the agency's payment terms and total for this client (before they sign). */
+export async function clearClientTermsAction(_: ActionState, fd: FormData): Promise<ActionState> {
+  const ctx = await requireStaff('billing:write');
   return run(async () => {
     const d = parseForm(z.object({ clientId: zUuid }), fd);
-    let link = '';
-    const c = await ctx.tx((db) => db.row<{ email: string | null; full_name: string; portal_user_id: string | null }>('select email, full_name, portal_user_id from public.clients where id = $1', [d.clientId]));
-    if (!c) throw new UserError('Client not found.');
-    if (c.portal_user_id) throw new UserError('This client already has portal access.');
-    if (!c.email) throw new UserError('Add an email address to the client first.');
-    const to = c.email;
-    const first = greetingName(c.full_name);
-    await holdUnapprovedEmail(ctx);
     await ctx.tx(async (db) => {
-      const token = await createInviteToken(db, { orgId: ctx.orgId, email: to, role: 'client', clientId: d.clientId, invitedBy: ctx.userId });
-      link = `${getEnv().APP_URL}/invite/${token}`;
-      await logEvent(db, ctx, d.clientId, 'portal_invited', 'Portal invitation created');
+      if (await lockForTerms(db, d.clientId)) throw new UserError(TERMS_LOCKED);
+      await db.run('update public.clients set agreement_payment_terms = null, agreement_total_cents = null where id = $1', [d.clientId]);
+      await logEvent(db, ctx, d.clientId, 'agreement_terms', 'Own payment terms removed: the service agreement uses the agency’s terms');
+      await audit(db, { orgId: ctx.orgId, actorId: ctx.userId, action: 'client.agreement_terms_cleared', entityType: 'client', entityId: d.clientId, ip: ctx.meta.ip });
     });
-    const signIn = `${getEnv().APP_URL}${ctx.session.orgMode === 'agency' ? portalLoginPath(ctx.session.orgSlug) : '/portal/login'}`;
-    const sent = await sendEmail({
-      to,
-      subject: `${ctx.session.orgName}: your secure client portal`,
-      text: `Hello${first ? ` ${first}` : ''},\n\n${ctx.session.orgName} has set up a secure portal for you. There you can follow each item we work on, upload documents, sign your agreements and message your specialist.\n\nCreate your account (this link expires in 7 days):\n${link}\n\nAfter that, sign in any time at:\n${signIn}\n\nIf you weren't expecting this, you can ignore this email.`,
-    });
-    return !delivers(sent)
-      ? { ok: `Email delivery is not configured. Share this one-time link with the client: ${link}` }
-      : sent.ok ? { ok: `Invitation emailed to ${to}.` } : sent.unconfirmed ? { error: `${UNANSWERED} Ask the client before sending the invitation again.` } : { error: `Could not send the email: ${sent.error}` };
+    revalidatePath(`/app/clients/${d.clientId}`);
+    return { ok: 'This client’s service agreement will use your agency’s payment terms and total (Settings → Client agreement).' };
   });
+}
+
+/** The portal invitation by email: the welcome link (./welcome-actions.ts). Kept under this name for existing callers. */
+export async function invitePortalAction(prev: ActionState, fd: FormData): Promise<ActionState> {
+  return emailWelcomeLinkAction(prev, fd);
 }

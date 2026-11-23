@@ -4,6 +4,7 @@ import { UserError } from '../errors';
 import { can, PermissionError, type Role } from '../rbac';
 import { storeParsedReport } from '../reports/service';
 import { rateLimit } from '../auth/rate-limit';
+import { currentAuthorization } from './authorization';
 import { getProvider } from './providers';
 import { ingestBody, toParsed, type ReportInput } from './schema';
 
@@ -21,7 +22,7 @@ async function requireAuthorization(db: Db, clientId: string): Promise<{ consent
   const client = await db.row<{ full_name: string; address: Record<string, string>; status: string }>('select full_name, address, status from public.clients where id = $1', [clientId]);
   if (!client) throw new CreditError('Client not found.');
   if (client.status === 'cancelled') throw new CreditError('This client is cancelled; reports cannot be imported.');
-  const consent = await db.row<{ id: string }>("select id from public.client_consents where client_id = $1 and kind = 'fcra_authorization' and revoked_at is null order by signed_at desc limit 1", [clientId]);
+  const consent = await currentAuthorization(db, clientId);
   if (!consent) throw new CreditError('Record the client’s written authorization to review their credit reports before importing one automatically.');
   return { consentId: consent.id, client };
 }

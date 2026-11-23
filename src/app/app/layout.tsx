@@ -5,8 +5,8 @@ import { getBalance } from '@/lib/ai/credits';
 import { guideLabels, guideStarters } from '@/lib/guide/labels';
 import { requireStaff } from '@/lib/auth/context';
 
-// Server actions under this layout may wait on an AI provider for up to 30 s (TIMEOUT_MS in src/lib/ai/provider.ts).
-// The host must not stop the request before that call returns and its charge is settled or refunded.
+// Server actions under this layout may wait on an AI provider for up to 45 s, retries included (AI_CALL_DEADLINE_MS
+// in src/lib/ai/provider.ts). The host must not stop the request before that call returns and its charge is settled or refunded.
 export const maxDuration = 60;
 
 export default async function StaffLayout({ children }: { children: ReactNode }) {

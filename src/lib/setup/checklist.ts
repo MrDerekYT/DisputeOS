@@ -3,8 +3,9 @@
  * no database here, so every branch is unit-tested (tests/unit/setup-checklist.test.ts).
  *
  * The snapshot carries only names and present/missing flags. No secret, and no environment variable VALUE, is ever
- * put in it, so nothing here can leak one to the browser. The one deliberate exception is the Twilio webhook address,
- * which is built from APP_URL and has to be shown so it can be pasted into Twilio.
+ * put in it, so nothing here can leak one to the browser. The deliberate exceptions: the Twilio webhook address, which
+ * is built from APP_URL and has to be shown so it can be pasted into Twilio, and the AI provider and model name, which
+ * is not a secret and says which model the connection test proved.
  *
  * A step is `done` only when a real check passed. What cannot be checked from this app (carrier registration, an
  * optional custom domain) is `cannot_check` or `optional` and is never shown with a tick.
@@ -52,9 +53,19 @@ export interface SetupSnapshot {
     webhookSeenAt: string | null;
     testAcceptedAt: string | null;
   };
-  agency: { isAgency: boolean; mailingAddress: boolean; replyEmail: boolean; timezoneChosen: boolean };
+  agency: { isAgency: boolean; mailingAddress: boolean; replyEmail: boolean; timezoneChosen: boolean; agreementTerms: boolean };
   jobs: { cronSecretSet: boolean; lastRunAt: string | null; lastRunOk: boolean };
-  ai: { active: boolean };
+  ai: {
+    /** off: AI_PROVIDER=rules · needs_credentials: a provider is chosen but a variable it needs is missing · connected */
+    state: 'off' | 'needs_credentials' | 'connected';
+    /** The provider and model in use, such as anthropic:claude-opus-5-5 ("rules" when off). Never a key. */
+    provider: string;
+    /** Environment variable names still to set. */
+    missing: string[];
+    /** When the AI connection test on this page last passed, and with which provider and model; null when never, or when the last test failed. */
+    testPassedAt: string | null;
+    testProvider: string | null;
+  };
   now: string;
 }
 
@@ -103,12 +114,37 @@ function textSteps(s: SetupSnapshot['sms']): SetupStep[] {
   ];
 }
 
+/**
+ * AI wording is optional: with AI_PROVIDER=rules nothing depends on it. Once a provider is chosen, the step is to do
+ * until the connection test on this page has passed with the provider and model configured now.
+ */
+function aiStep(ai: SetupSnapshot['ai']): SetupStep {
+  const title = 'AI wording (optional)';
+  if (ai.state === 'off') {
+    return { key: 'ai', title, status: 'optional', missing: ai.missing,
+      detail: 'Not connected, and nothing depends on it: the built-in wording is used. To add it, see “Connect AI” in docs/DEPLOY-VERCEL.md.' };
+  }
+  if (ai.state === 'needs_credentials') {
+    return { key: 'ai', title, status: 'todo', missing: ai.missing,
+      detail: `AI_PROVIDER chooses ${ai.provider}, but a value it needs is not set, so the built-in wording is used. ${HOST_ENV}` };
+  }
+  const proved = !!ai.testPassedAt && ai.testProvider === ai.provider;
+  return { key: 'ai', title, status: proved ? 'done' : 'todo',
+    detail: proved ? `The connection test passed on ${day(ai.testPassedAt!)} with ${ai.provider}. Every AI result is still checked against the facts before it is used, and a workspace needs AI credits to use it.`
+      : ai.testPassedAt && ai.testProvider ? `${ai.provider} is configured now, but the last test passed with ${ai.testProvider}. Test it again.`
+      : `${ai.provider} is configured but has not passed the connection test here yet. The test sends one short fixed request with no client data.` };
+}
+
 function basicSteps(snap: SetupSnapshot): SetupStep[] {
   const { agency: a, jobs: j, ai } = snap;
   const fresh = !!j.lastRunAt && j.lastRunOk && Date.parse(snap.now) - Date.parse(j.lastRunAt) < JOB_FRESH_HOURS * 3_600_000;
   const steps: SetupStep[] = [];
   if (a.isAgency) {
     steps.push(
+      // CROA, 15 U.S.C. § 1679d(b): the contract must state the payment terms and total, the services, the time they take,
+      // and the agency's name and principal business address. Without saved terms no client can sign it.
+      { key: 'agreement_terms', title: 'Client agreement terms', status: a.agreementTerms ? 'done' : 'todo', href: '/app/settings#agreement', hrefLabel: 'Open the client agreement',
+        detail: a.agreementTerms ? 'Saved. Each client signs the service agreement built from them in the welcome steps.' : 'Not saved. New clients cannot sign the service agreement, or have a paper one recorded, so no dispute can be sent for them until your terms are saved. Clients whose agreement is already on file are not affected.' },
       // CAN-SPAM, 15 U.S.C. § 7704(a)(5)(A)(iii): a commercial email must include a valid physical postal address of the sender.
       { key: 'mailing_address', title: 'Mailing address', status: a.mailingAddress ? 'done' : 'todo', href: '/app/leads#follow-up', hrefLabel: 'Open lead follow-up',
         detail: a.mailingAddress ? 'Saved. It is shown at the bottom of automatic follow-up emails.' : 'Not saved. Marketing email generally has to show a postal address, so automatic lead follow-up stays off without one.' },
@@ -125,8 +161,7 @@ function basicSteps(snap: SetupSnapshot): SetupStep[] {
         : !j.lastRunAt ? 'It has never run for this workspace. On Vercel it is scheduled for you; on another host, schedule the command in docs/INTEGRATIONS.md.'
         : !j.lastRunOk ? `Its last run, on ${day(j.lastRunAt)}, failed. The error is on the Automations page.`
         : `It last ran on ${day(j.lastRunAt)}, more than ${JOB_FRESH_HOURS} hours ago. Check your host’s scheduler.`}` });
-  steps.push({ key: 'ai', title: 'AI wording (optional)', status: ai.active ? 'done' : 'optional', ...(ai.active ? {} : { missing: ['AI_PROVIDER', 'ANTHROPIC_API_KEY (or AI_BASE_URL, AI_API_KEY and AI_MODEL)'] }),
-    detail: ai.active ? 'An AI provider is connected. Every AI result is checked against the facts before it is used.' : 'Not connected, and nothing depends on it: the built-in wording is used.' });
+  steps.push(aiStep(ai));
   if (a.isAgency) {
     steps.push({ key: 'custom_domain', title: 'Your own domain (optional)', status: 'optional', href: '/app/website', hrefLabel: 'Open the Website editor',
       detail: 'Your website works at its address on this app. Using your own domain is managed from the Website editor; it is not checked here.' });
@@ -141,7 +176,7 @@ export function buildSetupChecklist(snap: SetupSnapshot): SetupChecklist {
   // variables, the Twilio webhook and the scheduler belong to whoever hosts the app, and texting is optional, so
   // none of those keep a reminder on an agency's dashboard.
   const e = snap.email;
-  const mine = new Set(['mailing_address', 'reply_email', 'timezone',
+  const mine = new Set(['agreement_terms', 'mailing_address', 'reply_email', 'timezone',
     ...(e.driver === 'resend' && e.hasApiKey && e.fromSet ? ['email_test'] : []), ...(snap.sms.state === 'connected' ? ['sms_test'] : [])]);
   const actionable = groups.filter((g) => g.steps.some((s) => s.status === 'todo' && mine.has(s.key))).map((g) => g.title);
   return { groups, remaining: groups.reduce((n, g) => n + g.remaining, 0), actionable };
