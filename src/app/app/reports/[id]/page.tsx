@@ -94,7 +94,7 @@ export default async function ReportReview({ params }: { params: Promise<{ id: s
               const low = lowConfidenceFields(t);
               const isColl = t.item_type === 'collection';
               const neg = isColl || isNegative(t);
-              const statuses = [t.item_type === 'collection' ? 'Collection' : 'Account', t.account_status, t.payment_status, t.original_creditor ? `original creditor ${t.original_creditor}` : null].filter((v, i, all) => !!v && all.findIndex((o) => o?.toLowerCase() === v.toLowerCase()) === i).join(' · ');
+              const statuses = [t.item_type === 'collection' ? 'Collection' : 'Account', t.item_type === 'collection' ? t.account_status?.replace(/^collection(?: account)?[:.]?\s*/i, '') || null : t.account_status, t.payment_status, t.original_creditor ? `original creditor ${t.original_creditor}` : null].filter((v, i, all) => !!v && all.findIndex((o) => o?.toLowerCase() === v.toLowerCase()) === i).join(' · ');
               return (
                 <li key={t.id} className={neg ? 'border-l-4 border-bad bg-bad-soft/50 px-5 py-4 sm:px-6' : 'px-5 py-4 sm:px-6'}>
                   <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
