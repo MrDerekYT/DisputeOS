@@ -1,6 +1,7 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
+import { after } from 'next/server';
 import { redirect } from 'next/navigation';
 import { z } from 'zod';
 import type { ActionState } from '@/components/forms';
@@ -18,6 +19,35 @@ import { portalMessage, tr, type Lang, type PortalKey } from '@/lib/portal-i18n'
 import { isRealDay } from '@/lib/real-day';
 import { readUpload, UploadError } from '@/lib/upload';
 import { dayInZone } from '@/lib/util';
+import { withSystem } from '@/lib/db';
+import { alertStaff } from '@/lib/staff-alerts';
+import { autoReadClientReport } from '@/lib/reports/auto-read';
+import { label as kindLabel } from '@/components/ui';
+
+/**
+ * Runs work after the page has answered, so the client never waits on it. Outside a request (scripts, tests) Next's
+ * after() is not available: the work then runs in the background. Errors are logged, never shown to the client.
+ */
+function afterResponse(fn: () => Promise<unknown>) {
+  const safe = () => fn().catch((e) => console.error('[portal] follow-up failed', (e as Error).message));
+  try {
+    after(safe);
+  } catch {
+    void safe();
+  }
+}
+
+/**
+ * After the client's change is saved and the page has answered: tell the workspace's owners and admins (in the app
+ * and by email). Never delays or breaks what the client did.
+ */
+function tellStaff(ctx: PortalCtx, title: (name: string) => string, body: (name: string) => string, href: string) {
+  afterResponse(async () => {
+    const c = await withSystem((db) => db.row<{ full_name: string }>('select full_name from public.clients where id = $1', [ctx.clientId])).catch(() => null);
+    const name = c?.full_name?.trim() || 'A client';
+    await alertStaff({ orgId: ctx.orgId, title: title(name), body: body(name), href });
+  });
+}
 
 type PortalCtx = Awaited<ReturnType<typeof requireClient>>;
 
@@ -48,6 +78,8 @@ export async function portalSendMessageAction(_: ActionState, fd: FormData): Pro
     await ctx.tx((db) => db.run(
       `insert into public.communications (org_id, client_id, direction, channel, body, status, author_id) values ($1, $2, 'inbound', 'portal', $3, 'received', $4)`,
       [ctx.orgId, ctx.clientId, d.body, ctx.userId]));
+    // The message itself is not copied into the email: staff read it in the app.
+    tellStaff(ctx, (n) => `New message from ${n}`, (n) => `${n} sent you a message in their portal.`, `/app/clients/${ctx.clientId}?tab=messages`);
     revalidatePath('/portal/messages');
     return { ok: t('a_messageSent') };
   });
@@ -64,15 +96,39 @@ export async function portalUploadAction(_: ActionState, fd: FormData): Promise<
     try { up = await readUpload(fd.get('file') as File | null, ['application/pdf', 'image/png', 'image/jpeg']); }
     catch (e) { if (e instanceof UploadError) throw new UserError(e.message); throw e; }
     const key = await putObject(ctx.orgId, ctx.clientId, up.bytes);
+    let docId = '';
     try {
       // Row-level security requires source = 'client', uploaded_by = me, and this client's organization.
-      await ctx.tx((db) => db.run(
-        `insert into public.documents (org_id, client_id, kind, file_name, mime_type, size_bytes, sha256, storage_key, uploaded_by, source) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,'client')`,
+      const row = await ctx.tx((db) => db.row<{ id: string }>(
+        `insert into public.documents (org_id, client_id, kind, file_name, mime_type, size_bytes, sha256, storage_key, uploaded_by, source) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,'client') returning id`,
         [ctx.orgId, ctx.clientId, d.kind, up.name, up.mime, up.bytes.length, sha256Hex(up.bytes), key, ctx.userId]));
+      docId = row!.id;
     } catch (e) {
       await deleteObject(key).catch(() => undefined);
       throw e;
     }
+    const file = { bytes: up.bytes, mime: up.mime, name: up.name };
+    // A credit report is read right away (after the page answers, so the client never waits on it) and queued for
+    // review; staff are told either way. Anything else: staff are told a file arrived.
+    afterResponse(async () => {
+      const c = await withSystem((db) => db.row<{ full_name: string }>('select full_name from public.clients where id = $1', [ctx.clientId])).catch(() => null);
+      const name = c?.full_name?.trim() || 'A client';
+      if (d.kind === 'credit_report') {
+        const r = await autoReadClientReport({ orgId: ctx.orgId, clientId: ctx.clientId, userId: ctx.userId, documentId: docId, ...file });
+        if (r.reportIds.length) {
+          await alertStaff({ orgId: ctx.orgId, title: `${name} uploaded a credit report: ready to review`,
+            body: `${name} uploaded a credit report. It was read automatically: ${r.accounts} account${r.accounts === 1 ? '' : 's'} and ${r.collections} collection${r.collections === 1 ? '' : 's'}. Check it and approve it to flag the negative items.`,
+            href: `/app/reports/${r.reportIds[0]}` });
+        } else {
+          await alertStaff({ orgId: ctx.orgId, title: `${name} uploaded a credit report`,
+            body: `${name} uploaded a credit report that could not be read automatically (${r.error ?? 'unknown reason'}). Open their documents to read it by hand or ask for the PDF from AnnualCreditReport.com.`,
+            href: `/app/clients/${ctx.clientId}?tab=documents` });
+        }
+      } else {
+        await alertStaff({ orgId: ctx.orgId, title: `${name} uploaded a document`, body: `${name} uploaded a document (${kindLabel(d.kind)}): “${file.name}”. Review it in their documents.`,
+          href: `/app/clients/${ctx.clientId}?tab=documents` });
+      }
+    });
     revalidatePath('/portal', 'layout');
     redirect(UPLOAD_RETURN[d.returnTo]);
   });
@@ -147,6 +203,7 @@ export async function portalSignConsentAction(_: ActionState, fd: FormData): Pro
       }
       throw e;
     }
+    tellStaff(ctx, (n) => `${n} signed: ${kindLabel(d.kind)}`, (n) => `${n} signed “${kindLabel(d.kind)}” in their portal.`, `/app/clients/${ctx.clientId}`);
     revalidatePath('/portal', 'layout');
     if (d.from === 'welcome') redirect(`/portal/welcome?step=agreements&signed=${id}`);
     return { ok: t('a_signedOk') };
