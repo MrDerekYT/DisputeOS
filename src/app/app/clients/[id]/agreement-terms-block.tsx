@@ -37,7 +37,8 @@ export async function AgreementTermsBlock({ ctx, clientId, first }: { ctx: Ctx; 
   const signed = d.contract?.text_shown ? signedPayment(d.contract.text_shown) : null;
   const canEdit = ctx.can('billing:write');
   return (
-    <Section id="agreement-terms" title="Agreement payment terms" hint="What the service agreement states the client will pay (15 U.S.C. § 1679d(b)(1)).">
+    <Section id="agreement-terms" title="Agreement payment terms" hint="What the service agreement states the client will pay (15 U.S.C. § 1679d(b)(1))."
+      plain={!!d.contract} fold={d.contract ? { summary: <>Signed {fmtDate(d.contract.signed_at)}{signed ? <> · total of all payments {signed.total}</> : ''}</> } : undefined}>
       <div className="scroll-mt-28 space-y-3 text-sm">
         {d.contract ? (
           <>

@@ -38,6 +38,7 @@ export const FINDING_CATEGORIES = {
   personal_info: 'Personal information differs',
   collection_validation: 'Collection account',
   negative_item: 'Late payments or charge-off reported',
+  status_balance_conflict: 'Status and balance do not agree',
   old_inquiry: 'Older inquiry',
   client_statement: 'Client statement conflicts with report',
   possible_reinsertion: 'Possible reinsertion',
@@ -170,6 +171,25 @@ export function diffGroup(g: AccountGroup): FieldDiff[] {
   return out;
 }
 
+/**
+ * Wording that reads like "paid" but says the opposite, or says nothing about what is owed: "Pays as agreed" and
+ * TransUnion's "Current; Paid or Paying as Agreed" are payment ratings of an open account, and an account "transferred
+ * to recovery" (or to another office, an attorney, collections) is still owed to the same creditor.
+ */
+const NOT_SETTLED = /paid[\s_]+or[\s_]+paying[\s_]+as[\s_]+agreed|(?:paid|pays?|paying)[\s_]+as[\s_]+agreed|(?:not|never)[\s_]+paid|unpaid|transferr?ed to (?:recovery|another office|(?:an? )?attorney|collections?)/gi;
+const SETTLED = /\b(paid|settled|transferr?ed|sold|purchased by another)\b/i;
+/**
+ * The words of a reported status that say nothing is owed to this creditor any more (paid, settled, sold, transferred
+ * to another lender), or null. An account reported that way normally carries a zero balance: the idea for this check
+ * comes from the "sold with balance" rule of the MIT-licensed Errata project (github.com/wjwhitmire/errata).
+ */
+export function settledWording(t: Pick<AnalysisTradeline, 'account_status' | 'payment_status'>): string | null {
+  for (const s of [t.account_status, t.payment_status]) {
+    if (s && SETTLED.test(s.replace(NOT_SETTLED, ' '))) return s.trim();
+  }
+  return null;
+}
+
 const yearsSince = (iso: string, now: Date) => (now.getTime() - new Date(`${iso}T00:00:00Z`).getTime()) / (365.25 * 86_400_000);
 const NOTE = 'This is a difference to investigate, not a conclusion that anything is inaccurate.';
 /** Why a date-of-first-delinquency difference matters, without saying which date (if either) is wrong. 15 U.S.C. § 1681c. */
@@ -265,11 +285,26 @@ export function analyze(input: {
         });
       }
       if (t.item_type === 'collection') {
+        // Whether the report names the original creditor is part of what the finding rests on: the validation letter
+        // asks the collector for that name and address either way (FDCPA § 809(a)(5), (b)).
+        const oc = t.original_creditor?.trim();
         add({
           dedupe_key: `collection:${t.id}`, category: 'collection_validation', severity: 'strong',
           title: `${name} is a collection account on ${BUREAU_LABEL[b]}`,
-          explanation: 'A written validation request to the collector (FDCPA § 809(b)) is a standard first step; it must be sent within 30 days of the collector’s first written notice to preserve the right to dispute that way. Check the date of that notice with the client.',
-          evidence: [rep(t, 'Account type', 'Collection'), ...(t.balance_cents != null ? [rep(t, 'Balance', money(t.balance_cents))] : [])], basis: 'verified_fact', tradeline_ids: [t.id],
+          explanation: `A written validation request to the collector (FDCPA § 809(b)) is a standard first step; it must be sent within 30 days of the collector’s first written notice to preserve the right to dispute that way. Check the date of that notice with the client.${oc ? '' : ` ${BUREAU_LABEL[b]} does not name the original creditor for this account; the validation request asks the collector for it.`}`,
+          evidence: [rep(t, 'Account type', 'Collection'), ...(t.balance_cents != null ? [rep(t, 'Balance', money(t.balance_cents))] : []), rep(t, 'Original creditor', oc || 'not shown')], basis: 'verified_fact', tradeline_ids: [t.id],
+        });
+      }
+      // One bureau's own entry that does not agree with itself: reported as paid, settled, sold or transferred, and
+      // still carrying a balance. Both values are shown as reported; which one is out of date is for a person to check.
+      const settled = (t.balance_cents ?? 0) > 0 ? settledWording(t) : null;
+      if (settled) {
+        add({
+          dedupe_key: `status-balance:${t.id}`, category: 'status_balance_conflict', severity: 'review',
+          title: `${name} on ${BUREAU_LABEL[b]} is reported as “${settled.slice(0, 60)}” with a balance of ${money(t.balance_cents)}`,
+          explanation: `${BUREAU_LABEL[b]} reports this account as “${settled}” and also reports a balance of ${money(t.balance_cents)}. An account that was paid, settled, sold or transferred to another lender normally reports a zero balance, so one of the two may be out of date. Check the client’s records (a payoff letter, a final statement, a notice that the account was sold) before disputing. ${NOTE}`,
+          evidence: [rep(t, t.account_status?.trim() === settled ? 'Account status' : 'Payment status', settled), rep(t, 'Balance', money(t.balance_cents))],
+          basis: 'potential_discrepancy', tradeline_ids: [t.id],
         });
       }
       // Client assertions are kept distinct from reported facts. The two share a category; the start of the key says

@@ -4,7 +4,7 @@ import { notFound } from 'next/navigation';
 import { AlertOctagon, AlertTriangle, CheckCircle2, ChevronDown } from 'lucide-react';
 import { REPORT_SOURCE_LABEL } from '@/components/staff-kit';
 import { ActionForm, Check, ConfirmButton, Field, SubmitButton } from '@/components/forms';
-import { Badge, DefinitionList, EmptyState, label, Notice, PageHeader, Section, StatusBadge } from '@/components/ui';
+import { Badge, DefinitionList, EmptyState, label, Notice, PageHeader, Section, StatFigure, StatusBadge } from '@/components/ui';
 import { requireStaff } from '@/lib/auth/context';
 import { lowConfidenceFields } from '@/lib/reports/parser';
 import type { FieldMeta } from '@/lib/reports/types';
@@ -68,15 +68,17 @@ export default async function ReportReview({ params }: { params: Promise<{ id: s
           {r.status === 'approved' ? <>This report feeds the <Link className="link" href={`/app/clients/${r.client_id}/compare`}>three-bureau comparison</Link>.</> : 'This report is not used for analysis.'}
         </Notice>
       )}
+      {/* Negative items stay red, as figures with a label and a rule instead of one loud box: what they are is said in
+          words, and the accounts themselves carry the same red rule in the list below. */}
       {collections.length + lates.length > 0 ? (
-        <section aria-label="Negative items" className="mt-6 rounded-2xl border-2 border-bad bg-bad-soft p-5 sm:p-6">
-          <div className="flex items-center gap-2 text-bad"><AlertOctagon size={22} aria-hidden /><h2 className="text-lg font-bold">Negative items on this report</h2></div>
-          <div className="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-3">
-            <div><div className="text-4xl font-extrabold tabular-nums text-bad">{collections.length}</div><div className="text-sm font-semibold text-ink">Collection{collections.length === 1 ? '' : 's'}</div></div>
-            <div><div className="text-4xl font-extrabold tabular-nums text-bad">{lates.length}</div><div className="text-sm font-semibold text-ink">Late / past-due account{lates.length === 1 ? '' : 's'}</div></div>
-            {owedInCollections > 0 && <div><div className="text-4xl font-extrabold tabular-nums text-bad">{money(owedInCollections)}</div><div className="text-sm font-semibold text-ink">In collections</div></div>}
+        <section aria-label="Negative items" className="mt-7">
+          <h2 className="flex items-center gap-2 text-lg font-semibold text-bad"><AlertOctagon size={18} aria-hidden className="shrink-0" />Negative items on this report</h2>
+          <div className="mt-3 grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-3">
+            <StatFigure tone="bad" label={`Collection${collections.length === 1 ? '' : 's'}`} value={collections.length} />
+            <StatFigure tone="bad" label={`Late or past-due account${lates.length === 1 ? '' : 's'}`} value={lates.length} />
+            {owedInCollections > 0 && <StatFigure tone="bad" label="In collections" value={money(owedInCollections)} />}
           </div>
-          <p className="mt-4 text-sm text-ink">{pending ? 'Approve this report to turn these into dispute suggestions for the client.' : <>These are on the client’s <Link className="link font-semibold" href={`/app/clients/${r.client_id}/compare`}>dispute suggestions</Link>.</>}</p>
+          <p className="mt-3 text-sm text-muted">{pending ? 'Approve this report to turn these into dispute suggestions for the client.' : <>These are on the client’s <Link className="link" href={`/app/clients/${r.client_id}/compare`}>dispute suggestions</Link>.</>}</p>
         </section>
       ) : tradelines.length > 0 && (
         <div className="mt-6"><Notice tone="ok" title="No negative items">No collections, late payments or charge-offs were read from this report.</Notice></div>
@@ -96,10 +98,10 @@ export default async function ReportReview({ params }: { params: Promise<{ id: s
               const neg = isColl || isNegative(t);
               const statuses = [t.item_type === 'collection' ? 'Collection' : 'Account', t.item_type === 'collection' ? t.account_status?.replace(/^collection(?: account)?[:.]?\s*/i, '') || null : t.account_status, t.payment_status, t.original_creditor ? `original creditor ${t.original_creditor}` : null].filter((v, i, all) => !!v && all.findIndex((o) => o?.toLowerCase() === v.toLowerCase()) === i).join(' · ');
               return (
-                <li key={t.id} className={neg ? 'border-l-4 border-bad bg-bad-soft/50 px-5 py-4 sm:px-6' : 'px-5 py-4 sm:px-6'}>
+                <li key={t.id} className={neg ? 'border-l-4 border-bad bg-bad-soft/25 px-5 py-4 sm:px-6' : 'px-5 py-4 sm:px-6'}>
                   <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
                     <div className="min-w-0">
-                      <h3 className={`${neg ? 'text-lg font-bold text-bad' : 'text-[0.9375rem] font-semibold'} leading-snug [overflow-wrap:anywhere]`}>{t.creditor_name} {t.account_last4 && <span className="font-normal text-muted">••{t.account_last4}</span>}</h3>
+                      <h3 className={`${neg ? 'text-base font-semibold text-bad' : 'text-[0.9375rem] font-semibold'} leading-snug [overflow-wrap:anywhere]`}>{t.creditor_name} {t.account_last4 && <span className="font-normal text-muted">••{t.account_last4}</span>}</h3>
                       <p className="mt-0.5 text-[0.8125rem] text-muted">{statuses}</p>
                     </div>
                     <div className="flex flex-wrap items-center gap-1.5">

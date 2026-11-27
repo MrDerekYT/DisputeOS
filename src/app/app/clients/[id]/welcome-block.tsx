@@ -51,8 +51,11 @@ export async function WelcomeBlock({ ctx, clientId, first, email, portalUserId }
   const notReady = !contractInForce && !isRendered(renderFor(ag, 'croa_contract'));
   const settingsLink = ctx.can('settings:manage') ? <Link href="/app/settings#agreement" className="link">Open Settings → Client agreement</Link> : 'Ask an owner or admin to change them in Settings → Client agreement.';
   const cancelledOn = ob.agreements.cancelledOn;
+  // Finished, with nothing left to chase: the card folds down to one line. While anything is open it stays as it is.
+  const settled = !!portalUserId && ob.complete && !cancelledOn && !notReady && drafts.length === 0;
   return (
-    <Section id="welcome" title="Welcome link" hint="One link takes the client through their details, agreements and ID documents.">
+    <Section id="welcome" title="Welcome link" hint="One link takes the client through their details, agreements and ID documents."
+      plain={settled} fold={settled ? { summary: 'Finished: details, all four agreements and the three ID documents are in.' } : undefined}>
       <div className="scroll-mt-28 space-y-3 text-sm">
         {portalUserId ? (
           <>

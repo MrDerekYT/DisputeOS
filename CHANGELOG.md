@@ -1,5 +1,30 @@
 # Changelog
 
+## Three bureaus in one table, flags that keep up, a tidier client page (unreleased)
+
+No migration for this part.
+
+- **The comparison is one table per account**: a row per reported value and a column per bureau, on a phone as on a
+  desk (a phone used to stack the three bureaus under each other, three screens per account). A bureau that does not
+  report the account is one cell down its column.
+- **Flags keep up with the reports.** Opening the comparison brings the flags up to date when the approved reports
+  have changed since the analysis last ran: an account edited after approval, a statement from the client, or a
+  reporting period that has since ended. Reviewed flags are never touched. Someone who may not edit reports is told
+  the flags are behind instead. “Re-run analysis” is still there.
+- **A reporting date that has passed is red**, on the comparison and on the report page (“date has passed”).
+- **New flag: status and balance do not agree.** An account reported as paid, settled, sold or transferred to another
+  lender that still shows a balance is flagged for review with both reported values, and starts a “verify the status”
+  dispute. “Pays as agreed”, TransUnion’s “Paid or Paying as Agreed” and “transferred to recovery” are not read as
+  paid. The idea comes from the MIT-licensed Errata project (github.com/wjwhitmire/errata); the code is ours.
+- **A collection flag says whether the report names the original creditor** (the validation letter asks the collector
+  for it either way).
+- **Client page.** Sections that are settled fold to one line (welcome link, agreement terms, compliance record, text
+  consent, referred by, details); “Needs attention” sits next to the plan; “Draft update” moved into Dispute
+  progress. Across the app, a section’s button sits beside its title instead of under a long hint.
+- **Report page.** Negative items are summarised as figures, and negative accounts are marked in red.
+- **Landing page.** A new “Three bureaus, one table” section with a drawn sample of the comparison (sample data,
+  labelled as such).
+
 ## Invite by email or by link (unreleased)
 
 - **Invite a client: email it or get the link.** With email connected, “Invite a client” has two buttons: “Send welcome email”, and “Add and get the link”, which adds the client and shows the one-time link to copy or text, with no email sent.
