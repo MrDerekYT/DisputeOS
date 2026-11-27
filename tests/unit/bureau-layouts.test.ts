@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { detectLayout, last4, parseEquifaxAcr, parseExperianAcr } from '@/lib/reports/bureau-layouts';
+import { countMismatch, detectLayout, last4, parseEquifaxAcr, parseExperianAcr } from '@/lib/reports/bureau-layouts';
 import { readReportFile } from '@/lib/reports/read-file';
 
 // Made-up people and accounts, laid out exactly as text comes out of the AnnualCreditReport.com PDFs.
@@ -237,6 +237,24 @@ describe('bureau layouts', () => {
     expect(p.identity.filter((i) => i.kind === 'address').map((i) => i.value)).toEqual(['100 MAIN ST TAMPA FL, 33602-1234']);
   });
 
+  it('Experian: a page break inside an inquiry does not put the page header into a name', () => {
+    const want = parseExperianAcr(EXPERIAN).inquiries;
+    // The print time's mark is not always a colon in the extracted text, and the dash can be another character too.
+    for (const header of ['11/23/26, 3:34 PM Annual Credit Report - Experian', '11/23/26, 334 PM Annual Credit Report  Experian', '11/23/26, 334 PM Annual Credit Report - Experian']) {
+      const broken = EXPERIAN.replace('JPMCB CARD\nInquired on', `JPMCB CARD\n${header}\nhttps://usa.experian.com/acr/printReport?type=CDI 8/9\nInquired on`);
+      expect(broken).not.toBe(EXPERIAN);
+      expect(parseExperianAcr(broken).inquiries).toEqual(want);
+    }
+  });
+
+  it('Experian: an inquiry with nothing after its date ends there, and the next name starts after it', () => {
+    const bare = EXPERIAN.replace('PO BOX 1\nWILMINGTON\nDE, 19850\nAuto loan. This\ninquiry is\nscheduled to\ncontinue on record\nuntil Apr 2028.\n', '');
+    expect(bare).not.toBe(EXPERIAN);
+    expect(parseExperianAcr(bare).inquiries.map((q) => [q.name, q.inquiry_date])).toEqual([
+      ['JPMCB CARD', '2026-03-28'], ['M1F/MAZDAFI NSV/DEFI/TMC C', '2025-07-24'], ['700 CREDIT/OCEAN', '2026-01-31'],
+    ]);
+  });
+
   it('Equifax: accounts, closed accounts across a page break, collections, hard inquiries only', () => {
     const p = parseEquifaxAcr(EQUIFAX);
     expect(p.bureau).toBe('equifax');
@@ -265,6 +283,55 @@ describe('bureau layouts', () => {
       { bureau: 'equifax', kind: 'address', value: '100 MAIN ST, TAMPA, FL 33602' },
       { bureau: 'equifax', kind: 'address', value: '22 OLD RD, ORLANDO, FL 32801' },
     ]);
+  });
+
+  describe('Experian: what was read is checked against the totals the report states', () => {
+    const TOTALS = '2 Accounts 0 Public Records 3 Hard Inquiries';
+    const withTotals = (line: string) => parseExperianAcr(EXPERIAN.replace(TOTALS, line));
+    const checks = (p: { warnings: string[] }) => p.warnings.filter((w) => /^The report lists/.test(w));
+
+    it('says nothing when the counts agree', () => {
+      expect(EXPERIAN).toContain(TOTALS);
+      expect(checks(parseExperianAcr(EXPERIAN))).toEqual([]);
+    });
+    it('warns when the report lists more accounts or inquiries than were read', () => {
+      expect(checks(withTotals('18 Accounts 0 Public Records 3 Hard Inquiries'))).toEqual(['The report lists 18 accounts; 2 were read. Compare with the original before approving.']);
+      expect(checks(withTotals('2 Accounts 0 Public Records 5 Hard Inquiries'))).toEqual(['The report lists 5 hard inquiries; 3 were read. Compare with the original before approving.']);
+    });
+    it('reads the totals when the extractor drops the spaces between them, or gives each its own line', () => {
+      expect(checks(withTotals('18 Accounts0 Public Records0 Hard Inquiries'))).toEqual([
+        'The report lists 18 accounts; 2 were read. Compare with the original before approving.',
+        'The report lists 0 hard inquiries; 3 were read. Compare with the original before approving.',
+      ]);
+      expect(checks(withTotals('2 Accounts0 Public Records3 Hard Inquiries'))).toEqual([]);
+      expect(checks(withTotals('18 Accounts\n0 Public Records\n3 Hard Inquiries'))).toEqual(['The report lists 18 accounts; 2 were read. Compare with the original before approving.']);
+      expect(checks(withTotals('2\nAccounts\n0\nPublic Records\n3\nHard Inquiries'))).toEqual([]);
+    });
+    it('does not take the report number for a count', () => {
+      // "Report Number 1111-2222-33" stands right before the totals: its last digits are not part of them.
+      expect(EXPERIAN).toContain('Report Number 1111-2222-33\n2 Accounts');
+      expect(checks(parseExperianAcr(EXPERIAN))).toEqual([]);
+    });
+    it('uses the singular where the report does', () => {
+      expect(checks(withTotals('1 Account 1 Public Record 1 Hard Inquiry'))).toEqual([
+        'The report lists 1 account; 2 were read. Compare with the original before approving.',
+        'The report lists 1 hard inquiry; 3 were read. Compare with the original before approving.',
+        'The report lists 1 public record. Public records are not imported from this layout: add it from the original by hand.',
+      ]);
+      expect(countMismatch(2, 'account', 'accounts', 1)).toBe('The report lists 2 accounts; 1 was read. Compare with the original before approving.');
+    });
+    it('says that public records are listed and were not imported', () => {
+      expect(checks(withTotals('2 Accounts 2 Public Records 3 Hard Inquiries'))).toEqual(['The report lists 2 public records. Public records are not imported from this layout: add them from the original by hand.']);
+    });
+    it('checks nothing when the report has no totals line, and does not take other lines for one', () => {
+      expect(checks(withTotals('Summary'))).toEqual([]);
+      expect(checks(parseExperianAcr(EXPERIAN.replace('Includes credit cards', 'Includes credit cards\n30 Accounts were reviewed')))).toEqual([]);
+    });
+    it('a missed account is caught: drop one from the text and the count no longer agrees', () => {
+      const cut = EXPERIAN.replace(/COLLECTOR ONE\nPOTENTIALLY NEGATIVE[\s\S]*?Account information disputed by consumer\.\n/, '');
+      expect(parseExperianAcr(cut).tradelines).toHaveLength(1);
+      expect(checks(parseExperianAcr(cut))).toEqual(['The report lists 2 accounts; 1 was read. Compare with the original before approving.']);
+    });
   });
 
   it('import uses the exact reader first: no AI, no credits', async () => {

@@ -1,7 +1,8 @@
 import { BUREAUS, type Bureau } from '../util';
 import { REVIEW_THRESHOLD, type FieldMeta, type ParsedIdentity, type ParsedInquiry, type ParsedPublicRecord, type ParsedReport, type ParsedTradeline } from './types';
 
-const MAX_TEXT = 2_000_000;
+/** Characters of report text the rules parser takes at once (a 400-page bureau report is well under this). */
+export const MAX_TEXT = 2_000_000;
 
 export function htmlToText(html: string): string {
   return html

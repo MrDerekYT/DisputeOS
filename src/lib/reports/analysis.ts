@@ -1,5 +1,5 @@
 import { BUREAU_LABEL, BUREAUS, money, type Bureau } from '../util';
-import { FALL_OFF_RULE_TEXT, isNegative, tradelineFallOff } from '../credit/reporting-period';
+import { FALL_OFF_RULE_TEXT, historyShowsLate, isNegative, tradelineFallOff } from '../credit/reporting-period';
 
 /**
  * Cross-bureau comparison and discrepancy detection.
@@ -282,7 +282,7 @@ export function analyze(input: {
           evidence: [{ field: 'Client statement', value: 'Does not recognise this account', source: 'client', tradeline_id: t.id }, rep(t, 'Creditor', t.creditor_name)], basis: 'user_provided', tradeline_ids: [t.id],
         });
       }
-      if (up.never_late === true && t.payment_history && /(30|60|90|120)/.test(t.payment_history)) {
+      if (up.never_late === true && t.payment_history && historyShowsLate(t.payment_history)) {
         add({
           dedupe_key: `client-never-late:${t.id}`, category: 'client_statement', severity: 'review', title: `Client says payments were never late — ${name} (${BUREAU_LABEL[b]})`,
           explanation: 'The report’s payment history includes late-payment codes, but the client states every payment was on time. Ask the client for statements or bank records for the months in question.',
