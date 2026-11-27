@@ -20,6 +20,11 @@ import { editedStretches, protect, restore, shapeIssue, type Stretch } from './p
  * moved, if it adds factual wording, or if the claims check (a set of patterns) finds a prohibited claim; each feature
  * may add checks of its own (the progress note allows courtesy words only). Everything it produces is a draft for a
  * human to edit.
+ *
+ * One feature works differently: "Ask about your clients" (src/lib/assistant). There the model is given records text
+ * to answer from (names and case facts; never contact details or identifying numbers), not a text to reword, and its
+ * answer is shown to staff, labelled as AI, only if every date and amount in it is in that text and the claims check
+ * passes. Otherwise the answer built from the records with no AI is shown.
  */
 export interface AiRequest { system: string; user: string; maxTokens?: number }
 export interface AiProvider { readonly name: string; complete(req: AiRequest): Promise<string> }
