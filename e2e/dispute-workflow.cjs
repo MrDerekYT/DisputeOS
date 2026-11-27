@@ -289,7 +289,7 @@ async function signUpAgency(browser, label) {
       await staff.screenshot({ path: `${SHOTS}/04-dashboard.png`, fullPage: true, caret: 'initial' });
     });
 
-    await check('free-report path: the client uploads a report PDF in the portal and staff read it into the review queue in one click', async () => {
+    await check('free-report path: the client uploads a report PDF in the portal and it is read into the review queue on arrival', async () => {
       // a text-based PDF like the one a bureau site produces with "Save as PDF" (synthetic content)
       const pdfPage = await clientCtx.newPage();
       await pdfPage.setContent(`<pre style="font:12px monospace">${EXPERIAN.replace('Experian Credit Report', 'TransUnion Credit Report').replace('$2,450.00', '$2,450.00')}</pre>`);
@@ -303,7 +303,9 @@ async function signUpAgency(browser, label) {
       await staff.goto(clientUrl + '?tab=documents');
       const row = staff.locator('li', { hasText: 'transunion-report.pdf' });
       await row.getByText('uploaded by client').waitFor();
-      await row.getByRole('button', { name: 'Read as credit report' }).click();
+      // A report the client uploads is read as it arrives: it is already waiting for a person to review it.
+      if (await row.getByRole('button', { name: 'Read as credit report' }).count()) throw new Error('the report was not read when the client uploaded it');
+      await row.getByRole('link', { name: 'Open report' }).click();
       await staff.waitForURL(/\/app\/reports\//, { timeout: 20000 });
       await see(staff, 'TransUnion report'); await see(staff, 'Review before this is used'); await see(staff, 'SYNTHETIC BANK NA');
       if (!/2,450\.00/.test(await staff.locator('main').innerText())) throw new Error('the balance was not read from the PDF');
