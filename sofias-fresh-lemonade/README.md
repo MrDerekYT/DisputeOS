@@ -54,8 +54,11 @@ on the site, add it with the real details.
 
 ## Hosting
 
-Deployed on Vercel as a static site with this folder as the project root.
-Pushing changes to this folder redeploys it.
+Live at https://sofias-fresh-lemonade.vercel.app as the Vercel project
+`sofias-fresh-lemonade`. The project is standalone: it is not connected to a Git
+repository, so pushing here does not change the live site. To publish a change,
+deploy this folder again (for example `vercel deploy --prod` from inside it).
+`README.md` is left out of the upload.
 
 ## Credits
 
