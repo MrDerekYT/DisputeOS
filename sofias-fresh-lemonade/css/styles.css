@@ -256,7 +256,7 @@ a { color: inherit; }
 .story { padding-top: calc(var(--band) + 6.25rem); }
 .story-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 3.5rem; }
 .story-art { width: min(100%, 23rem); margin-inline: auto; }
-.story-stack { position: relative; padding: 0 1.25rem 3.25rem 1rem; }
+.story-stack { position: relative; padding: 0 1.25rem 5.5rem 1rem; }
 .story-portrait { rotate: -2deg; }
 .polaroid {
   position: absolute; margin: 0;
@@ -264,8 +264,8 @@ a { color: inherit; }
   box-shadow: 4px 5px 0 rgba(61, 11, 40, .22);
 }
 .polaroid img { width: 100%; }
-.polaroid-mom { width: 37%; left: -.4rem; bottom: .9rem; rotate: -7deg; }
-.polaroid-girls { width: 43%; right: -.5rem; bottom: 0; rotate: 6deg; }
+.polaroid-mom { width: 39%; left: -.5rem; bottom: .5rem; rotate: -6deg; }
+.polaroid-girls { width: 44%; right: -.5rem; bottom: 0; rotate: 6deg; }
 .handwritten {
   margin: 1.4rem auto 0; max-width: none; text-align: center;
   font: 700 clamp(1.5rem, 4.5vw, 1.85rem)/1 var(--display); color: var(--pink);
