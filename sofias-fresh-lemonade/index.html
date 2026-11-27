@@ -1,0 +1,440 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Sofia's Fresh Lemonade | Fresh squeezed lemonade for events in Miami-Dade</title>
+<meta name="description" content="Family-owned in Miami-Dade. A mother and her daughters squeeze real lemons and bring the pink lemonade stand to farmers markets, school events and parties. Text 754-209-9503 to book.">
+<meta name="theme-color" content="#DC1077">
+<link rel="canonical" href="https://sofias-fresh-lemonade.vercel.app/">
+
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Sofia's Fresh Lemonade">
+<meta property="og:title" content="Sofia's Fresh Lemonade: fresh squeezed, for your event">
+<meta property="og:description" content="A Miami mom and her daughters squeeze real lemons and bring the whole pink stand to farmers markets, school events and parties.">
+<meta property="og:url" content="https://sofias-fresh-lemonade.vercel.app/">
+<meta property="og:image" content="https://sofias-fresh-lemonade.vercel.app/media/og.jpg">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="preload" href="/fonts/sansita-swashed-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/fonts/figtree-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/media/stand-walkthrough.jpg" as="image" fetchpriority="high">
+<link rel="stylesheet" href="/css/styles.css">
+<script>document.documentElement.classList.add('js')</script>
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FoodEstablishment",
+  "name": "Sofia's Fresh Lemonade",
+  "description": "Family-owned fresh squeezed lemonade stand from Miami-Dade, founded and run by a mother and her daughters. Available for farmers markets, school events, parties and delivery in Miami.",
+  "url": "https://sofias-fresh-lemonade.vercel.app/",
+  "image": "https://sofias-fresh-lemonade.vercel.app/media/og.jpg",
+  "telephone": "+1-754-209-9503",
+  "servesCuisine": "Lemonade",
+  "address": { "@type": "PostalAddress", "addressLocality": "Miami", "addressRegion": "FL", "addressCountry": "US" },
+  "areaServed": { "@type": "AdministrativeArea", "name": "Miami-Dade County, Florida" },
+  "sameAs": [
+    "https://www.instagram.com/sofias_fresh_lemonade/",
+    "https://www.tiktok.com/@sofiasfreshlemonade"
+  ]
+}
+</script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<!-- Shapes drawn once and reused all over the page -->
+<svg class="sprite" aria-hidden="true" focusable="false" width="0" height="0">
+  <symbol id="lemon-wheel" viewBox="0 0 120 120">
+    <circle cx="64" cy="65" r="54" fill="var(--wheel-shade, #9E0A55)"/>
+    <circle cx="58" cy="58" r="54" fill="#FFD91A"/>
+    <circle cx="58" cy="58" r="47" fill="#FFF8CF"/>
+    <circle cx="58" cy="58" r="42" fill="#FFE85F"/>
+    <g stroke="#FFF8CF" stroke-width="3.2" stroke-linecap="round">
+      <path d="M58 58V17M58 58 87 29M58 58h41M58 58l29 29M58 58v41M58 58 29 87M58 58H17M58 58 29 29"/>
+    </g>
+    <circle cx="58" cy="58" r="5" fill="#FFF8CF"/>
+    <g fill="#FFF8CF" opacity=".9">
+      <ellipse cx="70" cy="33" rx="2.2" ry="4" transform="rotate(22 70 33)"/>
+      <ellipse cx="83" cy="70" rx="2.2" ry="4" transform="rotate(112 83 70)"/>
+      <ellipse cx="46" cy="83" rx="2.2" ry="4" transform="rotate(202 46 83)"/>
+      <ellipse cx="33" cy="46" rx="2.2" ry="4" transform="rotate(292 33 46)"/>
+    </g>
+  </symbol>
+  <symbol id="lemon-wedge" viewBox="0 0 120 70">
+    <path d="M10 14h108a54 54 0 0 1-108 0Z" fill="var(--wheel-shade, #9E0A55)"/>
+    <path d="M4 8h108A54 54 0 0 1 4 8Z" fill="#FFD91A"/>
+    <path d="M11 8h94a47 47 0 0 1-94 0Z" fill="#FFF8CF"/>
+    <path d="M16 8h84a42 42 0 0 1-84 0Z" fill="#FFE85F"/>
+    <g stroke="#FFF8CF" stroke-width="3.2" stroke-linecap="round"><path d="M58 8v41M58 8l29 29M58 8 29 37"/></g>
+  </symbol>
+  <symbol id="leaf" viewBox="0 0 60 36">
+    <path d="M4 30C10 8 34 0 56 4 52 26 28 38 4 30Z" fill="#1D7A3B"/>
+    <path d="M8 28C22 22 38 14 52 7" fill="none" stroke="#FFF3C4" stroke-width="2" stroke-linecap="round" opacity=".7"/>
+  </symbol>
+  <symbol id="ico-chat" viewBox="0 0 24 24"><path fill="currentColor" d="M12 3c5.1 0 9 3.4 9 7.8s-3.9 7.800-9 7.800c-.9 0-1.800-.1-2.600-.3L5 20.800l.9-3.700C4.100 15.700 3 13.900 3 10.800 3 6.400 6.900 3 12 3Z"/></symbol>
+  <symbol id="ico-phone" viewBox="0 0 24 24"><path fill="currentColor" d="M7.200 3.200 9.900 3c.5 0 .9.300 1 .8l.7 3.400c.1.400-.1.800-.4 1.100L9.400 9.900c1 2 2.700 3.700 4.700 4.700l1.600-1.800c.3-.3.700-.5 1.100-.4l3.400.7c.5.1.8.5.8 1l-.2 2.700c-.1 1.600-1.400 2.900-3 2.900C10.500 19.700 4.300 13.500 4.300 6.200c0-1.600 1.300-2.900 2.900-3Z"/></symbol>
+  <symbol id="ico-camera" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" d="M7.500 3.500h9a4 4 0 0 1 4 4v9a4 4 0 0 1-4 4h-9a4 4 0 0 1-4-4v-9a4 4 0 0 1 4-4Z"/><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="17.200" cy="6.800" r="1.300" fill="currentColor"/></symbol>
+  <symbol id="ico-note" viewBox="0 0 24 24"><path fill="currentColor" d="M14 3h3c.2 2.300 1.700 4 4 4.300v3.100c-1.500 0-2.900-.5-4-1.300v6.400a5.500 5.500 0 1 1-5.500-5.500c.3 0 .7 0 1 .1v3.200a2.400 2.400 0 1 0 1.500 2.200V3Z"/></symbol>
+</svg>
+
+<header class="bar">
+  <nav class="bar-inner" aria-label="Main">
+    <a class="brand" href="#top">
+      <img src="/media/logo.webp" width="52" height="52" alt="">
+      <span>Sofia's Fresh Lemonade</span>
+    </a>
+    <ul class="bar-links">
+      <li><a href="#story">Our story</a></li>
+      <li><a href="#flavors">Flavors</a></li>
+      <li><a href="#events">Events</a></li>
+      <li><a href="#feed">Instagram</a></li>
+    </ul>
+    <a class="btn btn-lemon btn-small" href="#book">Book the stand</a>
+  </nav>
+</header>
+
+<main id="main">
+
+  <!-- 1. The tablecloth -->
+  <section class="hero cloth" id="top">
+    <div class="hero-grid">
+      <div class="hero-copy">
+        <h1 class="sign"><span>Fresh<svg class="sign-lemon" viewBox="0 0 120 120" aria-hidden="true"><use href="#lemon-wheel"/></svg></span> <span>squeezed</span> <span>lemonade</span></h1>
+        <p class="lede">A Miami mom and her daughters squeeze real lemons, pour them ice cold, and bring the whole pink stand to your farmers market, school event or party.</p>
+        <div class="actions">
+          <a class="btn btn-lemon" href="#book">Book the stand</a>
+          <a class="btn btn-ghost" href="#flavors">See the flavors</a>
+        </div>
+      </div>
+
+      <figure class="hero-film">
+        <div class="sticker hero-sticker">
+          <video class="film" autoplay muted loop playsinline preload="metadata" poster="/media/stand-walkthrough.jpg" width="720" height="1280" aria-label="A walk past our stand at the market: the menu banner, then the pink table that reads Fresh Squeezed Lemonade.">
+            <source src="/media/stand-walkthrough.mp4" type="video/mp4">
+          </video>
+        </div>
+        <div class="seal" aria-hidden="true">
+          <svg viewBox="0 0 180 180" class="seal-ring">
+            <defs><path id="seal-path" d="M90 90m-66 0a66 66 0 1 1 132 0a66 66 0 1 1-132 0"/></defs>
+            <circle cx="90" cy="90" r="88" fill="#FFFBEB"/>
+            <text class="seal-text"><textPath href="#seal-path" textLength="408" lengthAdjust="spacing">Freshly squeezed ● Ice cold ● Crowd favorite ●</textPath></text>
+          </svg>
+          <img class="seal-logo" src="/media/logo.webp" width="96" height="96" alt="">
+        </div>
+        <svg class="lemon lemon-b" viewBox="0 0 120 70" aria-hidden="true"><use href="#lemon-wedge"/></svg>
+      </figure>
+    </div>
+    <div class="valance" aria-hidden="true"></div>
+  </section>
+
+  <!-- 2. Who we are -->
+  <section class="band story" id="story">
+    <div class="wrap story-grid">
+      <div class="story-art">
+        <div class="story-stack">
+          <figure class="sticker story-portrait">
+            <img src="/media/family.webp" width="760" height="1307" loading="lazy" alt="Our family, drawn for our story post: mom with an arm around each of her two daughters, the Miami skyline behind them.">
+          </figure>
+          <figure class="polaroid polaroid-mom">
+            <img src="/media/family-mom.webp" width="480" height="688" loading="lazy" alt="Mom, smiling at the camera.">
+          </figure>
+          <figure class="polaroid polaroid-girls">
+            <img src="/media/family-girls.webp" width="561" height="672" loading="lazy" alt="The girls striking a pose in matching polka dots.">
+          </figure>
+        </div>
+        <p class="handwritten">From our family to yours</p>
+      </div>
+
+      <div class="story-copy">
+        <h2>It's a mom, her daughters and a lot of lemons</h2>
+        <p>We're a family stand from Miami-Dade. You'll find us under a white tent, behind a hot pink tablecloth, pressing lemons by hand and pouring them over ice.</p>
+        <blockquote class="our-words">
+          <p>Sofia's Fresh Lemonade is a family-owned business based in Miami, Florida, founded and operated by a dedicated mother and her daughters. Our family takes pride in serving freshly squeezed lemonade made with quality ingredients, love, and a passion for bringing refreshing flavors to every event.</p>
+          <footer>How we put it on <a href="https://www.instagram.com/p/DZ28U6-xP65/" rel="noopener">our Instagram</a></footer>
+        </blockquote>
+        <ul class="promises">
+          <li><svg aria-hidden="true" viewBox="0 0 120 120"><use href="#lemon-wheel"/></svg><span><strong>Freshly squeezed</strong> Real lemons</span></li>
+          <li><svg aria-hidden="true" viewBox="0 0 60 36"><use href="#leaf"/></svg><span><strong>Quality ingredients</strong> Nothing artificial</span></li>
+          <li><svg aria-hidden="true" viewBox="0 0 24 24"><path fill="#DC1077" d="M12 21s-8-5.200-8-11a4.600 4.600 0 0 1 8-3 4.600 4.600 0 0 1 8 3c0 5.800-8 11-8 11Z"/></svg><span><strong>Made with love</strong> In every sip</span></li>
+        </ul>
+        <p class="youth">Every cup helps support local youth entrepreneurs.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3. How a market day goes -->
+  <section class="band day">
+    <div class="wrap">
+      <h2>A day at the stand</h2>
+      <ol class="day-strip">
+        <li class="settle" style="--i:0">
+          <div class="sticker"><video class="film lazy" muted loop playsinline preload="none" poster="/media/day-1-pack.jpg" data-src="/media/day-1-pack.mp4" width="576" height="720" aria-label="The back seat of the car, packed with bins and boxes."></video></div>
+          <h3>Pack the car</h3>
+          <p>Bins, boxes and the banner all ride along.</p>
+        </li>
+        <li class="settle" style="--i:1">
+          <div class="sticker"><video class="film lazy" muted loop playsinline preload="none" poster="/media/day-2-setup.jpg" data-src="/media/day-2-setup.mp4" width="576" height="720" aria-label="Our stand set up under a white tent, with the tall menu banner out front."></video></div>
+          <h3>Set up the stand</h3>
+          <p>Tables out, pink cloth on, menu banner up.</p>
+        </li>
+        <li class="settle" style="--i:2">
+          <div class="sticker"><video class="film lazy" muted loop playsinline preload="none" poster="/media/day-3-squeeze.jpg" data-src="/media/day-3-squeeze.mp4" width="576" height="720" aria-label="Pressing lemons by hand at the pink table."></video></div>
+          <h3>Squeeze the lemons</h3>
+          <p>Pressed by hand, right at the table.</p>
+        </li>
+        <li class="settle" style="--i:3">
+          <div class="sticker"><video class="film lazy" muted loop playsinline preload="none" poster="/media/day-4-pour.jpg" data-src="/media/day-4-pour.mp4" width="576" height="720" aria-label="A hand holding up a full container of lemonade with our sticker on it."></video></div>
+          <h3>Pour it ice cold</h3>
+          <p>Cups to sip now, containers to take home.</p>
+        </li>
+      </ol>
+    </div>
+  </section>
+
+  <!-- 4. Flavors -->
+  <section class="band flavors" id="flavors">
+    <div class="wrap">
+      <div class="flavors-grid">
+        <div class="flavors-copy">
+          <h2>Choose your flavor</h2>
+          <p>Every flavor starts as the same fresh squeezed lemonade. Tap one to pour it.</p>
+
+          <fieldset class="chips">
+            <legend class="visually-hidden">Flavors</legend>
+            <span class="chip"><input type="radio" name="flavor" id="f-classic" checked data-liquid="#FFE45E" data-deep="#F7CB25" data-straw="#DC1077" data-note="Just lemons, squeezed fresh. Sweet, tart and ice cold."><label for="f-classic"><i style="--c:#FFE45E"></i>Classic lemonade</label></span>
+            <span class="chip"><input type="radio" name="flavor" id="f-strawberry" data-liquid="#FF7092" data-deep="#EF466F" data-straw="#1D7A3B" data-note="Pink, sweet and gone fast."><label for="f-strawberry"><i style="--c:#FF7092"></i>Strawberry</label></span>
+            <span class="chip"><input type="radio" name="flavor" id="f-blue-raspberry" data-liquid="#3BBBF6" data-deep="#1697DC" data-straw="#DC1077" data-note="Bright blue with a tart little kick."><label for="f-blue-raspberry"><i style="--c:#3BBBF6"></i>Blue raspberry</label></span>
+            <span class="chip"><input type="radio" name="flavor" id="f-watermelon" data-liquid="#FF5D7B" data-deep="#E83A5E" data-straw="#1D7A3B" data-note="Tastes like the middle of summer."><label for="f-watermelon"><i style="--c:#FF5D7B"></i>Watermelon</label></span>
+            <span class="chip"><input type="radio" name="flavor" id="f-cherry" data-liquid="#E0254F" data-deep="#BC123B" data-straw="#FFD91A" data-note="Deep red and bold."><label for="f-cherry"><i style="--c:#E0254F"></i>Cherry</label></span>
+            <span class="chip"><input type="radio" name="flavor" id="f-raspberry" data-liquid="#EA4A83" data-deep="#CD2B68" data-straw="#FFD91A" data-note="Tart berry, ruby pink."><label for="f-raspberry"><i style="--c:#EA4A83"></i>Raspberry</label></span>
+            <span class="chip"><input type="radio" name="flavor" id="f-peach" data-liquid="#FFA75E" data-deep="#FF8A3D" data-straw="#DC1077" data-note="Soft, golden and mellow."><label for="f-peach"><i style="--c:#FFA75E"></i>Peach</label></span>
+            <span class="chip"><input type="radio" name="flavor" id="f-mango" data-liquid="#FFB422" data-deep="#F5990A" data-straw="#1D7A3B" data-note="Sunny and tropical."><label for="f-mango"><i style="--c:#FFB422"></i>Mango</label></span>
+            <span class="chip"><input type="radio" name="flavor" id="f-pineapple" data-liquid="#FFD640" data-deep="#F4BC12" data-straw="#1D7A3B" data-note="Bright and tangy."><label for="f-pineapple"><i style="--c:#FFD640"></i>Pineapple</label></span>
+            <span class="chip"><input type="radio" name="flavor" id="f-passion-fruit" data-liquid="#F9AB3F" data-deep="#EC8C1C" data-straw="#7A2E8E" data-note="Tangy, tropical and a little wild."><label for="f-passion-fruit"><i style="--c:#F9AB3F"></i>Passion fruit</label></span>
+            <span class="chip"><input type="radio" name="flavor" id="f-lychee" data-liquid="#FFD9E2" data-deep="#F8BDCB" data-straw="#DC1077" data-note="Light, floral and sweet."><label for="f-lychee"><i style="--c:#FFD9E2"></i>Lychee</label></span>
+            <span class="chip"><input type="radio" name="flavor" id="f-coconut" data-liquid="#FBF4E4" data-deep="#EDE2CB" data-straw="#1D7A3B" data-note="Creamy and cool."><label for="f-coconut"><i style="--c:#FBF4E4"></i>Coconut</label></span>
+            <span class="chip"><input type="radio" name="flavor" id="f-cotton-candy" data-liquid="#FFB5DF" data-deep="#F58FCB" data-straw="#3BBBF6" data-note="Sweet like the fair. Ask for real cotton candy on top."><label for="f-cotton-candy"><i style="--c:#FFB5DF"></i>Cotton candy</label></span>
+            <span class="chip"><input type="radio" name="flavor" id="f-lavender" data-liquid="#C9A5F3" data-deep="#AD83E6" data-straw="#FFD91A" data-note="Floral, purple and calm."><label for="f-lavender"><i style="--c:#C9A5F3"></i>Lavender</label></span>
+            <span class="chip"><input type="radio" name="flavor" id="f-half" data-liquid="#B8662D" data-deep="#94481A" data-straw="#FFD91A" data-note="Half iced tea, half lemonade."><label for="f-half"><i style="--c:#B8662D"></i>Half and half</label></span>
+          </fieldset>
+          <p class="fine">Flavors can change with the season and the event. Tell us your favorites when you book.</p>
+        </div>
+
+        <div class="cup-stage" id="cup-stage">
+          <div class="halo" aria-hidden="true"></div>
+          <svg class="cup" viewBox="0 0 320 460" role="img" aria-labelledby="cup-title">
+            <title id="cup-title">A cup of lemonade that changes color with the flavor you pick</title>
+            <defs>
+              <clipPath id="cup-inside"><path d="M66 118h188l-21 284a16 16 0 0 1-16 15H103a16 16 0 0 1-16-15Z"/></clipPath>
+              <clipPath id="sticker-clip"><circle cx="160" cy="300" r="43"/></clipPath>
+            </defs>
+
+            <!-- drop shade -->
+            <path class="cup-shade" transform="translate(10 10)" d="M66 118h188l-21 284a16 16 0 0 1-16 15H103a16 16 0 0 1-16-15Z"/>
+
+            <!-- cup wall -->
+            <path class="cup-glass" d="M66 118h188l-21 284a16 16 0 0 1-16 15H103a16 16 0 0 1-16-15Z"/>
+
+            <!-- the pour, only seen while a new flavor goes in -->
+            <path class="stream" d="M112 -70h20v480h-20Z"/>
+
+            <g clip-path="url(#cup-inside)">
+              <g class="liquid">
+                <path class="wave wave-back" d="M-160 150q40-16 80 0t80 0 80 0 80 0 80 0 80 0 80 0 80 0V470h-640Z"/>
+                <path class="wave wave-front" d="M-160 158q40 14 80 0t80 0 80 0 80 0 80 0 80 0 80 0 80 0V470h-640Z"/>
+                <g class="ice">
+                  <rect x="96" y="176" width="52" height="52" rx="12" transform="rotate(-14 122 202)"/>
+                  <rect x="176" y="186" width="46" height="46" rx="11" transform="rotate(18 199 209)"/>
+                  <rect x="132" y="224" width="44" height="44" rx="10" transform="rotate(8 154 246)"/>
+                </g>
+                <g class="pulp">
+                  <circle cx="112" cy="330" r="4"/><circle cx="214" cy="300" r="3"/><circle cx="196" cy="366" r="5"/><circle cx="124" cy="386" r="3"/><circle cx="170" cy="344" r="2.500"/>
+                </g>
+              </g>
+              <path class="straw-out straw-in" d="M190 100 146 300"/>
+              <path class="straw straw-in" d="M190 100 146 300"/>
+            </g>
+
+            <!-- our sticker on the cup -->
+            <circle cx="160" cy="300" r="48" fill="#FFFBEB"/>
+            <image href="/media/logo.webp" x="117" y="257" width="86" height="86" clip-path="url(#sticker-clip)" preserveAspectRatio="xMidYMid slice"/>
+
+            <path class="cup-shine" d="M92 144c3 78 8 156 14 234"/>
+            <path class="cup-line" d="M66 118h188l-21 284a16 16 0 0 1-16 15H103a16 16 0 0 1-16-15Z"/>
+
+            <!-- lid and straw lift off together when a flavor is poured -->
+            <g class="lid-group">
+              <g class="cup-shade" transform="translate(10 10)">
+                <rect x="52" y="94" width="216" height="26" rx="11"/>
+                <rect x="82" y="80" width="156" height="18" rx="9"/>
+              </g>
+              <path class="straw-out" d="M188 108 214 16"/>
+              <path class="straw" d="M188 108 214 16"/>
+              <rect class="lid" x="52" y="94" width="216" height="26" rx="11"/>
+              <rect class="lid" x="82" y="80" width="156" height="18" rx="9"/>
+            </g>
+          </svg>
+          <p class="pour" aria-live="polite"><strong id="flavor-name">Classic lemonade</strong> <span id="flavor-note">Just lemons, squeezed fresh. Sweet, tart and ice cold.</span></p>
+        </div>
+      </div>
+
+      <div class="showstopper">
+        <figure class="sticker showstopper-wide settle">
+          <img src="/media/cotton-candy-billboard.webp" width="1400" height="933" loading="lazy" alt="Our cotton candy lemonade: a blue and gold drink in a clear cup, topped with a bowl of cotton candy and gummies.">
+        </figure>
+        <figure class="sticker showstopper-tall settle" style="--i:2">
+          <video class="film lazy" muted loop playsinline preload="none" poster="/media/cotton-candy.jpg" data-src="/media/cotton-candy.mp4" width="576" height="720" aria-label="The real thing on our table: layered lemonade with cotton candy on top."></video>
+        </figure>
+        <div class="showstopper-copy">
+          <h3>Cotton candy meets refreshing</h3>
+          <p>Our cotton candy lemonade comes with the real thing piled on top. It's the one people point at.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 5. For the people who run the place -->
+  <section class="band events" id="events">
+    <div class="wrap events-grid">
+      <div class="events-art">
+        <figure class="sticker events-reel">
+          <video class="film lazy" muted loop playsinline preload="none" poster="/media/market-reel.jpg" data-src="/media/market-reel.mp4" width="720" height="1280" aria-label="Clips from a market day: the stand, the sample cups, lemons being pressed."></video>
+        </figure>
+        <figure class="sticker events-table">
+          <img src="/media/table-samples.webp" width="720" height="1280" loading="lazy" alt="Our table at the market: the Sofia's Fresh Lemonade banner, a hand press, a bowl of lemons and a row of sample cups.">
+        </figure>
+      </div>
+      <div class="events-copy">
+        <h2>Bring the stand to your place</h2>
+        <p>Running a farmers market, a school fair or a birthday party? Give us a spot and we bring the rest: tables, pink tablecloths, our menu banner and plenty of lemons, squeezed while your guests watch.</p>
+        <h3>Perfect for any event</h3>
+        <ul class="ticks">
+          <li>Farmers markets</li>
+          <li>School events</li>
+          <li>Birthday parties</li>
+          <li>Festivals</li>
+          <li>Corporate events</li>
+          <li>Community events</li>
+          <li>Church events</li>
+          <li>Private catering</li>
+        </ul>
+        <p class="seen">You may have seen us at <a href="https://www.instagram.com/p/DdeM0IzxL1_/" rel="noopener">Miami Lakes Market</a>.</p>
+        <p class="actions"><a class="btn btn-pink" href="#book">Ask about your date</a></p>
+        <p class="delivers">We also deliver in Miami and take orders for school events, offices, parties and family get-togethers. <a href="sms:+17542099503">Text your order to 754-209-9503</a>.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 6. Instagram -->
+  <section class="band feed" id="feed">
+    <div class="wrap">
+      <div class="feed-head">
+        <h2>From our feed</h2>
+        <p class="actions">
+          <a class="btn btn-pink" href="https://www.instagram.com/sofias_fresh_lemonade/" rel="noopener"><svg class="ico" aria-hidden="true"><use href="#ico-camera"/></svg>Follow on Instagram</a>
+          <a class="btn btn-outline" href="https://www.tiktok.com/@sofiasfreshlemonade" rel="noopener"><svg class="ico" aria-hidden="true"><use href="#ico-note"/></svg>Watch on TikTok</a>
+        </p>
+      </div>
+    </div>
+    <ul class="feed-strip">
+      <li><a class="sticker" href="https://www.instagram.com/p/Darbl45xfwP/" rel="noopener"><img src="/media/post-menu.webp" width="900" height="1200" loading="lazy" alt="Our menu flyer: Sofia's Fresh Lemonade. Simple, fresh, delicious. 16 oz cups and 32 oz containers."></a></li>
+      <li><a class="sticker" href="https://www.instagram.com/p/Ddj5_qDS2SR/" rel="noopener"><img src="/media/stand-ready.webp" width="720" height="1280" loading="lazy" alt="The finished stand: menu banner on the left, pink Fresh Squeezed Lemonade table under the tent."></a></li>
+      <li><a class="sticker" href="https://www.instagram.com/p/DdWV21eRcvi/" rel="noopener"><img src="/media/post-flavor-board.webp" width="720" height="1280" loading="lazy" alt="Our flavor board with fourteen lemonade drinks, from cotton candy to regular lemonade."></a></li>
+      <li><a class="sticker" href="https://www.instagram.com/p/DZ-K5ZRRrJW/" rel="noopener"><img src="/media/post-join-us.webp" width="900" height="1200" loading="lazy" alt="Join us for Sofia's Lemonade. Fresh, simple, delicious. Help support local youth entrepreneurs."></a></li>
+    </ul>
+  </section>
+
+  <!-- 7. Booking -->
+  <section class="book cloth" id="book">
+    <div class="valance valance-up" aria-hidden="true"></div>
+    <div class="wrap book-grid">
+      <div class="book-copy">
+        <h2 class="sign sign-small">Let's make your next event refreshingly unforgettable</h2>
+        <p class="lede">Tell us a little about it, then send it over by text or Instagram.</p>
+        <ul class="direct">
+          <li><a href="sms:+17542099503"><svg class="ico" aria-hidden="true"><use href="#ico-chat"/></svg>Text 754-209-9503</a></li>
+          <li><a href="tel:+17542099503"><svg class="ico" aria-hidden="true"><use href="#ico-phone"/></svg>Call 754-209-9503</a></li>
+          <li><a href="https://ig.me/m/sofias_fresh_lemonade" rel="noopener"><svg class="ico" aria-hidden="true"><use href="#ico-camera"/></svg>Message @sofias_fresh_lemonade</a></li>
+        </ul>
+      </div>
+
+      <form class="request" id="request" novalidate>
+        <fieldset class="field">
+          <legend>What's the occasion?</legend>
+          <div class="options">
+            <span class="option"><input type="radio" name="occasion" id="o-market" value="our farmers market" checked><label for="o-market">Farmers market</label></span>
+            <span class="option"><input type="radio" name="occasion" id="o-school" value="our school event"><label for="o-school">School event</label></span>
+            <span class="option"><input type="radio" name="occasion" id="o-birthday" value="a birthday party"><label for="o-birthday">Birthday party</label></span>
+            <span class="option"><input type="radio" name="occasion" id="o-festival" value="our festival"><label for="o-festival">Festival</label></span>
+            <span class="option"><input type="radio" name="occasion" id="o-office" value="our office event"><label for="o-office">Office event</label></span>
+            <span class="option"><input type="radio" name="occasion" id="o-community" value="our church or community event"><label for="o-community">Church or community</label></span>
+            <span class="option"><input type="radio" name="occasion" id="o-other" value="our event"><label for="o-other">Something else</label></span>
+          </div>
+        </fieldset>
+        <div class="field-row">
+          <div class="field">
+            <label for="r-date">When is it?</label>
+            <input type="date" id="r-date" name="date">
+          </div>
+          <div class="field">
+            <label for="r-guests">How many people?</label>
+            <select id="r-guests" name="guests">
+              <option value="">Not sure yet</option>
+              <option value="fewer than 50 people">Under 50</option>
+              <option value="50 to 150 people">50 to 150</option>
+              <option value="150 to 500 people">150 to 500</option>
+              <option value="more than 500 people">More than 500</option>
+            </select>
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label for="r-place">Where?</label>
+            <input type="text" id="r-place" name="place" autocomplete="off" placeholder="Venue or neighborhood">
+          </div>
+          <div class="field">
+            <label for="r-name">Your name</label>
+            <input type="text" id="r-name" name="name" autocomplete="name" placeholder="So we know who's asking">
+          </div>
+        </div>
+
+        <div class="note">
+          <p class="note-label" id="note-label">Your message</p>
+          <p class="note-text" id="note-text" aria-labelledby="note-label">Hi Sofia's Fresh Lemonade! I'd love to have your stand at our farmers market. Are you available?</p>
+        </div>
+        <div class="actions send">
+          <a class="btn btn-pink" id="send-text" href="sms:+17542099503"><svg class="ico" aria-hidden="true"><use href="#ico-chat"/></svg>Text it to us</a>
+          <button class="btn btn-outline" id="send-dm" type="button"><svg class="ico" aria-hidden="true"><use href="#ico-camera"/></svg>Copy it and open Instagram</button>
+        </div>
+        <p class="status" id="send-status" role="status"></p>
+      </form>
+    </div>
+  </section>
+</main>
+
+<footer class="foot">
+  <div class="wrap foot-grid">
+    <div class="foot-brand">
+      <img src="/media/logo.webp" width="84" height="84" loading="lazy" alt="Sofia's Fresh Lemonade logo">
+      <p><strong>Sofia's Fresh Lemonade</strong>Simple. Fresh. Delicious.</p>
+    </div>
+    <ul class="foot-links">
+      <li><a href="sms:+17542099503">Text 754-209-9503</a></li>
+      <li><a href="https://www.instagram.com/sofias_fresh_lemonade/" rel="noopener">Instagram</a></li>
+      <li><a href="https://www.tiktok.com/@sofiasfreshlemonade" rel="noopener">TikTok</a></li>
+    </ul>
+    <p class="foot-fine">Family-owned in Miami-Dade, Florida. © 2026 Sofia's Fresh Lemonade.</p>
+  </div>
+</footer>
+
+<a class="book-pill btn btn-lemon" href="#book" id="book-pill">Book the stand</a>
+
+<script src="/js/main.js" defer></script>
+</body>
+</html>
