@@ -1,7 +1,7 @@
 import { refund, settle, spend } from '../ai/credits';
-import { parseBureauLayout } from './bureau-layouts';
+import { detectLayout, parseBureauLayout, parseTransUnionAcr, readingScore, tuTextFromLines } from './bureau-layouts';
 import { htmlToText, MAX_TEXT, parseReportText, parseTradelineCsv } from './parser';
-import { PdfTextError, readPdfText, SCANNED_PDF_MESSAGE } from './pdf-text';
+import { PdfTextError, readPdfLines, readPdfText, SCANNED_PDF_MESSAGE } from './pdf-text';
 import { isScanMime, MAX_SCAN_PAGES, OcrError, ocrEnabled, ocrReport, SCAN_FIELD_CONFIDENCE, SCAN_WARNING, type ScanMime } from './ocr';
 import type { ParsedReport } from './types';
 
@@ -82,7 +82,18 @@ export async function readReportFile(file: ReportFile, payer: Payer, deps: ReadD
   }
 
   // The bureaus' own free-report layouts (Experian, Equifax, TransUnion) have exact readers: free, no AI, fixed fields.
-  const bureau = parseBureauLayout(text);
+  let bureau = parseBureauLayout(text);
+  if (file.mime === 'application/pdf' && detectLayout(text) === 'transunion_acr') {
+    // TransUnion prints each account as a grid, and the order a PDF stores that grid's text in depends on how the file
+    // was made. So the file is read a second time from where the text sits on the page, and the reading that filled
+    // in more of the accounts is kept. If the second reading cannot be made, the first one stands.
+    try {
+      const byPosition = parseTransUnionAcr(tuTextFromLines(await readPdfLines(file.bytes)));
+      if (!bureau || readingScore(byPosition) > readingScore(bureau)) bureau = byPosition;
+    } catch (e) {
+      if (!(e instanceof PdfTextError)) throw e;
+    }
+  }
   if (bureau && found(bureau)) return { parsed: bureau, via: 'layout', pages };
 
   if (text.length > MAX_TEXT) throw new ReportReadError(TOO_MUCH_TEXT);
@@ -93,7 +104,10 @@ export async function readReportFile(file: ReportFile, payer: Payer, deps: ReadD
   if (!enabled()) {
     // A bureau's own disclosure in which the rules found no account at all: whatever else they picked up is lines of
     // the report that only look like inquiries (a heading's explanation, an address), so nothing is imported.
-    const junk = disclosure && rules.tradelines.length === 0;
+    // The same holds for a PDF that names a bureau: a PDF is a printout of a report, not a list someone typed, so one
+    // with no account read is a layout the rules do not know. (A typed text file that lists inquiries only is still read.)
+    const bureauPdf = file.mime === 'application/pdf' && /\b(?:equifax|experian|trans\s?union)\b/i.test(text.slice(0, 600));
+    const junk = rules.tradelines.length === 0 && (disclosure || bureauPdf);
     if (found(rules) && !junk) return { parsed: rules, via: 'rules', pages };
     throw new ReportReadError(LAYOUT_NOT_KNOWN);
   }

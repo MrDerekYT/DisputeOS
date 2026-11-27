@@ -1,5 +1,46 @@
 # Changelog
 
+## Ask about your clients, TransUnion reports read, long reports (unreleased)
+
+Migration `0033_assistant_questions.sql`: one new table (each person's own questions and answers, row-level security,
+no update or delete for the app's role) and a trigger that removes stored answers about a client when the client is
+deleted. Additive; nothing existing changes. No new dependency.
+
+**Ask about your clients** (AI assistant page, and an “Ask” button on every client page)
+
+- Type a client's name and a question. The answer comes from this workspace's own records (status and stage,
+  reports, negative items, disputes with their due dates, letters, tasks, documents, notes, messages), with the file
+  that was read shown beside it. A question that names nobody is answered from the workspace's counts (“Who has
+  disputes past their due date?”).
+- The answer from the records is free and always there. With an AI provider and credits, “Ask AI” costs 2 credits,
+  taken only when an AI answer is shown; if it fails or the checks discard it, the records answer is shown and the
+  credits come back.
+- An AI answer is given client names and case facts only: never a Social Security number, date of birth, street
+  address, phone, email, full account number or a document (`docs/SECURITY_AND_COMPLIANCE.md`).
+- Each person sees only their own last ten questions; the audit log records that a question was asked, not its text.
+  A personal workspace gets the same box as “Ask about your file”.
+- Not yet proven against a live AI provider: the AI path is tested with a stand-in model only.
+
+**Reading reports**
+
+- **TransUnion's free AnnualCreditReport.com report is read without AI**: accounts, collections, hard inquiries,
+  name, addresses and report date. TransUnion lays an account out as a grid (labels in a row, each value under its
+  label), so the PDF is also read by where the text sits on the page, and the fuller of the two readings is kept. That
+  path is tested value by value on three sample reports written by someone else (the MIT-licensed Errata project,
+  invented people; `tests/fixtures/errata/`). **It has not been run on a real TransUnion file**, so every field is
+  flagged for review and the report says so.
+- **Long reports are no longer refused**: the PDF page limit is 400 (was 80), and the upload result says how many
+  pages were read.
+- **The Experian reader checks itself** against the totals the report prints and warns on any difference; it also
+  says when the report lists public records, which are not imported.
+- **With AI reading off, a bureau report whose accounts cannot be read is refused** instead of importing stray lines
+  as inquiries.
+- **Negative items**: TransUnion's history codes (COL, c/o, RPO, FC, vs) and 120 days are recognised, and a year such
+  as 2030 is no longer read as “30 days late”.
+- **The removal month TransUnion prints** (“Estimated month and year this item will be removed”) is shown on the
+  comparison as TransUnion's own estimate. An account that prints it is not flagged for showing no date of first
+  delinquency, and it is flagged when the same account was still updated in a later month.
+
 ## Three bureaus in one table, flags that keep up, a tidier client page (unreleased)
 
 No migration for this part.

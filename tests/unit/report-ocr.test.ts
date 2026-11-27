@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { renderPdfBlocks } from '@/lib/letters/pdf';
 import { resetEnvCache } from '@/lib/env';
 import { OcrError, ocrReport, SCAN_FIELD_CONFIDENCE, SCAN_WARNING, stripFullNumbers } from '@/lib/reports/ocr';
 import { AI_READ_WARNING, LAYOUT_NOT_KNOWN, markAiRead, NO_SCAN_CREDITS, readReportFile, ReportReadError, reportMimes, SCANS_OFF_IMAGE } from '@/lib/reports/read-file';
@@ -216,6 +217,20 @@ NORTHWEST FCU 07/25/2025`;
     expect(rules.tradelines).toEqual([]);
     expect(rules.inquiries.map((q) => q.name)).toEqual(['The companies listed below received your credit information.', 'NORTHWEST FCU']);
     await expect(readReportFile({ bytes: Buffer.from(UNKNOWN_DISCLOSURE), mime: 'text/plain', name: 'x.txt' }, payer, { enabled: () => false, credits: credits() })).rejects.toThrow(LAYOUT_NOT_KNOWN);
+  });
+
+  it('with AI off, imports nothing from a PDF that names a bureau when no account could be read, and still reads a typed list', async () => {
+    // A printout in a layout the rules do not know: no "Label: value" account, and lines that read like inquiries.
+    const lines = ['Equifax Credit Report', 'Report Date: 10/20/2026', 'Revolving Accounts', 'MIDTOWN SAMPLE BANK', 'XXXX2310 Individual Credit Card Current',
+      'Inquiries', 'The companies listed below received your credit information.', 'NORTHWEST FCU 07/25/2025'];
+    const pdf = renderPdfBlocks(lines.map((text) => ({ text })));
+    const rules = parseReportText(lines.join('\n'));
+    expect(rules.tradelines).toEqual([]);
+    expect(rules.inquiries.length).toBeGreaterThan(0);
+    await expect(readReportFile({ bytes: pdf, mime: 'application/pdf', name: 'eq.pdf' }, payer, { enabled: () => false, credits: credits() })).rejects.toThrow(LAYOUT_NOT_KNOWN);
+    // The same lines typed into a text file are someone's own list: read as before.
+    const typed = await readReportFile({ bytes: Buffer.from(lines.join('\n')), mime: 'text/plain', name: 'eq.txt' }, payer, { enabled: () => false, credits: credits() });
+    expect(typed.via).toBe('rules');
   });
 
   it('with AI on, the same disclosure goes to AI instead of being refused', async () => {

@@ -15,6 +15,8 @@ export interface AnalysisTradeline {
   account_last4: string | null; account_status: string | null; payment_status: string | null; balance_cents: number | null;
   credit_limit_cents: number | null; date_opened: string | null; date_reported: string | null; date_of_first_delinquency: string | null;
   payment_history: string | null; user_provided: Record<string, unknown>;
+  /** The bureau's own notes on the account. Only read for a removal month the bureau itself prints (printedRemovalMonth). */
+  remarks?: string | null;
 }
 export interface AnalysisInquiry { id: string; bureau: Bureau; name: string; inquiry_date: string | null; kind: string }
 export interface AnalysisPublicRecord { id: string; bureau: Bureau; kind: string; filed_date: string | null; status: string | null }
@@ -39,6 +41,7 @@ export const FINDING_CATEGORIES = {
   collection_validation: 'Collection account',
   negative_item: 'Late payments or charge-off reported',
   status_balance_conflict: 'Status and balance do not agree',
+  removal_month_passed: 'Reported after the removal month the report prints',
   old_inquiry: 'Older inquiry',
   client_statement: 'Client statement conflicts with report',
   possible_reinsertion: 'Possible reinsertion',
@@ -191,6 +194,17 @@ export function settledWording(t: Pick<AnalysisTradeline, 'account_status' | 'pa
   return null;
 }
 
+/**
+ * The month a bureau itself prints as the estimated end of reporting for an account, as "YYYY-MM", or null.
+ * TransUnion prints "Estimated month and year this item will be removed" on adverse accounts in place of a date of
+ * first delinquency; its reader keeps that line in the account's remarks, word for word.
+ */
+export function printedRemovalMonth(t: Pick<AnalysisTradeline, 'remarks'>): string | null {
+  const m = /Estimated month and year (?:that )?this item will be removed:?\s*(0[1-9]|1[0-2])\/(\d{4})/i.exec(t.remarks ?? '');
+  return m ? `${m[2]}-${m[1]}` : null;
+}
+const sayMonth = (ym: string) => `${ym.slice(5)}/${ym.slice(0, 4)}`;
+
 const yearsSince = (iso: string, now: Date) => (now.getTime() - new Date(`${iso}T00:00:00Z`).getTime()) / (365.25 * 86_400_000);
 const NOTE = 'This is a difference to investigate, not a conclusion that anything is inaccurate.';
 /** Why a date-of-first-delinquency difference matters, without saying which date (if either) is wrong. 15 U.S.C. § 1681c. */
@@ -248,6 +262,7 @@ export function analyze(input: {
         // date of first delinquency for a collection or charge-off (15 U.S.C. § 1681c(a)(4), (c)(1)).
         const off = tradelineFallOff(t);
         const age = t.date_of_first_delinquency ? yearsSince(t.date_of_first_delinquency, now) : null;
+        const printed = printedRemovalMonth(t);
         if (off?.kind === 'date' && age != null && off.date < today) {
           // A collection or a charge-off ages off as a whole. An account that is only late does not: what has aged is
           // the late payment information from that date, and the account keeps being reported (§ 1681c(a)(5)).
@@ -261,7 +276,17 @@ export function analyze(input: {
             evidence: [rep(t, 'Date of first delinquency', t.date_of_first_delinquency!), { field: 'Age at report review', value: `${age.toFixed(1)} years`, source: 'derived' }, { field: 'Reporting period generally ends', value: off.date, source: 'derived' }],
             basis: 'potential_discrepancy', tradeline_ids: [t.id],
           });
-        } else if (t.item_type === 'collection' && !t.date_of_first_delinquency) {
+        } else if (printed && t.date_reported && printed < t.date_reported.slice(0, 7)) {
+          // The bureau's own estimate, set against its own "updated" date on the same account: both as printed.
+          add({
+            dedupe_key: `removal:${t.id}`, category: 'removal_month_passed', severity: 'strong',
+            title: `${name} on ${BUREAU_LABEL[b]} was still reported after the removal month the report prints`,
+            explanation: `${BUREAU_LABEL[b]} prints an estimated removal month of ${sayMonth(printed)} for this account, and shows the account as updated on ${t.date_reported}, after that month. Check both against the original report before disputing. If they are as printed, ask ${BUREAU_LABEL[b]} to review why the item is still reported. ${NOTE}`,
+            evidence: [rep(t, 'Estimated removal month, as printed', sayMonth(printed)), rep(t, 'Date updated', t.date_reported)],
+            basis: 'potential_discrepancy', tradeline_ids: [t.id],
+          });
+        } else if (t.item_type === 'collection' && !t.date_of_first_delinquency && !printed) {
+          // (Not said of an account whose report prints a removal month instead: that layout has no such date to show.)
           add({
             dedupe_key: `dofd:${t.id}`, category: 'dofd_mismatch', severity: 'review', title: `${name} on ${BUREAU_LABEL[b]} shows no date of first delinquency`,
             explanation: 'Collection accounts normally report a date of first delinquency, which controls how long the item may remain. It is not shown here — worth asking the furnisher to verify it.',

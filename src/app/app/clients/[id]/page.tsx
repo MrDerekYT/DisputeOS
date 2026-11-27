@@ -3,7 +3,7 @@ import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import { loadProgressFacts, suggestProgress, syncClientProgress } from '@/lib/client-progress';
 import { ProgressPicker } from './progress-picker';
-import { AlertTriangle, ArrowLeft, Check as CheckIcon, CheckCircle2, ChevronDown, ChevronRight, Download, FileText, Gavel, Mail, MapPin, Pencil, Phone, Pin, ScanSearch, Trash2 } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, Check as CheckIcon, CheckCircle2, ChevronDown, ChevronRight, Download, FileText, Gavel, Mail, MapPin, Pencil, Phone, Pin, ScanSearch, Sparkles, Trash2 } from 'lucide-react';
 import { ActionForm, Check, ConfirmButton, Field, Select, SubmitButton, TextArea } from '@/components/forms';
 import { AiTag, Avatar, Badge, DayMeter, DefinitionList, EmptyState, Notice, Section, StatusBadge, Tabs } from '@/components/ui';
 import { SplitBar } from '@/components/charts';
@@ -125,6 +125,8 @@ export default async function ClientPage({ params, searchParams }: { params: Pro
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Link href={`/app/clients/${id}/statement`} className="btn-secondary">Work statement</Link>
+            {/* "Ask about your clients" on the assistant page, opened for this client: answers come from this file. */}
+            <Link href={`/app/assistant?client=${id}#ask`} className="btn-secondary" title="Ask a question about this client’s file"><Sparkles size={15} aria-hidden /> Ask<span className="sr-only"> about this client’s file</span></Link>
             <Link href={`/app/clients/${id}/edit`} className="btn-secondary"><Pencil size={15} aria-hidden /> Edit</Link>
             {ctx.can('clients:delete') && <Link href={`/app/clients/${id}/edit#delete`} className="btn-secondary text-bad"><Trash2 size={15} aria-hidden /> Delete</Link>}
             <Link href={`/app/disputes/new?clientId=${id}`} className="btn-primary"><Gavel size={15} aria-hidden /> New dispute</Link>
@@ -450,7 +452,7 @@ async function ReportsTab({ id, ctx }: { id: string; ctx: Ctx }) {
         ) : (
         <div className="space-y-4">
           <ReportDropzone clientId={id} action={uploadReportFileAction} accept={scans ? '.pdf,.txt,.html,.htm,.csv,.png,.jpg,.jpeg' : '.pdf,.txt,.html,.htm,.csv'} maxBytes={maxUploadBytes()} tooLarge={tooLargeMessage(maxUploadMb())} hint={`${scans ? 'PDF, photo, HTML, TXT or CSV' : 'PDF, HTML, TXT or CSV'} · max ${maxUploadMb()} MB each`} />
-          <p className="text-xs text-muted">AnnualCreditReport.com PDFs from Experian and Equifax are read exactly, field by field, for free. {scans ? `Other layouts (TransUnion, other printouts), scans and photos are read by AI (${AI_COSTS.report_scan} AI credits each, nothing taken if it can't be read) and every field is flagged for you to check.` : 'Other layouts read best as the CSV template; scans and photos need AI reading, which is off.'} The bureau is detected from the file. Files are stored encrypted. <a className="link" href="/templates/report-import.csv">CSV template</a></p>
+          <p className="text-xs text-muted">AnnualCreditReport.com PDFs from Experian, Equifax and TransUnion are read exactly, field by field, for free. The TransUnion reader is new, so every field it reads is flagged for you to check. {scans ? `Other printouts, scans and photos are read by AI (${AI_COSTS.report_scan} AI credits each, nothing taken if it can't be read) and every field is flagged for you to check.` : 'Other layouts read best as the CSV template; scans and photos need AI reading, which is off.'} The bureau is detected from the file. Files are stored encrypted. <a className="link" href="/templates/report-import.csv">CSV template</a></p>
         </div>
         )}
       </Section>

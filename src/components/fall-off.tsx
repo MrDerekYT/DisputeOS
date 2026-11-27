@@ -12,7 +12,22 @@ import { cn, fmtDate } from '@/lib/util';
  * with "date has passed" once it is behind us, and for an account that is only late a second line saying the date is
  * about the late payments from that date and not the account. A dash for an item with nothing negative.
  */
-export function FallOffCell({ fallOff, today = new Date().toISOString().slice(0, 10) }: { fallOff: FallOff | null; today?: string }) {
+export function FallOffCell({ fallOff, printed, today = new Date().toISOString().slice(0, 10) }: {
+  fallOff: FallOff | null;
+  /** The removal month the bureau itself prints for the account ("YYYY-MM"), shown when there is no date to count from. */
+  printed?: { month: string; by: string } | null;
+  today?: string;
+}) {
+  if (printed && fallOff?.kind !== 'date') {
+    const past = printed.month < today.slice(0, 7);
+    return (
+      <span className={past ? 'text-bad' : undefined} title={`The month ${printed.by} prints on the report as its own estimate. Nothing here is worked out.`}>
+        {printed.month.slice(5)}/{printed.month.slice(0, 4)}
+        {past && <span className="block text-xs font-medium">month has passed</span>}
+        <span className="block text-xs font-normal text-muted">{printed.by}’s own estimate</span>
+      </span>
+    );
+  }
   if (!fallOff) return <span className="font-normal text-faint">—</span>;
   if (fallOff.kind === 'not_available') return <span className="font-normal text-muted" title="The report gives no date of first delinquency to count from. A date is never estimated.">Date not reported</span>;
   const past = fallOff.date < today;

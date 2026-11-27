@@ -5,7 +5,7 @@ import { notFound } from 'next/navigation';
 import { ArrowDown, Check, Eye, Gavel, RefreshCw, X } from 'lucide-react';
 import { Badge, EmptyState, Notice, PageHeader, StatusBadge } from '@/components/ui';
 import { requireStaff } from '@/lib/auth/context';
-import { analyze, diffGroup, flagsBehind, groupAccounts, SEVERITY_ORDER, FINDING_CATEGORIES, type AnalysisTradeline, type Evidence, type FindingCategory } from '@/lib/reports/analysis';
+import { analyze, diffGroup, flagsBehind, groupAccounts, printedRemovalMonth, SEVERITY_ORDER, FINDING_CATEGORIES, type AnalysisTradeline, type Evidence, type FindingCategory } from '@/lib/reports/analysis';
 import { loadAnalysisInput, regenerateFindings } from '@/lib/reports/service';
 import { BUREAU_LABEL, BUREAUS, cn, fmtDate, isUuid, money, type Bureau } from '@/lib/util';
 import { refreshFindingsAction, setFindingStatusAction } from '../../../reports/actions';
@@ -57,7 +57,7 @@ export default async function ComparePage({ params, searchParams }: { params: Pr
   const groups = groupAccounts(input.tradelines);
   const have = new Set(input.reports.map((r) => r.bureau));
   // Negative items (collections, late payments, charge-offs, old items) first, then by severity.
-  const NEG = new Set(['collection_validation', 'negative_item', 'obsolete_item']);
+  const NEG = new Set(['collection_validation', 'negative_item', 'obsolete_item', 'removal_month_passed']);
   findings.sort((a, b) => Number(NEG.has(b.category)) - Number(NEG.has(a.category)) || SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity]);
   const negativeCount = findings.filter((f) => NEG.has(f.category)).length;
 
@@ -116,8 +116,10 @@ export default async function ComparePage({ params, searchParams }: { params: Pr
                   {(() => {
                     const cols = BUREAUS.map((b: Bureau) => ({ b, t: g.byBureau[b] ?? null }));
                     const offs = cols.map((c) => (c.t ? tradelineFallOff(c.t) : null));
+                    // TransUnion prints its own estimate of the month an adverse account will be removed, in place of a date to count from.
+                    const printed = cols.map((c) => (c.t ? printedRemovalMonth(c.t) : null));
                     const anyHistory = cols.some((c) => c.t?.payment_history);
-                    const anyOff = offs.some(Boolean);
+                    const anyOff = offs.some(Boolean) || printed.some(Boolean);
                     const anySays = cols.some((c) => c.t && (c.t.user_provided.not_mine === true || c.t.user_provided.never_late === true));
                     const span = fieldRows.length + Number(anyHistory) + Number(anyOff) + Number(anySays) + 1;
                     const head = 'py-1.5 pl-3 pr-1 text-left align-top font-normal text-muted sm:pr-3';
@@ -158,7 +160,7 @@ export default async function ComparePage({ params, searchParams }: { params: Pr
                           {anyOff && (
                             <tr>
                               <th scope="row" className={head}>Generally reportable until</th>
-                              {across(false, (_t, n) => <FallOffCell fallOff={offs[n] ?? null} />)}
+                              {across(false, (t, n) => <FallOffCell fallOff={offs[n] ?? null} printed={printed[n] ? { month: printed[n]!, by: BUREAU_LABEL[t.bureau] } : null} />)}
                             </tr>
                           )}
                           {anySays && (
@@ -209,7 +211,7 @@ export default async function ComparePage({ params, searchParams }: { params: Pr
                 {findings.map((f) => {
                   const basis = BASIS_LABEL[f.basis]!;
                   // Collections, charge-offs and late payments are what clients come to us for: shown in red.
-                  const negative = f.category === 'collection_validation' || f.category === 'negative_item' || f.category === 'obsolete_item';
+                  const negative = NEG.has(f.category);
                   return (
                     <li key={f.id} className={negative ? 'card card-pad border-l-4 !border-l-bad' : 'card card-pad'}>
                       <div className="flex flex-wrap items-start justify-between gap-3">

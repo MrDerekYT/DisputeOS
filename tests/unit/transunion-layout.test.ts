@@ -67,7 +67,7 @@ describe.each(SHAPES)('TransUnion layout: %s', (_shape, text) => {
       account_type: 'Open Account (COLLECTION AGENCY/ATTORNEY)', account_status: 'Collection', payment_status: 'In Collection',
       balance_cents: 90000, credit_limit_cents: null, high_balance_cents: null, date_opened: '2026-03-01', date_reported: '2026-11-02',
       payment_history: 'Oct 2026 COL; Nov 2026 COL',
-      remarks: 'ACCT INFO DISPUTED BY CONSUMR; PLACED FOR COLLECTION · Past due: $900 · Estimated month and year this item will be removed: 05/2032',
+      remarks: 'Estimated month and year this item will be removed: 05/2032 · ACCT INFO DISPUTED BY CONSUMR; PLACED FOR COLLECTION · Past due: $900',
     });
   });
 

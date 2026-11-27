@@ -636,10 +636,21 @@ name and the addresses, and the report date. A text file with the same content i
   TransUnion field is held just below the review threshold (`TRANSUNION_FIELD_CONFIDENCE = 0.75`) and the report carries
   "The TransUnion reader is new and has been tested on sample files only: check every value against the original report
   before approving." Raise the one constant to 0.95 once real files have been checked.
+- **TransUnion is read twice, and the fuller reading is kept.** TransUnion lays an account out as a grid: up to three
+  labels in a row, each value on the lines below under its label. The order a PDF stores that grid's text in depends on
+  how the file was made, so the stored order alone cannot be trusted to tell the values apart. A TransUnion PDF is
+  therefore also read by position (`readPdfLines` in `pdf-text.ts`: every piece of text with where it sits on the page,
+  grouped into lines and cells), rewritten one value per line (`tuTextFromLines`), and given to the same reader. The
+  reading that filled in more of the accounts is used (`readingScore`). The position path is tested on three generated
+  TransUnion reports from the MIT-licensed Errata project (`tests/fixtures/errata/`, invented people, written by
+  someone else): 15 accounts, hard inquiries, names and addresses, checked value by value in
+  `tests/unit/transunion-position.test.ts`. That is an independent check of the layout, not a real file.
 - **TransUnion's account status is worked out, not copied.** The print has a "Pay Status" row (stored as the payment
   status, as printed) and no account status row. The account status is "Closed" with the date from its "Date Closed"
   row, "Closed" when the pay status or remarks say closed, "Collection" for a collection, and "Open" for an account
-  whose pay status was read and that nothing calls closed. When the pay status could not be read it is left empty.
+  whose pay status was read and that nothing calls closed, charged off, repossessed, foreclosed or bankrupt. Otherwise
+  it is left empty. A collection is an account TransUnion itself calls one (in its type, pay status or remarks, or
+  reported by a debt buyer as a "factoring company account"); an original creditor alone does not make one.
 - **Payment history.** Equifax: the year rows as printed. TransUnion: the late months only, in its own codes
   ("Jul 2026 30; Aug 2026 60", "Oct 2026 COL"), or "No late payments in the months reported". When the months and the
   ratings cannot be paired, the late codes are kept without months. Experian: the grid is not read; its "payment
@@ -656,8 +667,12 @@ name and the addresses, and the report date. A text file with the same content i
 - **Employers and phone numbers**, and former names on Equifax. The SSN and date of birth are never stored.
 - **The last 4 of the account number** when the bureau masks the end and prints the front (Experian usually does,
   and so does TransUnion's print for some accounts): the printed digits are not the last 4, so nothing is stored.
-- **TransUnion's date of first delinquency.** The print does not state one. Its "estimated month and year this item
-  will be removed" is kept in the remarks, and the reporting-period date shows "date not available".
+- **TransUnion's date of first delinquency.** The print states one on few accounts; it is stored when it does and
+  never worked out. Its "estimated month and year this item will be removed" is kept as the first of the remarks, and
+  the comparison shows it as "TransUnion's own estimate" where a computed date would be. An account that prints that
+  month is not flagged for showing no date of first delinquency, and it is flagged ("still reported after the removal
+  month the report prints") when the same account's "Date Updated" is in a later month: both values as printed, a
+  neutral request to verify that a person completes.
 - **Scores.** These reports carry none.
 - **Scans and photos**, which have no text: they need AI reading (below).
 - **Any other layout** (a mailed paper disclosure, a monitoring service's 3-bureau report): it goes to the rules parser,

@@ -64,6 +64,8 @@ export const FINDING_TO_CATEGORY: Record<string, string> = {
   old_inquiry: 'unauthorized_inquiry', client_statement: 'not_mine',
   // One entry that is reported as paid, sold or transferred and still shows a balance: a request to verify the status, with both values.
   status_balance_conflict: 'incorrect_status',
+  // Still reported after the removal month the bureau itself prints: a neutral "please verify" that a person completes.
+  removal_month_passed: 'other',
   // Case tools: the two report checks start as a neutral "please verify" to the bureau; a collector notice starts a validation request to the collector.
   medical_collection: 'other', bankruptcy_reporting: 'other', collector_notice: 'unverifiable_collection',
 };
