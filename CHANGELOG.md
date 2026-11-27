@@ -1,5 +1,89 @@
 # Changelog
 
+## Ask about your clients, TransUnion reports read, long reports (unreleased)
+
+Migration `0033_assistant_questions.sql`: one new table (each person's own questions and answers, row-level security,
+no update or delete for the app's role) and a trigger that removes stored answers about a client when the client is
+deleted. Additive; nothing existing changes. No new dependency.
+
+**Ask about your clients** (AI assistant page, and an “Ask” button on every client page)
+
+- Type a client's name and a question. The answer comes from this workspace's own records (status and stage,
+  reports, negative items, disputes with their due dates, letters, tasks, documents, notes, messages), with the file
+  that was read shown beside it. A question that names nobody is answered from the workspace's counts (“Who has
+  disputes past their due date?”).
+- The answer from the records is free and always there. With an AI provider and credits, “Ask AI” costs 2 credits,
+  taken only when an AI answer is shown; if it fails or the checks discard it, the records answer is shown and the
+  credits come back.
+- An AI answer is given client names and case facts only: never a Social Security number, date of birth, street
+  address, phone, email, full account number or a document (`docs/SECURITY_AND_COMPLIANCE.md`).
+- Each person sees only their own last ten questions; the audit log records that a question was asked, not its text.
+  A personal workspace gets the same box as “Ask about your file”.
+- Not yet proven against a live AI provider: the AI path is tested with a stand-in model only.
+
+**Reading reports**
+
+- **TransUnion's free AnnualCreditReport.com report is read without AI**: accounts, collections, hard inquiries,
+  name, addresses and report date. TransUnion lays an account out as a grid (labels in a row, each value under its
+  label), so the PDF is also read by where the text sits on the page, and the fuller of the two readings is kept. That
+  path is tested value by value on three sample reports written by someone else (the MIT-licensed Errata project,
+  invented people; `tests/fixtures/errata/`). **It has not been run on a real TransUnion file**, so every field is
+  flagged for review and the report says so.
+- **Long reports are no longer refused**: the PDF page limit is 400 (was 80), and the upload result says how many
+  pages were read.
+- **The Experian reader checks itself** against the totals the report prints and warns on any difference; it also
+  says when the report lists public records, which are not imported.
+- **With AI reading off, a bureau report whose accounts cannot be read is refused** instead of importing stray lines
+  as inquiries.
+- **Negative items**: TransUnion's history codes (COL, c/o, RPO, FC, vs) and 120 days are recognised, and a year such
+  as 2030 is no longer read as “30 days late”.
+- **The removal month TransUnion prints** (“Estimated month and year this item will be removed”) is shown on the
+  comparison as TransUnion's own estimate. An account that prints it is not flagged for showing no date of first
+  delinquency, and it is flagged when the same account was still updated in a later month.
+- **“Read the file again”** on a report that is still waiting for review. The file is already in the vault, so a
+  reading that came out wrong (it was read before a reader was improved, or a row was removed by mistake) is made
+  again from it instead of asking for the file a second time. What the fresh reading holds for that report takes the
+  place of what it held, and the report keeps its address. Corrections typed into the earlier reading, and what the
+  client said about an account, go with it, and the button says so first. Only the one report changes: an approved or
+  rejected report is never read again or changed (upload the file as a new report for that), other reports from the
+  same file are not touched, nothing changes when the file cannot be read, and a reading with a dispute or a collector
+  notice on one of its accounts is not replaced. Who may do it is the rule of the first reading: a file staff added
+  needs the client's written authorization on file. The client is not told again and no automation runs. The timeline
+  says “read again” and the audit log has `report.reread`.
+- **Approve and Reject decide the reading that was on screen.** If the file was read again, or a row was removed,
+  after the page was opened (in another tab, or by someone else), nothing is decided: the page comes back with “Not
+  decided” and the report as it now stands. A correction typed into a row that is no longer there says so instead of
+  “Account updated”. “Remove (misread row)” now waits for an approval that is in progress: pressed at the same
+  moment as Approve, it could take a row out of a report that had just been approved.
+
+## Three bureaus in one table, flags that keep up, a tidier client page (unreleased)
+
+No migration for this part.
+
+- **The comparison is one table per account**: a row per reported value and a column per bureau, on a phone as on a
+  desk (a phone used to stack the three bureaus under each other, three screens per account). A bureau that does not
+  report the account is one cell down its column.
+- **Flags keep up with the reports.** Opening the comparison brings the flags up to date when the approved reports
+  have changed since the analysis last ran: an account edited after approval, a statement from the client, or a
+  reporting period that has since ended. Reviewed flags are never touched. Someone who may not edit reports is told
+  the flags are behind instead. “Re-run analysis” is still there.
+- **A reporting date that has passed is red**, on the comparison and on the report page (“date has passed”).
+- **New flag: status and balance do not agree.** An account reported as paid, settled, sold or transferred to another
+  lender that still shows a balance is flagged for review with both reported values, and starts a “verify the status”
+  dispute. “Pays as agreed”, TransUnion’s “Paid or Paying as Agreed” and “transferred to recovery” are not read as
+  paid. The idea comes from the MIT-licensed Errata project (github.com/wjwhitmire/errata); the code is ours.
+- **A collection flag says whether the report names the original creditor** (the validation letter asks the collector
+  for it either way).
+- **Client page.** Sections that are settled fold to one line (welcome link, agreement terms, compliance record, text
+  consent, referred by, details); “Needs attention” sits next to the plan; “Draft update” moved into Dispute
+  progress. Across the app, a section’s button sits beside its title instead of under a long hint.
+- **Report page.** Negative items are summarised as figures, and negative accounts are marked in red. An account with
+  many fields to confirm (every field of a TransUnion report is held for review) no longer runs off a phone's screen:
+  past two fields the badge gives the count, and the fields are listed below it in the form's own words (“balance”,
+  not “balance cents”).
+- **Landing page.** A new “Three bureaus, one table” section with a drawn sample of the comparison (sample data,
+  labelled as such).
+
 ## Invite by email or by link (unreleased)
 
 - **Invite a client: email it or get the link.** With email connected, “Invite a client” has two buttons: “Send welcome email”, and “Add and get the link”, which adds the client and shows the one-time link to copy or text, with no email sent.

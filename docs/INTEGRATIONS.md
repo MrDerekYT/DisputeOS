@@ -599,12 +599,136 @@ until then, treat the connection as unverified.
   weeks of use. The OpenAI-compatible adapter is unchanged apart from its error kinds and the 45 s deadline, and is
   tested against a mocked API only.
 
-## Reading reports with AI: AnnualCreditReport.com layouts, scans and photos
+## Reading the bureaus' own reports: every page, no AI
 
-Off by default. The rules-based parser reads the plain "Label: value" layout and the CSV template. It cannot follow
-the bureaus' own layouts (AnnualCreditReport.com, Experian/Equifax/TransUnion disclosures), and a scan or photo has
-no text at all. With AI reading on, the rules go first; when they recognise no accounts, or the file is a bureau
-disclosure, the report's text (or, for a scan, the pages) goes to the AI, which rewrites it into the fixed layout,
+The free report each bureau hands out through AnnualCreditReport.com is read by an exact reader: each value is taken
+from a fixed label and filed into a fixed field. No AI, no credits, nothing leaves the server
+(`src/lib/reports/bureau-layouts.ts`, `src/lib/reports/read-file.ts`, `src/lib/reports/pdf-text.ts`).
+
+| Bureau | The file it reads | How it is recognised |
+| --- | --- | --- |
+| Experian | the "Annual Credit Report - Experian" print | the print's title or address, and its `Account Name` rows |
+| Equifax | the "Credit Report … Confirmation #" disclosure | `EFX-ACR` in the page footer or the `equifax.com/personal` address, and its `Account Number: *1234` rows |
+| TransUnion | the "View Your Report \| TransUnion Credit Report" print | the bureau's name with the print's address, its `Payment/Remarks Key` or its `Personal Credit Report for` line |
+
+What is read from all three: every account and collection (creditor, original creditor, type, status, payment status,
+balance, credit limit, high balance, date opened, date reported, remarks), hard inquiries (one row for each date), the
+name and the addresses, and the report date. A text file with the same content is read the same way.
+
+- **Every page is read.** The text of all pages is taken out of the PDF before anything is looked for. The limit is
+  **400 pages** (`MAX_PDF_PAGES`; it was 80, which refused a long Experian report: Experian prints about two and a half
+  pages per account). Measured on generated reports: about 1 second for 110 pages and 3 seconds for 395. A longer PDF is
+  refused with "That PDF has N pages (limit 400). Upload one bureau’s report at a time." The upload size limit is
+  unchanged (10 MB, 4 MB on Vercel); a 395-page print was 1.3 MB. The upload result says how many pages were read
+  ("Experian: 18 accounts, 2 collections, 3 inquiries, all 46 pages read"). For a file read by AI it only states the
+  length ("46-page file"), because nothing here can confirm what the AI read.
+- **The reader checks itself.**
+  - Experian prints its own totals on the first page (`18 Accounts 0 Public Records 3 Hard Inquiries`). What was read
+    is compared with them, and a difference is a warning on the review page: "The report lists 18 accounts; 17 were
+    read. Compare with the original before approving." The same for hard inquiries.
+  - TransUnion prints no totals. Its reader warns when an account came out with few or no details, and when the hard
+    inquiry section shows dates but no inquiry could be read: the signs of a file laid out differently.
+  - Equifax prints no totals either, and its reader has no such check.
+- **TransUnion is new and held for review.** It reads both ways the PDF text comes out (label and value on one line,
+  or the label on one line and the value on the next), removes the page header and footer wherever they land, and reads
+  a history grid split by a page break. It was built from the layout of TransUnion's print and tested on generated
+  files in that layout, some of them 29 and 41 pages long. **It has not been run on a real TransUnion file.** So every
+  TransUnion field is held just below the review threshold (`TRANSUNION_FIELD_CONFIDENCE = 0.75`) and the report carries
+  "The TransUnion reader is new and has been tested on sample files only: check every value against the original report
+  before approving." Raise the one constant to 0.95 once real files have been checked.
+- **TransUnion is read twice, and the fuller reading is kept.** TransUnion lays an account out as a grid: up to three
+  labels in a row, each value on the lines below under its label. The order a PDF stores that grid's text in depends on
+  how the file was made, so the stored order alone cannot be trusted to tell the values apart. A TransUnion PDF is
+  therefore also read by position (`readPdfLines` in `pdf-text.ts`: every piece of text with where it sits on the page,
+  grouped into lines and cells), rewritten one value per line (`tuTextFromLines`), and given to the same reader. The
+  reading that filled in more of the accounts is used (`readingScore`). The position path is tested on three generated
+  TransUnion reports from the MIT-licensed Errata project (`tests/fixtures/errata/`, invented people, written by
+  someone else): 15 accounts, hard inquiries, names and addresses, checked value by value in
+  `tests/unit/transunion-position.test.ts`. That is an independent check of the layout, not a real file.
+- **TransUnion's account status is worked out, not copied.** The print has a "Pay Status" row (stored as the payment
+  status, as printed) and no account status row. The account status is "Closed" with the date from its "Date Closed"
+  row, "Closed" when the pay status or remarks say closed, "Collection" for a collection, and "Open" for an account
+  whose pay status was read and that nothing calls closed, charged off, repossessed, foreclosed or bankrupt. Otherwise
+  it is left empty. A collection is an account TransUnion itself calls one (in its type, pay status or remarks, or
+  reported by a debt buyer as a "factoring company account"); an original creditor alone does not make one.
+- **Payment history.** Equifax: the year rows as printed. TransUnion: the late months only, in its own codes
+  ("Jul 2026 30; Aug 2026 60", "Oct 2026 COL"), or "No late payments in the months reported". When the months and the
+  ratings cannot be paired, the late codes are kept without months. Experian: the grid is not read; its "payment
+  history guide" line goes into the payment status and remarks.
+- **Negative items.** An account is flagged from its statuses or from its history: days late (30 to 180), and the
+  codes COL, c/o, RPO, FC, vs and CO. A year in a history row (2030) is not read as "30 days late".
+
+**Still not read** from these files:
+
+- **Public records.** Not imported from any of the three. The Experian reader says so when the report lists any, the
+  TransUnion reader when its section holds one, and the count or the note is on the review page. The Equifax reader
+  does not look for them. Add them by hand.
+- **Soft inquiries** (promotional, account review): left out on purpose. They are not disputable and do not count.
+- **Employers and phone numbers**, and former names on Equifax. The SSN and date of birth are never stored.
+- **The last 4 of the account number** when the bureau masks the end and prints the front (Experian usually does,
+  and so does TransUnion's print for some accounts): the printed digits are not the last 4, so nothing is stored.
+- **TransUnion's date of first delinquency.** The print states one on few accounts; it is stored when it does and
+  never worked out. Its "estimated month and year this item will be removed" is kept as the first of the remarks, and
+  the comparison shows it as "TransUnion's own estimate" where a computed date would be. An account that prints that
+  month is not flagged for showing no date of first delinquency, and it is flagged ("still reported after the removal
+  month the report prints") when the same account's "Date Updated" is in a later month: both values as printed, a
+  neutral request to verify that a person completes.
+- **Scores.** These reports carry none.
+- **Scans and photos**, which have no text: they need AI reading (below).
+- **Any other layout** (a mailed paper disclosure, a monitoring service's 3-bureau report): it goes to the rules parser,
+  which reads the plain "Label: value" layout and the CSV template, and to AI when that is on. With AI off, a bureau
+  disclosure in which the rules find no account is refused ("The accounts in this report could not be recognised…")
+  instead of importing the lines that only look like inquiries.
+
+### Reading a stored file again
+
+A file is read once when it arrives. Two things make that first reading worth redoing without asking for the file
+again: the readers change (a file read before TransUnion had its own reader was read by the general rules), and a row
+removed from a reading by mistake cannot be put back by hand. Two buttons cover it, both reading the file that is
+already in the vault (`src/lib/reports/reread.ts`, `importDocumentAsReportAction`):
+
+- **"Read as credit report"** (client page, Documents): a file filed as a credit report that was never read, such as
+  one the client uploaded that could not be read at the time.
+- **"Read the file again"** (the report's review page): a report that is still waiting for review. What the fresh
+  reading holds for that report takes the place of what it held, and the report keeps its id, so the review link staff
+  were sent still opens it. Corrections typed into the earlier reading, and what was recorded as the client's own
+  statements about an account ("does not recognise it", "never late"), go with it; the button says so before anything
+  happens.
+
+What "Read the file again" will not do:
+
+- Touch an approved report (flags, disputes and letters stand on it) or a rejected one (a person refused it). For
+  those, upload the file as a new report.
+- Touch any other report. A file that holds several bureaus has one report per bureau; each one still waiting for
+  review has its own button, and pressing it replaces that report only, with the rows the file holds for its bureau.
+  If the file, read again, holds nothing for that bureau, nothing changes and the message names what was found. In
+  such a file, rows that name no bureau are not guessed at: nothing records which of its reports took them at the first
+  reading, so the re-read is refused and the file is uploaded as a new report instead.
+- Change anything when the file cannot be read or nothing is recognised in it.
+- Replace a reading that has a dispute or a collector notice on one of its accounts (checked before the file is read,
+  so an AI read is not paid for and then thrown away, and again under a lock when the rows are swapped).
+- Tell the client again or run the "report uploaded" automation.
+
+A report keeps the bureau it was filed under, with one exception that matches a first reading: when the file is that
+one report and today's reader names another bureau on every row (a bureau's own layout does), the report moves to that
+bureau and the result says so. A file staff added needs the client's written authorization on file, as for the first
+reading; a file the client uploaded, and any file in a personal workspace, does not. An AI read costs its credits
+again (the button says so when AI reading is on). The timeline says "read again"; the audit log has `report.reread`.
+
+**Approving the reading that was on screen.** The review page carries a mark of the rows it showed (`readingMark` in
+`src/lib/reports/service.ts`: the ids of the reading's rows) to the Approve and Reject buttons. A re-read gives every
+row a new id and a removed row takes one away, so a decision made on a page that was loaded before either is not
+carried out: the page comes back with "Not decided" and the report as it now stands. A corrected value does not change
+the mark. The page takes the mark before it loads the rows, and approving, reading again and removing a row all lock
+the report row first, so none of them can slip in beside another.
+
+## Reading reports with AI: other layouts, scans and photos
+
+Off by default, and not needed for the three bureaus' AnnualCreditReport.com reports (above). The rules-based parser
+reads the plain "Label: value" layout and the CSV template. It cannot follow a bureau layout that has no exact reader,
+and a scan or photo has no text at all. With AI reading on, the exact readers and the rules go first; when they
+recognise no accounts, or the file is a bureau disclosure without a reader, the report's text (or, for a scan, the
+pages) goes to the AI, which rewrites it into the fixed layout,
 and the parser files each value into its field (creditor, last 4, type, status, payment status, balance, limit, high
 balance, dates, payment history, remarks; collections with original creditor; public records; inquiries; names,
 addresses, employers). To turn it on, pick one:

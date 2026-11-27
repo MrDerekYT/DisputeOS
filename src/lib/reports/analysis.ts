@@ -1,5 +1,5 @@
 import { BUREAU_LABEL, BUREAUS, money, type Bureau } from '../util';
-import { FALL_OFF_RULE_TEXT, isNegative, tradelineFallOff } from '../credit/reporting-period';
+import { FALL_OFF_RULE_TEXT, historyShowsLate, isNegative, tradelineFallOff } from '../credit/reporting-period';
 
 /**
  * Cross-bureau comparison and discrepancy detection.
@@ -15,6 +15,8 @@ export interface AnalysisTradeline {
   account_last4: string | null; account_status: string | null; payment_status: string | null; balance_cents: number | null;
   credit_limit_cents: number | null; date_opened: string | null; date_reported: string | null; date_of_first_delinquency: string | null;
   payment_history: string | null; user_provided: Record<string, unknown>;
+  /** The bureau's own notes on the account. Only read for a removal month the bureau itself prints (printedRemovalMonth). */
+  remarks?: string | null;
 }
 export interface AnalysisInquiry { id: string; bureau: Bureau; name: string; inquiry_date: string | null; kind: string }
 export interface AnalysisPublicRecord { id: string; bureau: Bureau; kind: string; filed_date: string | null; status: string | null }
@@ -38,6 +40,8 @@ export const FINDING_CATEGORIES = {
   personal_info: 'Personal information differs',
   collection_validation: 'Collection account',
   negative_item: 'Late payments or charge-off reported',
+  status_balance_conflict: 'Status and balance do not agree',
+  removal_month_passed: 'Reported after the removal month the report prints',
   old_inquiry: 'Older inquiry',
   client_statement: 'Client statement conflicts with report',
   possible_reinsertion: 'Possible reinsertion',
@@ -170,6 +174,37 @@ export function diffGroup(g: AccountGroup): FieldDiff[] {
   return out;
 }
 
+/**
+ * Wording that reads like "paid" but says the opposite, or says nothing about what is owed: "Pays as agreed" and
+ * TransUnion's "Current; Paid or Paying as Agreed" are payment ratings of an open account, and an account "transferred
+ * to recovery" (or to another office, an attorney, collections) is still owed to the same creditor.
+ */
+const NOT_SETTLED = /paid[\s_]+or[\s_]+paying[\s_]+as[\s_]+agreed|(?:paid|pays?|paying)[\s_]+as[\s_]+agreed|(?:not|never)[\s_]+paid|unpaid|transferr?ed to (?:recovery|another office|(?:an? )?attorney|collections?)/gi;
+const SETTLED = /\b(paid|settled|transferr?ed|sold|purchased by another)\b/i;
+/**
+ * The words of a reported status that say nothing is owed to this creditor any more (paid, settled, sold, transferred
+ * to another lender), or null. An account reported that way normally carries a zero balance: the idea for this check
+ * comes from the "sold with balance" rule of the MIT-licensed Errata project (github.com/wjwhitmire/errata).
+ */
+export function settledWording(t: Pick<AnalysisTradeline, 'account_status' | 'payment_status'>): string | null {
+  for (const s of [t.account_status, t.payment_status]) {
+    // Underscores read as spaces: a status kept as a code ("PAID_AND_CLOSED") says the same as its words.
+    if (s && SETTLED.test(s.replace(/_/g, ' ').replace(NOT_SETTLED, ' '))) return s.trim();
+  }
+  return null;
+}
+
+/**
+ * The month a bureau itself prints as the estimated end of reporting for an account, as "YYYY-MM", or null.
+ * TransUnion prints "Estimated month and year this item will be removed" on adverse accounts in place of a date of
+ * first delinquency; its reader keeps that line in the account's remarks, word for word.
+ */
+export function printedRemovalMonth(t: Pick<AnalysisTradeline, 'remarks'>): string | null {
+  const m = /Estimated month and year (?:that )?this item will be removed:?\s*(0[1-9]|1[0-2])\/(\d{4})/i.exec(t.remarks ?? '');
+  return m ? `${m[2]}-${m[1]}` : null;
+}
+const sayMonth = (ym: string) => `${ym.slice(5)}/${ym.slice(0, 4)}`;
+
 const yearsSince = (iso: string, now: Date) => (now.getTime() - new Date(`${iso}T00:00:00Z`).getTime()) / (365.25 * 86_400_000);
 const NOTE = 'This is a difference to investigate, not a conclusion that anything is inaccurate.';
 /** Why a date-of-first-delinquency difference matters, without saying which date (if either) is wrong. 15 U.S.C. § 1681c. */
@@ -227,6 +262,7 @@ export function analyze(input: {
         // date of first delinquency for a collection or charge-off (15 U.S.C. § 1681c(a)(4), (c)(1)).
         const off = tradelineFallOff(t);
         const age = t.date_of_first_delinquency ? yearsSince(t.date_of_first_delinquency, now) : null;
+        const printed = printedRemovalMonth(t);
         if (off?.kind === 'date' && age != null && off.date < today) {
           // A collection or a charge-off ages off as a whole. An account that is only late does not: what has aged is
           // the late payment information from that date, and the account keeps being reported (§ 1681c(a)(5)).
@@ -240,7 +276,17 @@ export function analyze(input: {
             evidence: [rep(t, 'Date of first delinquency', t.date_of_first_delinquency!), { field: 'Age at report review', value: `${age.toFixed(1)} years`, source: 'derived' }, { field: 'Reporting period generally ends', value: off.date, source: 'derived' }],
             basis: 'potential_discrepancy', tradeline_ids: [t.id],
           });
-        } else if (t.item_type === 'collection' && !t.date_of_first_delinquency) {
+        } else if (printed && t.date_reported && printed < t.date_reported.slice(0, 7)) {
+          // The bureau's own estimate, set against its own "updated" date on the same account: both as printed.
+          add({
+            dedupe_key: `removal:${t.id}`, category: 'removal_month_passed', severity: 'strong',
+            title: `${name} on ${BUREAU_LABEL[b]} was still reported after the removal month the report prints`,
+            explanation: `${BUREAU_LABEL[b]} prints an estimated removal month of ${sayMonth(printed)} for this account, and shows the account as updated on ${t.date_reported}, after that month. Check both against the original report before disputing. If they are as printed, ask ${BUREAU_LABEL[b]} to review why the item is still reported. ${NOTE}`,
+            evidence: [rep(t, 'Estimated removal month, as printed', sayMonth(printed)), rep(t, 'Date updated', t.date_reported)],
+            basis: 'potential_discrepancy', tradeline_ids: [t.id],
+          });
+        } else if (t.item_type === 'collection' && !t.date_of_first_delinquency && !printed) {
+          // (Not said of an account whose report prints a removal month instead: that layout has no such date to show.)
           add({
             dedupe_key: `dofd:${t.id}`, category: 'dofd_mismatch', severity: 'review', title: `${name} on ${BUREAU_LABEL[b]} shows no date of first delinquency`,
             explanation: 'Collection accounts normally report a date of first delinquency, which controls how long the item may remain. It is not shown here — worth asking the furnisher to verify it.',
@@ -265,11 +311,26 @@ export function analyze(input: {
         });
       }
       if (t.item_type === 'collection') {
+        // Whether the report names the original creditor is part of what the finding rests on: the validation letter
+        // asks the collector for that name and address either way (FDCPA § 809(a)(5), (b)).
+        const oc = t.original_creditor?.trim();
         add({
           dedupe_key: `collection:${t.id}`, category: 'collection_validation', severity: 'strong',
           title: `${name} is a collection account on ${BUREAU_LABEL[b]}`,
-          explanation: 'A written validation request to the collector (FDCPA § 809(b)) is a standard first step; it must be sent within 30 days of the collector’s first written notice to preserve the right to dispute that way. Check the date of that notice with the client.',
-          evidence: [rep(t, 'Account type', 'Collection'), ...(t.balance_cents != null ? [rep(t, 'Balance', money(t.balance_cents))] : [])], basis: 'verified_fact', tradeline_ids: [t.id],
+          explanation: `A written validation request to the collector (FDCPA § 809(b)) is a standard first step; it must be sent within 30 days of the collector’s first written notice to preserve the right to dispute that way. Check the date of that notice with the client.${oc ? '' : ` ${BUREAU_LABEL[b]} does not name the original creditor for this account; the validation request asks the collector for it.`}`,
+          evidence: [rep(t, 'Account type', 'Collection'), ...(t.balance_cents != null ? [rep(t, 'Balance', money(t.balance_cents))] : []), rep(t, 'Original creditor', oc || 'not shown')], basis: 'verified_fact', tradeline_ids: [t.id],
+        });
+      }
+      // One bureau's own entry that does not agree with itself: reported as paid, settled, sold or transferred, and
+      // still carrying a balance. Both values are shown as reported; which one is out of date is for a person to check.
+      const settled = (t.balance_cents ?? 0) > 0 ? settledWording(t) : null;
+      if (settled) {
+        add({
+          dedupe_key: `status-balance:${t.id}`, category: 'status_balance_conflict', severity: 'review',
+          title: `${name} on ${BUREAU_LABEL[b]} is reported as “${settled.slice(0, 60)}” with a balance of ${money(t.balance_cents)}`,
+          explanation: `${BUREAU_LABEL[b]} reports this account as “${settled}” and also reports a balance of ${money(t.balance_cents)}. An account that was paid, settled, sold or transferred to another lender normally reports a zero balance, so one of the two may be out of date. Check the client’s records (a payoff letter, a final statement, a notice that the account was sold) before disputing. ${NOTE}`,
+          evidence: [rep(t, t.account_status?.trim() === settled ? 'Account status' : 'Payment status', settled), rep(t, 'Balance', money(t.balance_cents))],
+          basis: 'potential_discrepancy', tradeline_ids: [t.id],
         });
       }
       // Client assertions are kept distinct from reported facts. The two share a category; the start of the key says
@@ -282,7 +343,7 @@ export function analyze(input: {
           evidence: [{ field: 'Client statement', value: 'Does not recognise this account', source: 'client', tradeline_id: t.id }, rep(t, 'Creditor', t.creditor_name)], basis: 'user_provided', tradeline_ids: [t.id],
         });
       }
-      if (up.never_late === true && t.payment_history && /(30|60|90|120)/.test(t.payment_history)) {
+      if (up.never_late === true && t.payment_history && historyShowsLate(t.payment_history)) {
         add({
           dedupe_key: `client-never-late:${t.id}`, category: 'client_statement', severity: 'review', title: `Client says payments were never late — ${name} (${BUREAU_LABEL[b]})`,
           explanation: 'The report’s payment history includes late-payment codes, but the client states every payment was on time. Ask the client for statements or bank records for the months in question.',
@@ -390,3 +451,17 @@ export function analyze(input: {
 }
 
 export const SEVERITY_ORDER = { strong: 0, review: 1, info: 2 } as const;
+
+/**
+ * How far the stored flags are behind what the approved reports say now: flags the analysis would raise that are not
+ * stored yet, plus stored suggestions it no longer raises. A flag a person has reviewed (kept, dismissed, disputed) is
+ * never counted as stale, and nor is one another check made (reinsertion, medical, bankruptcy): only the rules' own
+ * open suggestions are compared, the same rows regenerating would replace.
+ */
+export function flagsBehind(fresh: Iterable<string>, stored: { dedupe_key: string; status: string; generated_by: string }[]): number {
+  const now = new Set(fresh);
+  const have = new Set(stored.map((f) => f.dedupe_key));
+  const missing = [...now].filter((k) => !have.has(k)).length;
+  const gone = stored.filter((f) => f.status === 'suggested' && f.generated_by === 'rules' && !now.has(f.dedupe_key)).length;
+  return missing + gone;
+}

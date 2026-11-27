@@ -39,7 +39,9 @@ export async function SmsConsentBlock({ ctx, clientId, phone, lang }: { ctx: Ctx
   const unapproved = smsUsable() && approval !== 'approved' ? TEXTS_NEED_APPROVAL[approval] : null;
   const paused = mismatch || notUs || !!unapproved;
   return (
-    <Section plain id="sms-consent" title="Text message consent" hint="No consent on file means no text is ever sent to this client.">
+    <Section plain id="sms-consent" title="Text message consent" hint="No consent on file means no text is ever sent to this client."
+      // A reply from the client waits for a person to read it, so the block stays open until that is done.
+      fold={{ open: replies.length > 0, summary: active ? (paused ? `Paused · ${active.phone}` : `On · ${active.phone}`) : stopped ? 'Off: this number replied STOP' : 'Off' }}>
       <div className="flex flex-wrap items-start justify-between gap-3 text-sm">
         <div className="min-w-0">
           {active ? (

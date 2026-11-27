@@ -6,8 +6,8 @@ import { storeParsedReport } from './service';
 export interface AutoReadResult { reportIds: string[]; accounts: number; collections: number; error?: string }
 
 /**
- * A credit report the client uploads in the portal is read right away, the same way staff would read it (exact
- * Experian/Equifax readers first, AI for other layouts when it is on), and lands in the review queue as
+ * A credit report the client uploads in the portal is read right away, the same way staff would read it (the exact
+ * Experian, Equifax and TransUnion readers first, AI for other layouts when it is on), and lands in the review queue as
  * "pending review": a person still approves it before anything is analysed or disputed. The client is told it was
  * received. If it cannot be read, the file stays in the vault and staff are told to look at it.
  */

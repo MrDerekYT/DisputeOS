@@ -237,6 +237,12 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
       await staff.waitForURL(/\/app\/clients\/[0-9a-f-]{36}$/);
       clientUrl = staff.url();
       await expectText(staff, 'E2E Client');
+      // Everything is on file, so the compliance record is folded to one line that says so: open it to read the entries.
+      const record = staff.locator('details', { has: staff.locator('h2', { hasText: 'Compliance record' }) });
+      if (await record.count()) {
+        await expectText(staff, 'documents are on file');
+        if (!(await record.evaluate((d) => d.open))) await record.locator('summary').first().click(); // its own summary; "Record a consent" inside it is another
+      }
       await expectText(staff, 'Signed on paper on');
       await expectText(staff, 'App’s text when recorded (PDF)'); // the stored text is the app's on the recording day, not a copy of the paper
     });
@@ -327,7 +333,7 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
         await expectText(staff, `${bureau} report`);
         await expectText(staff, 'Review before this is used');
         if (bureau === 'Experian') await staff.screenshot({ path: `${SHOTS}/03-report-review.png`, fullPage: true, caret: 'initial' });
-        await staff.getByRole('button', { name: 'Approve report' }).click();
+        await staff.getByRole('button', { name: 'Approve & flag negatives' }).click();
         await staff.waitForURL('**/compare', { timeout: 20000 });
       }
     });

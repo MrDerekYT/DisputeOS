@@ -2,10 +2,10 @@ import Link from 'next/link';
 import type { Metadata } from 'next';
 import type { CSSProperties } from 'react';
 import {
-  ArrowRight, Ban, Check, Compass, FileText, FolderUp, Gavel, Home, Hourglass, Languages, ListChecks, LockKeyhole, MessageCircle, MessagesSquare, Palette, Scale,
-  ScanSearch, ScrollText, ShieldCheck, Smartphone, Sparkles, UserRound, Users,
+  ArrowRight, Ban, Check, Columns3, Compass, FileText, FolderUp, Gavel, History, Home, Hourglass, Languages, ListChecks, LockKeyhole, MessageCircle, MessagesSquare, Palette, Scale,
+  ScanSearch, ScrollText, ShieldCheck, Smartphone, Sparkles, UserCheck, UserRound, Users,
 } from 'lucide-react';
-import { OrgMark } from '@/components/ui';
+import { Badge, OrgMark } from '@/components/ui';
 import { Band, CtaBand, FaqList, JsonLd, MarketingFrame, WRAP, WindowsIllustration } from '@/components/marketing-site';
 import { brandCss } from '@/lib/brand';
 import { TRIAL_DAYS } from '@/lib/plans';
@@ -93,6 +93,53 @@ function PortalIllustration() {
   );
 }
 
+/**
+ * A static picture of the three-bureau table for one account: the same layout the comparison page draws. One row
+ * differs between bureaus (tinted), and the general reporting period worked out from the reported date has passed
+ * (red). Sample data, labelled as such; the dates follow the real rule (first delinquency + 180 days + 7 years).
+ */
+function CompareIllustration() {
+  const rows: [label: string, values: [string, string, string], mark?: 'differs' | 'passed'][] = [
+    ['Balance', ['$1,240.00', '$980.00', '$1,240.00'], 'differs'],
+    ['Payment status', ['Collection', 'Collection', 'Collection']],
+    ['Opened', ['Feb 1, 2021', 'Feb 1, 2021', 'Feb 1, 2021']],
+    ['First delinquency', ['Feb 14, 2018', 'Feb 14, 2018', 'Feb 14, 2018']],
+    ['Generally reportable until', ['Aug 13, 2025', 'Aug 13, 2025', 'Aug 13, 2025'], 'passed'],
+  ];
+  return (
+    <figure className="mx-auto w-full max-w-[36rem]">
+      <div className="panel overflow-hidden shadow-pop" aria-hidden>
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line/70 px-4 py-3.5">
+          <div className="font-display text-base font-semibold">SAMPLE COLLECTIONS <span className="font-sans font-normal text-muted">••7766</span></div>
+          <div className="flex items-center gap-2"><Badge tone="bad">Collection</Badge><Badge tone="warn">1 difference</Badge></div>
+        </div>
+        <table className="w-full table-fixed text-[0.8125rem] sm:text-sm">
+          <colgroup><col className="w-20 sm:w-40" /><col /><col /><col /></colgroup>
+          <thead>
+            <tr className="border-b border-line/70">
+              <td />
+              {['Experian', 'Equifax', 'TransUnion'].map((b) => <th key={b} className="px-1.5 py-2.5 text-left font-semibold sm:px-2">{b}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(([label, values, mark], r) => (
+              <tr key={label}>
+                <th className={cn('py-1.5 pl-3 pr-1 text-left align-top font-normal text-muted sm:pr-3', mark === 'differs' && 'rounded-l-lg bg-warn-soft text-ink', r === 0 && 'pt-3', r === rows.length - 1 && 'pb-3.5')}>{label === 'First delinquency' ? <><span className="sm:hidden">First delinq.</span><span className="hidden sm:inline">{label}</span></> : label}</th>
+                {values.map((v, n) => (
+                  <td key={n} className={cn('px-1.5 py-1.5 align-top font-medium tabular-nums sm:px-2', mark === 'differs' && 'bg-warn-soft', mark === 'passed' && 'text-bad', r === 0 && 'pt-3', r === rows.length - 1 && 'pb-3.5')}>
+                    {v}{mark === 'passed' && <span className="block text-xs">date has passed</span>}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <figcaption className="mt-4 text-center text-[0.8125rem] text-faint">Illustration with sample data. Not a real client or result.</figcaption>
+    </figure>
+  );
+}
+
 export default function Landing() {
   return (
     <MarketingFrame>
@@ -145,6 +192,26 @@ export default function Landing() {
           ))}
         </div>
         <p className="mt-10"><Link href="/features" className="link">Everything the product does, and what is still manual</Link></p>
+      </Band>
+
+      {/* The comparison, drawn as the product draws it */}
+      <Band id="compare" title="Three bureaus, one table."
+        lede="Upload each bureau’s report and the same account lines up across all three. What differs is marked for a person to check; the software never calls an item inaccurate.">
+        <div className="grid items-center gap-12 lg:grid-cols-[0.85fr_1fr]">
+          <ul className="space-y-7">
+            {([
+              [UserCheck, 'A person approves what was read', 'Each report is read into fields, and a person checks those fields against the original and approves them before the report joins the comparison.'],
+              [Columns3, 'Differences marked, not judged', 'A balance, status or date that differs between bureaus is highlighted. A difference alone does not mean anything is inaccurate, and the page says so.'],
+              [History, 'Old items stand out', 'When the reported date of first delinquency puts an item past its general reporting period (15 U.S.C. § 1681c), that date is shown in red and the item is flagged for review.'],
+            ] as const).map(([Icon, t, b]) => (
+              <li key={t} className="flex gap-4">
+                <Icon size={20} aria-hidden className="mt-0.5 shrink-0 text-brand" />
+                <div><h3 className="font-semibold">{t}</h3><p className="mt-1 text-[0.9375rem] leading-relaxed text-muted">{b}</p></div>
+              </li>
+            ))}
+          </ul>
+          <CompareIllustration />
+        </div>
       </Band>
 
       {/* Client experience */}

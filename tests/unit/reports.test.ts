@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { lowConfidenceFields, maskSnippet, normalizeDate, parseMoneyToCents, parseReportText, parseTradelineCsv, CSV_TEMPLATE } from '@/lib/reports/parser';
 import { analyze, diffGroup, groupAccounts, normCreditor, type AnalysisTradeline } from '@/lib/reports/analysis';
-import { renderPdf } from '@/lib/letters/pdf';
-import { pdfToText } from '@/lib/reports/pdf-text';
+import { renderPdf, renderPdfBlocks } from '@/lib/letters/pdf';
+import { MAX_PDF_PAGES, pdfToText, readPdfText } from '@/lib/reports/pdf-text';
+import { pagesNote, readReportFile } from '@/lib/reports/read-file';
 import type { Bureau } from '@/lib/util';
 
 const REPORT = `Experian Credit Report
@@ -243,5 +244,74 @@ describe('PDF round trip', () => {
   it('rejects PDFs with no text layer with a helpful message', async () => {
     await expect(pdfToText(renderPdf(' '))).rejects.toThrow(/no readable text/);
     await expect(pdfToText(Buffer.from('%PDF-1.4 garbage'))).rejects.toThrow(/could not be read/);
+  });
+});
+
+describe('long reports: every page is read', () => {
+  const ACCOUNTS = 110;
+  const nth = (i: number) => String(i + 1).padStart(3, '0');
+  /** A made-up report in Experian's own layout, one account to a page, so a page that is not read is an account missing. */
+  const longReport = (accounts: number, listed = accounts) => renderPdfBlocks([
+    { text: `Prepared For\nJORDAN RIVERA\nDate Generated Nov 23, 2026\nReport Number 1111-2222-33\n${listed} Accounts 0 Public Records 0 Hard Inquiries\nAnnual Credit Report - Experian` },
+    ...Array.from({ length: accounts }, (_, i) => ({
+      pageBreakBefore: true,
+      text: `Account Name TEST LENDER ${nth(i)}\nAccount Number ${1000 + i}XXXXXXXX\nAccount Type Credit card\nDate Opened 01/15/2024\nStatus Open/Never late.\nBalance $${100 + i}\nBalance Updated 10/30/2026`,
+    })),
+  ]);
+  const payer = { orgId: 'o', userId: 'u' };
+  const noAi = { enabled: () => false, ocr: async () => { throw new Error('must not call AI'); }, credits: { spend: async () => { throw new Error('must not charge'); }, settle: async () => undefined, refund: async () => undefined } as never };
+
+  it('reads all 111 pages of a PDF, far past the old limit of 80', async () => {
+    const { text, pages } = await readPdfText(longReport(ACCOUNTS));
+    expect(pages).toBe(ACCOUNTS + 1);
+    expect(pages).toBeGreaterThan(80);
+    // Each page's own account is in the text, first to last, and each page's footer too.
+    for (let i = 0; i < ACCOUNTS; i++) expect(text).toContain(`Account Name TEST LENDER ${nth(i)}`);
+    for (let n = 1; n <= pages; n++) expect(text).toContain(`Page ${n} of ${pages}`);
+  });
+
+  it('imports every account of a long report with no AI, says how many pages were read, and its totals agree', async () => {
+    const r = await readReportFile({ bytes: longReport(ACCOUNTS), mime: 'application/pdf', name: 'experian.pdf' }, payer, noAi);
+    expect(r.via).toBe('layout');
+    expect(r.pages).toBe(ACCOUNTS + 1);
+    expect(r.parsed.tradelines.map((t) => t.creditor_name)).toEqual(Array.from({ length: ACCOUNTS }, (_, i) => `TEST LENDER ${nth(i)}`));
+    expect(r.parsed.tradelines[ACCOUNTS - 1]).toMatchObject({ balance_cents: (100 + ACCOUNTS - 1) * 100, date_opened: '2024-01-15', date_reported: '2026-10-30' });
+    // The report states 110 accounts and 110 were read: the reader's own check has nothing to say.
+    expect(r.parsed.warnings.filter((w) => /^The report lists/.test(w))).toEqual([]);
+    expect(pagesNote(r)).toBe(', all 111 pages read');
+  });
+
+  it('a long report that states more accounts than its pages hold is flagged', async () => {
+    const r = await readReportFile({ bytes: longReport(85, 86), mime: 'application/pdf', name: 'experian.pdf' }, payer, noAi);
+    expect(r.parsed.tradelines).toHaveLength(85);
+    expect(r.parsed.warnings).toContain('The report lists 86 accounts; 85 were read. Compare with the original before approving.');
+  });
+
+  it('refuses a PDF over the page limit and says what the limit is', async () => {
+    expect(MAX_PDF_PAGES).toBe(400);
+    const tooLong = renderPdfBlocks(Array.from({ length: MAX_PDF_PAGES + 1 }, (_, i) => ({ text: `Page text ${i + 1}`, pageBreakBefore: true })));
+    await expect(readPdfText(tooLong)).rejects.toThrow('That PDF has 401 pages (limit 400). Upload one bureau’s report at a time.');
+    await expect(readReportFile({ bytes: tooLong, mime: 'application/pdf', name: 'big.pdf' }, payer, noAi)).rejects.toThrow(/401 pages \(limit 400\)/);
+    // Exactly at the limit is read.
+    const atLimit = renderPdfBlocks(Array.from({ length: MAX_PDF_PAGES }, (_, i) => ({ text: `Page text ${i + 1} of a long file`, pageBreakBefore: true })));
+    const { pages, text } = await readPdfText(atLimit);
+    expect(pages).toBe(400);
+    expect(text).toContain('Page text 400 of a long file');
+  });
+
+  it('the page note claims a full read only where the text of every page was read here', () => {
+    expect(pagesNote({ via: 'layout', pages: 46 })).toBe(', all 46 pages read');
+    expect(pagesNote({ via: 'rules', pages: 1 })).toBe(', 1 page read');
+    expect(pagesNote({ via: 'ai_text', pages: 46 })).toBe(', 46-page file');
+    expect(pagesNote({ via: 'ai_scan', pages: 3 })).toBe(', 3-page file');
+    expect(pagesNote({ via: 'rules' })).toBe('');
+  });
+
+  it('files that are not PDFs carry no page count', async () => {
+    const r = await readReportFile({ bytes: Buffer.from(REPORT), mime: 'text/plain', name: 'r.txt' }, payer, noAi);
+    expect(r.pages).toBeUndefined();
+    const pdf = await readReportFile({ bytes: renderPdf(REPORT), mime: 'application/pdf', name: 'r.pdf' }, payer, noAi);
+    expect(pdf.pages).toBe(1);
+    expect(pdf.via).toBe('rules');
   });
 });

@@ -8,14 +8,19 @@ import type { FieldMeta, ParsedIdentity, ParsedInquiry, ParsedReport, ParsedTrad
  *
  *   Experian    "Annual Credit Report - Experian" print (usa.experian.com/acr/printReport)
  *   Equifax     "Credit Report … Confirmation # … EFX-ACR" disclosure
+ *   TransUnion  "View Your Report | TransUnion Credit Report" print (annualcreditreport.transunion.com)
  */
 
-export type BureauLayout = 'experian_acr' | 'equifax_acr';
+export type BureauLayout = 'experian_acr' | 'equifax_acr' | 'transunion_acr';
+
+/** Text only TransUnion's own online report carries. A file that merely names the bureau does not match. */
+const TU_SIGNATURE = /annualcreditreport\.transunion\.com|Payment\/Remarks Key|Personal Credit Report for/i;
 
 export function detectLayout(text: string): BureauLayout | null {
   const head = text.slice(0, 20_000);
   if (/usa\.experian\.com\/acr|Annual Credit Report - Experian/i.test(head) && /^Account Name /m.test(text)) return 'experian_acr';
   if (/EFX-ACR|equifax\.com\/personal/i.test(head) && /^Account Number: \*/m.test(text)) return 'equifax_acr';
+  if (/trans\s?union/i.test(head) && TU_SIGNATURE.test(text)) return 'transunion_acr';
   return null;
 }
 
@@ -23,6 +28,7 @@ export function parseBureauLayout(text: string): ParsedReport | null {
   const layout = detectLayout(text);
   if (layout === 'experian_acr') return parseExperianAcr(text);
   if (layout === 'equifax_acr') return parseEquifaxAcr(text);
+  if (layout === 'transunion_acr') return parseTransUnionAcr(text);
   return null;
 }
 
@@ -48,12 +54,19 @@ function finish(t: Omit<ParsedTradeline, 'confidence'>): ParsedTradeline {
 
 // ------------------------------------------------------------------ Experian
 
-const EXP_FOOTER = [/^\d{1,2}\/\d{1,2}\/\d{2}, \d{1,2}:\d{2} [AP]M .*Experian/i, /^https?:\/\/usa\.experian\.com\//i];
+/**
+ * The print's page header and footer. The mark between the hour and the minutes is not always a colon in the extracted
+ * text (some fonts give a private-use character there, some nothing), so any one mark is accepted.
+ */
+const EXP_FOOTER = [/^\d{1,2}\/\d{1,2}\/\d{2,4}, \d{1,2}[^\d\s]?\d{2} [AP]M .*Experian/i, /^https?:\/\/usa\.experian\.com\//i];
 const EXP_LABELS = ['Account Number', 'Account Type', 'Responsibility', 'Interest Type', 'Date Opened', 'Status Updated', 'Status', 'Balance Updated', 'Balance', 'Recent Payment', 'Monthly Payment', 'Original Balance', 'Highest Balance', 'Credit Limit', 'Terms', 'On Record Until', 'Original Creditor'];
 const DWELLING = /^(single family|apartment|complex|apartment complex|multifamily|condominium|mobile home|business|rural route|post office box|military|unknown)$/i;
 
-/** Lines that end the previous inquiry's purpose text, a page's intro, or an account's grid: a name never contains them. */
-const INQ_STOP = /^(until [A-Z][a-z]{2} \d{4}\.|.*\. This|inquiry is|scheduled to|continue on record|Hard Inquiries|No public records reported\.?|Current \/ Terms met|—|Hard inquiries are.*|.*inquiries are displayed.*|at least two years\.?)$/i;
+/**
+ * Lines that end the previous inquiry (its purpose text, or its "Inquired on" date when nothing follows it), a page's
+ * intro, or an account's grid: a name never contains them.
+ */
+const INQ_STOP = /^(until [A-Z][a-z]{2} \d{4}\.|.*\. This|inquiry is|scheduled to|continue on record|Inquired on|\d{1,2}\/\d{1,2}\/\d{4}|Hard Inquiries|No public records reported\.?|Current \/ Terms met|—|Hard inquiries are.*|.*inquiries are displayed.*|at least two years\.?)$/i;
 
 export function parseExperianAcr(text: string): ParsedReport {
   const lines = text.split(/\r?\n/).map((l) => l.replace(/\s+/g, ' ').trim()).filter((l) => !EXP_FOOTER.some((re) => re.test(l)));
@@ -191,7 +204,25 @@ export function parseExperianAcr(text: string): ParsedReport {
       if (name.length) out.inquiries.push({ bureau: 'experian', name: name.join(' ').slice(0, 200), inquiry_date: normalizeDate(lines[i + 1] ?? '') } satisfies ParsedInquiry);
     }
   }
+
+  // The report states its own totals on the first page ("18 Accounts 0 Public Records 3 Hard Inquiries"; an extractor
+  // may drop the spaces or give each count its own line). What was read is checked against them, so an account or an
+  // inquiry that was not read does not pass unnoticed.
+  const listed = EXP_TOTALS.exec(lines.slice(0, 200).join(' '));
+  if (listed) {
+    const [accounts, records, hard] = [Number(listed[1]), Number(listed[2]), Number(listed[3])];
+    if (accounts !== out.tradelines.length) out.warnings.push(countMismatch(accounts, 'account', 'accounts', out.tradelines.length));
+    if (hard !== out.inquiries.length) out.warnings.push(countMismatch(hard, 'hard inquiry', 'hard inquiries', out.inquiries.length));
+    if (records > 0) out.warnings.push(`The report lists ${records} public record${records === 1 ? '' : 's'}. Public records are not imported from this layout: add ${records === 1 ? 'it' : 'them'} from the original by hand.`);
+  }
   return out;
+}
+
+const EXP_TOTALS = /\b(\d+)\s*Accounts?\s*(\d+)\s*Public Records?\s*(\d+)\s*Hard Inquir(?:y|ies)\b/i;
+
+/** "The report lists 18 accounts; 17 were read. Compare with the original before approving." */
+export function countMismatch(listed: number, one: string, many: string, read: number): string {
+  return `The report lists ${listed} ${listed === 1 ? one : many}; ${read} ${read === 1 ? 'was' : 'were'} read. Compare with the original before approving.`;
 }
 
 // ------------------------------------------------------------------ Equifax
@@ -356,3 +387,475 @@ export function parseEquifaxAcr(text: string): ParsedReport {
   }
   return out;
 }
+
+// ------------------------------------------------------------------ TransUnion
+
+/**
+ * Every TransUnion field is held just below REVIEW_THRESHOLD, so a person confirms each value against the original.
+ * The reader was built from the layout of TransUnion's online report and tested on generated files in that layout,
+ * not yet on a real file read through this PDF extractor. Raise it to 0.95 once real files have been checked.
+ */
+export const TRANSUNION_FIELD_CONFIDENCE = 0.75;
+export const TRANSUNION_CHECK_WARNING = 'The TransUnion reader is new and has been tested on sample files only: check every value against the original report before approving.';
+
+/**
+ * The print time in the page header ("11/23/26, 3:05 PM"). The mark between the hour and the minutes is not always a
+ * colon in the extracted text (some fonts give a private-use character, some nothing), so any one mark is accepted.
+ */
+const TU_PRINT_TIME = String.raw`\d{1,2}\/\d{1,2}\/\d{2,4},? \d{1,2}[^\d\s]?\d{2} ?[AP]M`;
+/**
+ * Page header and footer text of the browser print, wherever it lands: pdf.js can put it in the middle of an entry.
+ * The footer is the page's address (annualcreditreport.transunion.com, or another transunion.com site) and "7/16".
+ */
+const TU_FURNITURE = [
+  /https?:\/\/[\w.-]*transunion\.com\/\S*(?: \d{1,3}\/\d{1,3})?/gi,
+  new RegExp(String.raw`(?:${TU_PRINT_TIME} )?View Your Report \| TransUnion Credit Report`, 'gi'),
+];
+/** What can be left of a header or footer once its text is gone: a lone "7/16" page mark, or the print time. */
+const TU_PAGE_MARK = new RegExp(String.raw`^(?:\d{1,3} ?\/ ?\d{1,3}|${TU_PRINT_TIME})$`, 'i');
+const TU_SECTION = /^(?:Personal Information|Accounts|Accounts with Adverse Information|Adverse Accounts|Satisfactory Accounts|Public Records|Inquiries|Regular Inquiries|Promotional Inquiries|Account Review Inquiries|Consumer Statements?|Additional Information|Summary of Rights)$/i;
+
+/**
+ * The rows of one account, longest first so "High Balance (Hist.)" is never read as "High Balance". Not every row is
+ * imported: the others are listed so that a row's value is never taken for part of the row before it.
+ */
+const TU_LABELS = [
+  'Estimated month and year', 'Date Placed for Collection', 'Date of First Delinquency', 'Placed for collection', 'High Balance (Hist.)', 'Credit Limit (Hist.)', 'Maximum Delinquency', 'Last Payment Made',
+  'Payment Received', 'Monthly Payment', 'Original Creditor', 'Original Amount', 'Original Balance', 'Responsibility', 'Account Type', 'Date Updated', 'Date Opened',
+  'Date Closed', 'Date Paid', 'High Balance', 'Credit Limit', 'Pay Status', 'Loan Type', 'Past Due', 'Balance', 'Address', 'Remarks', 'Phone', 'Terms',
+] as const;
+type TuLabel = (typeof TU_LABELS)[number];
+const tuLabelOf = (line: string): TuLabel | null => TU_LABELS.find((k) => line === k || line.startsWith(`${k} `) || line.startsWith(`${k}:`)) ?? null;
+
+/** A history row that ran onto the next line: "$612 from 08/2026 to 09/2026". */
+const TU_HIST_MORE = /^(?:\$|\d{2}\/\d{4}\b|to\b|from\b)/i;
+const tuMeta = (line: string, ok = true): FieldMeta => ({ confidence: ok ? TRANSUNION_FIELD_CONFIDENCE : 0.2, snippet: maskSnippet(line) });
+/** TransUnion wraps adverse values in >brackets< and prints "---" for nothing. */
+const tuClean = (s: string | undefined | null): string | null => {
+  const v = (s ?? '').replace(/[<>]/g, '').replace(/\s+/g, ' ').trim();
+  return !v || /^-+$/.test(v) || /^none$/i.test(v) ? null : v;
+};
+
+/** Text with the print's page furniture removed, one trimmed line per entry, no empty lines. */
+function tuLines(text: string): string[] {
+  const out: string[] = [];
+  for (const raw of text.split(/\r?\n/)) {
+    // Spaces first (the header can carry a no-break space before AM/PM), so the patterns only meet plain ones.
+    let l = raw.replace(/\s+/g, ' ');
+    for (const re of TU_FURNITURE) l = l.replace(re, ' ');
+    l = l.replace(/\s+/g, ' ').trim();
+    if (l && !TU_PAGE_MARK.test(l)) out.push(l);
+  }
+  return out;
+}
+
+/**
+ * One row of an account. pdf.js gives a row either as "Label value" on one line or as the label on one line and the
+ * value on the next, depending on how the page was laid out, so both are read. Only rows known to wrap take more
+ * lines: `hist` (the two "(Hist.)" rows) while the line continues the list, `text` (Remarks) until the next label.
+ */
+function tuField(info: string[], label: TuLabel, more?: 'hist' | 'text'): { v: string; line: string } | null {
+  for (let i = 0; i < info.length; i++) {
+    if (tuLabelOf(info[i]!) !== label) continue;
+    let v = info[i]!.slice(label.length).replace(/^:/, '').trim();
+    let j = i + 1;
+    if (!v && j < info.length && !tuLabelOf(info[j]!)) v = info[j++]!;
+    const free = (): boolean => j < info.length && !tuLabelOf(info[j]!);
+    if (more) {
+      for (let n = 0; n < TU_MORE_LINES[more] && free() && (more === 'text' || TU_HIST_MORE.test(info[j]!)); n++, j++) v += ` ${info[j]!}`;
+    } else {
+      // An adverse value is printed in >brackets<: one that opens and does not close ran onto the next line.
+      for (let n = 0; n < 3 && /^>[^<]*$/.test(v) && free(); n++, j++) v += ` ${info[j]!}`;
+    }
+    return { v: v.trim(), line: `${label} ${v}`.trim() };
+  }
+  return null;
+}
+/** Lines a wrapped row may run on for: a "(Hist.)" row can list two years of months, Remarks is a sentence or two. */
+const TU_MORE_LINES = { hist: 60, text: 4 } as const;
+
+/** "$300 from 05/2026 to 06/2026; $500 from 07/2026 to 09/2026": the amount whose period ends last, whatever the order. */
+function tuLatestAmount(v: string): number | null {
+  let best: { ends: string; cents: number } | null = null;
+  for (const x of v.matchAll(/\$\s?([\d,]+(?:\.\d{1,2})?)\s*from\s+\d{2}\/\d{4}\s+to\s+(\d{2})\/(\d{4})/gi)) {
+    const cents = parseMoneyToCents(x[1]!);
+    const ends = `${x[3]}-${x[2]}`;
+    if (cents !== null && (!best || ends >= best.ends)) best = { ends, cents };
+  }
+  return best ? best.cents : null;
+}
+
+/** "FIRST BANK CARD 411100002468****" is the name and the masked number. The mask can also be in front, or stand apart. */
+export function tuNameAndNumber(head: string): { name: string; number: string | null } {
+  const tokens = head.replace(/[<>]/g, ' ').split(' ').filter(Boolean);
+  const last = tokens[tokens.length - 1] ?? '';
+  const prev = tokens[tokens.length - 2] ?? '';
+  let number: string | null = null;
+  if (tokens.length > 1 && last.includes('*')) {
+    number = tokens.pop()!;
+    // "411100002468 ****": the digits and the mask came out as two words.
+    if (/^\*+$/.test(number) && tokens.length > 1 && /^[0-9A-Z]*\d[0-9A-Z]*$/.test(prev) && prev.length >= 4) number = tokens.pop()! + number;
+  } else if (tokens.length > 2 && /^\*+$/.test(prev) && /^[0-9A-Za-z]+$/.test(last)) {
+    number = tokens.splice(-2).join('');
+  } else if (tokens.length > 1 && /^\d{6,}$/.test(last)) {
+    number = tokens.pop()!;
+  }
+  return { name: tokens.join(' '), number };
+}
+
+const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const TU_MONTH = /\b(?:(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.? (\d{4})|(0[1-9]|1[0-2])\/(\d{4}))\b/g;
+/** TransUnion's rating codes, written as its own key prints them. */
+const TU_RATINGS: Record<string, string> = { OK: 'OK', 'N/R': 'N/R', X: 'x', 30: '30', 60: '60', 90: '90', 120: '120', COL: 'COL', VS: 'vs', RPO: 'RPO', 'C/O': 'c/o', FC: 'FC' };
+const TU_ON_TIME = new Set(['OK', 'N/R', 'x']);
+const TU_LATE_ORDER = ['30', '60', '90', '120', 'COL', 'c/o', 'RPO', 'FC', 'vs'];
+/** Stored when every reported month is on time. No digits on purpose: a digit here could be read as a late code. */
+export const TU_NO_LATES = 'No late payments in the months reported';
+
+/**
+ * The payment history grid as one short line: only the late months, in the bureau's codes ("Jul 2026 30; Aug 2026 60").
+ * Months and ratings are paired by the order they appear in, which holds whether pdf.js reads the grid month by month
+ * or row by row. When they cannot be paired, the late codes are kept without months rather than guessed.
+ */
+export function tuPaymentHistory(hist: string[]): string | null {
+  const joined = hist.join(' ');
+  const months = [...joined.matchAll(TU_MONTH)].map((m) => (m[1] ? `${m[1]} ${m[2]}` : `${MON[Number(m[3]) - 1]} ${m[4]}`));
+  const tokens = joined.split(' ');
+  const ratings: string[] = [];
+  // The word after "Remarks" is a remark code (some share letters with a rating), never a rating.
+  tokens.forEach((t, i) => { const r = TU_RATINGS[t.toUpperCase()]; if (r && tokens[i - 1] !== 'Remarks') ratings.push(r); });
+  if (!ratings.length) return null;
+  if (months.length === ratings.length) {
+    const lates = months.map((m, i) => `${m} ${ratings[i]!}`).filter((_, i) => !TU_ON_TIME.has(ratings[i]!));
+    if (!lates.length) return TU_NO_LATES;
+    let shown = lates.length;
+    const text = () => lates.slice(0, shown).join('; ') + (shown < lates.length ? `; +${lates.length - shown} more` : '');
+    while (shown > 1 && text().length > 120) shown--;
+    return text().slice(0, 120);
+  }
+  const codes = TU_LATE_ORDER.filter((c) => ratings.includes(c));
+  return codes.length ? `Late codes reported: ${codes.join(', ')} (months not matched; see the original)` : null;
+}
+
+const TU_INQUIRY_TYPE = /^(?:Individual|Joint|Participant|Authorized User|Co-?signer|Co-?maker|Shared|Undesignated)\b/i;
+
+/**
+ * Hard ("Regular") inquiries only: one row per requested date. Promotional and account-review inquiries are soft.
+ * `dates` is how many dates the section prints, so the caller can tell a section that was read from one that was not.
+ */
+function tuInquiries(lines: string[]): { rows: ParsedInquiry[]; dates: number } {
+  const start = lines.indexOf('Regular Inquiries');
+  if (start < 0) return { rows: [], dates: 0 };
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i++) {
+    if (TU_SECTION.test(lines[i]!) || /^Should you wish to contact TransUnion/i.test(lines[i]!)) { end = i; break; }
+  }
+  const sec = lines.slice(start + 1, end);
+  const heads: { at: number; len: number }[] = [];
+  for (let i = 0; i < sec.length; i++) {
+    if (/^Location Requested On(?: Phone)?$/.test(sec[i]!)) heads.push({ at: i, len: 1 });
+    else if (sec[i] === 'Location' && sec[i + 1] === 'Requested On') heads.push({ at: i, len: sec[i + 2] === 'Phone' ? 3 : 2 });
+  }
+  const out: ParsedInquiry[] = [];
+  if (!heads.length) {
+    // The section as the page lays it out (see tuTextFromLines): the company and its date on one line ("ACME LENDING
+    // 05/18/2026"), any further dates alone on the lines below, then the row of labels "Location Phone Inquiry Type".
+    for (let i = 0; i < sec.length; i++) {
+      const m = /^(.*?\S)\s+((?:\d{1,2}\/\d{1,2}\/\d{4}[\s,]*)+)$/.exec(sec[i]!);
+      if (!m || /^(?:Name|Location|Phone|Inquiry Type|Permissible Purpose)\b/.test(m[1]!)) continue;
+      const dates: string[] = [...(m[2]!.match(/\d{1,2}\/\d{1,2}\/\d{4}/g) ?? [])];
+      let j = i + 1;
+      for (; j < sec.length && /^(?:\d{1,2}\/\d{1,2}\/\d{4}[\s,]*)+$/.test(sec[j]!); j++) dates.push(...(sec[j]!.match(/\d{1,2}\/\d{1,2}\/\d{4}/g) ?? []));
+      if (!/^Location\b/.test(sec[j] ?? '')) continue;
+      for (const d of dates) out.push({ bureau: 'transunion', name: m[1]!.slice(0, 200), inquiry_date: normalizeDate(d) });
+      i = j;
+    }
+    return { rows: out, dates: (sec.join(' ').match(/\b\d{1,2}\/\d{1,2}\/\d{4}\b/g) ?? []).length };
+  }
+  // Where the lines of the next company name begin, and whether that point is certain (after the "Name" label or a
+  // finished entry). When it is not, only the line right above the column headings is taken as the name.
+  const nameLabel = sec.indexOf('Name');
+  let nameFrom = heads[0] && nameLabel >= 0 && nameLabel < heads[0].at ? nameLabel + 1 : 0;
+  let certain = nameFrom > 0;
+  heads.forEach((h, k) => {
+    const next = heads[k + 1];
+    const limit = next ? next.at : sec.length;
+    const above = sec.slice(nameFrom, h.at).filter((l) => l !== 'Name' && !/^(?:Inquiry Type|Permissible Purpose)\b/.test(l));
+    const name = (certain ? above.slice(-2) : above.slice(-1)).join(' ').trim();
+    let typeAt = -1;
+    for (let i = h.at + h.len; i < limit; i++) if (/^Inquiry Type\b/.test(sec[i]!)) { typeAt = i; break; }
+    // Without an "Inquiry Type" row the entry runs to the next one, whose name is the line above its headings.
+    const bodyEnd = typeAt >= 0 ? typeAt : next ? Math.max(next.at - 1, h.at + h.len) : sec.length;
+    const dates = sec.slice(h.at + h.len, bodyEnd).join(' ').match(/\b\d{1,2}\/\d{1,2}\/\d{4}\b/g) ?? [];
+    if (name) {
+      if (dates.length) for (const d of dates) out.push({ bureau: 'transunion', name: name.slice(0, 200), inquiry_date: normalizeDate(d) });
+      else out.push({ bureau: 'transunion', name: name.slice(0, 200), inquiry_date: null });
+    }
+    if (typeAt >= 0) {
+      let after = typeAt + 1;
+      const onOwnLine = sec[typeAt] === 'Inquiry Type';
+      // The type's value is the next line, unless that line is the only one left before the next entry's headings
+      // and does not read as a type: then it is the next company's name.
+      if (onOwnLine && after < limit && (limit - after >= 2 || !next || TU_INQUIRY_TYPE.test(sec[after]!))) after++;
+      nameFrom = after; certain = true;
+    } else {
+      nameFrom = bodyEnd; certain = false;
+    }
+  });
+  return { rows: out, dates: (sec.join(' ').match(/\b\d{1,2}\/\d{1,2}\/\d{4}\b/g) ?? []).length };
+}
+
+const TU_PERSONAL_LABEL = /^(?:Credit Report Date|Social Security Number|Date of Birth|Name|Other Names?|Also Known As|Addresses|Current Address|Other Address|Previous Address|Former Address|Date Reported|Phone Numbers?|Employers?|Employer Name|Position|Occupation|Date Hired|Date Verified)\b/;
+
+export function parseTransUnionAcr(text: string): ParsedReport {
+  const lines = tuLines(text);
+  const out: ParsedReport = { bureau: 'transunion', reportDate: null, tradelines: [], inquiries: [], publicRecords: [], identity: [], scores: [], warnings: [TRANSUNION_CHECK_WARNING] };
+
+  /** The value of a personal-information row: on the label's line, or alone on the next one. */
+  const valueAt = (i: number, label: string): string | null => {
+    const same = lines[i]!.slice(label.length).replace(/^:/, '').trim();
+    if (same) return same;
+    const next = lines[i + 1];
+    return next && !TU_PERSONAL_LABEL.test(next) && !TU_SECTION.test(next) ? next : null;
+  };
+
+  // Personal information: report date, names and addresses.
+  const personalAt = lines.findIndex((l) => /^Personal Information$/i.test(l));
+  const firstAccount = lines.findIndex((l) => l === 'Account Name' || l.startsWith('Account Name '));
+  if (personalAt >= 0) {
+    let personalEnd = lines.findIndex((l, i) => i > personalAt && (/^(?:Accounts|Public Records|Inquiries)$/i.test(l) || /^Payment\/Remarks Key/i.test(l)));
+    if (personalEnd < 0) personalEnd = firstAccount >= 0 ? firstAccount : lines.length;
+    for (let i = personalAt + 1; i < personalEnd; i++) {
+      const l = lines[i]!;
+      if (/^Credit Report Date\b/.test(l)) out.reportDate = normalizeDate(valueAt(i, 'Credit Report Date') ?? '') ?? out.reportDate;
+      else if (l === 'Name' || (l.startsWith('Name ') && !/^Name ID\b/.test(l))) {
+        const v = valueAt(i, 'Name');
+        if (v) out.identity.push({ bureau: 'transunion', kind: 'name', value: v.slice(0, 300) } satisfies ParsedIdentity);
+      } else {
+        const a = /^(?:Current|Other|Previous|Former) Address\b/.exec(l);
+        if (!a) continue;
+        const parts: string[] = [];
+        const same = l.slice(a[0].length).replace(/^:/, '').trim();
+        if (same) parts.push(same);
+        for (let j = i + 1; j < personalEnd && parts.length < 3 && !TU_PERSONAL_LABEL.test(lines[j]!) && !TU_SECTION.test(lines[j]!); j++) parts.push(lines[j]!);
+        if (parts.length) out.identity.push({ bureau: 'transunion', kind: 'address', value: parts.join(' ').slice(0, 300) } satisfies ParsedIdentity);
+      }
+    }
+  }
+  // The header's "Date Created" is the day the report was made. When both dates are printed and differ, the later one
+  // is the report's: it cannot be dated before it was created.
+  const createdAt = lines.findIndex((l) => /^Date Created\b/.test(l));
+  if (createdAt >= 0) {
+    const created = normalizeDate(lines[createdAt]!.replace(/^Date Created:?\s*/, '')) ?? normalizeDate(lines[createdAt + 1] ?? '');
+    if (created && (!out.reportDate || created > out.reportDate)) out.reportDate = created;
+  }
+  out.warnings.push('Phone numbers and employers on the TransUnion report were not imported; check them on the original if they matter.');
+
+  // Accounts: each starts at the "Account Name" label and runs to the next one, or to the next section heading.
+  const starts = lines.map((l, i) => (l === 'Account Name' || l.startsWith('Account Name ') ? i : -1)).filter((i) => i >= 0);
+  let unread = 0;
+  starts.forEach((s, k) => {
+    let e = k + 1 < starts.length ? starts[k + 1]! : lines.length;
+    for (let i = s + 1; i < e; i++) if (TU_SECTION.test(lines[i]!)) { e = i; break; }
+    const block = lines.slice(s, e);
+    const infoAt = block.indexOf('Account Information');
+    const headEnd = infoAt >= 0 ? infoAt : block[0] === 'Account Name' ? 2 : 1;
+    const head = [block[0]!.slice('Account Name'.length).trim(), ...block.slice(1, Math.min(headEnd, 4))].filter(Boolean).join(' ');
+    const { name, number } = tuNameAndNumber(head);
+    if (!name || tuLabelOf(name)) { out.warnings.push('An account on the TransUnion report has no readable name and was not imported; check the original.'); return; }
+    const histAt = block.findIndex((l, i) => i >= headEnd && l === 'Payment History');
+    const info = block.slice(infoAt >= 0 ? infoAt + 1 : headEnd, histAt >= 0 ? histAt : block.length);
+    const hist = histAt >= 0 ? block.slice(histAt + 1) : [];
+
+    const m: Record<string, FieldMeta> = { creditor_name: tuMeta(head) };
+    const text = (label: TuLabel, key?: string, more?: 'text'): string | null => {
+      const g = tuField(info, label, more); const v = tuClean(g?.v);
+      if (!g || !v) return null;
+      if (key) m[key] = tuMeta(g.line);
+      return v;
+    };
+    const money = (label: TuLabel, key: string): number | null => {
+      const g = tuField(info, label); const v = tuClean(g?.v);
+      if (!g || !v) return null;
+      const n = parseMoneyToCents(v); m[key] = tuMeta(g.line, n !== null); return n;
+    };
+    const date = (label: TuLabel, key: string): string | null => {
+      const g = tuField(info, label); const v = tuClean(g?.v);
+      if (!g || !v) return null;
+      const n = normalizeDate(v); m[key] = tuMeta(g.line, n !== null); return n;
+    };
+    /** A "(Hist.)" row lists amounts over time: `pick` takes the one that matters from them. */
+    const fromHistory = (label: TuLabel, key: string, pick: (amounts: number[], row: string) => number): number | null => {
+      const g = tuField(info, label, 'hist');
+      if (!g || !tuClean(g.v)) return null;
+      const amounts = [...g.v.matchAll(/\$\s?([\d,]+(?:\.\d{1,2})?)/g)].map((x) => parseMoneyToCents(x[1]!)).filter((n): n is number => n !== null);
+      m[key] = tuMeta(g.line, amounts.length > 0);
+      return amounts.length ? pick(amounts, g.v) : null;
+    };
+
+    // TransUnion masks the end of the number ("411100002468****"): those are not the last 4, so nothing is stored.
+    const l4 = number && !/\*$/.test(number) ? last4(number) : null;
+    if (l4) m.account_last4 = tuMeta(head);
+    const type = text('Account Type');
+    const loan = text('Loan Type');
+    const typeLine = tuField(info, 'Account Type') ?? tuField(info, 'Loan Type');
+    if (typeLine && (type || loan)) m.account_type = tuMeta(typeLine.line);
+    const pay = text('Pay Status', 'payment_status');
+    const original = text('Original Creditor', 'original_creditor');
+    const remarks = text('Remarks', undefined, 'text');
+    const closed = tuField(info, 'Date Closed');
+    // Only a date counts: anything else next to "Date Closed" is another row's text, not a closing date.
+    const closedRaw = tuClean(closed?.v);
+    const closedOn = closedRaw && normalizeDate(closedRaw) ? closedRaw : null;
+    // A collection is an account the bureau itself calls one: in its type, its pay status or its remarks, or reported by
+    // a debt buyer ("FACTORING COMPANY ACCOUNT"). An original creditor alone does not make one: a loan serviced for a
+    // partner bank names that bank the same way.
+    const isCollection = /collection|factoring company/i.test(`${type ?? ''} ${loan ?? ''} ${pay ?? ''} ${remarks ?? ''}`);
+    const saysClosed = /\bclosed\b/i.test(`${pay ?? ''} ${remarks ?? ''}`);
+    // The print has no status row. Closed comes from its closing date or its own wording; open is only said of an
+    // account whose pay status was read and that nothing calls closed or written off. Otherwise the status is left
+    // empty: the pay status says what there is to say.
+    const writtenOff = /charged?[ -]?off|profit and loss|repossess|foreclos|bankrupt/i.test(`${pay ?? ''} ${remarks ?? ''}`);
+    const account_status = isCollection ? (closedOn ? `Collection, closed ${closedOn}` : 'Collection') : closedOn ? `Closed ${closedOn}` : saysClosed ? 'Closed' : pay && !writtenOff ? 'Open' : null;
+    if (account_status) m.account_status = tuMeta(closedOn && closed ? closed.line : tuField(info, 'Pay Status')?.line ?? head);
+
+    // Remarks: what the bureau itself says about the account, in its words.
+    const notes: string[] = [];
+    const resp = text('Responsibility'); if (resp && !/^individual/i.test(resp)) notes.push(`Responsibility: ${resp}`);
+    if (remarks) notes.push(remarks);
+    const pastDue = text('Past Due'); if (pastDue && !/^\$?0(?:\.00)?$/.test(pastDue)) notes.push(`Past due: ${pastDue}`);
+    const terms = text('Terms'); if (terms) notes.push(`Terms: ${terms}`);
+    // The label is long enough to wrap, so the month is looked for on its line and the lines after it, up to the next row.
+    const removalAt = info.findIndex((l) => l.startsWith('Estimated month and year'));
+    let removal: string | undefined;
+    for (let i = removalAt; removalAt >= 0 && i < Math.min(removalAt + 4, info.length) && !removal && (i === removalAt || !tuLabelOf(info[i]!)); i++) {
+      removal = /\b((?:0[1-9]|1[0-2])\/\d{4})\b/.exec(info[i]!)?.[1];
+    }
+    // First among the notes, so a long remark can never push it past the length the field holds: the comparison reads
+    // this line to know when the bureau itself expects the item to stop being reported (analysis.ts printedRemovalMonth).
+    if (removal) notes.unshift(`Estimated month and year this item will be removed: ${removal}`);
+    if (notes.length) m.remarks = tuMeta(tuField(info, 'Remarks')?.line ?? notes[0]!);
+
+    const payment_history = tuPaymentHistory(hist);
+    if (payment_history) m.payment_history = tuMeta(payment_history);
+
+    const t = finish({
+      bureau: 'transunion',
+      item_type: isCollection ? 'collection' : 'tradeline',
+      creditor_name: name.slice(0, 200),
+      original_creditor: original ? original.slice(0, 200) : null,
+      account_last4: l4,
+      account_type: type && loan ? `${type} (${loan})`.slice(0, 100) : (type ?? loan)?.slice(0, 100) ?? null,
+      account_status,
+      payment_status: pay ? pay.slice(0, 100) : null,
+      balance_cents: money('Balance', 'balance_cents'),
+      credit_limit_cents: money('Credit Limit', 'credit_limit_cents') ?? fromHistory('Credit Limit (Hist.)', 'credit_limit_cents', (a, row) => tuLatestAmount(row) ?? a[a.length - 1]!),
+      high_balance_cents: money('High Balance', 'high_balance_cents') ?? fromHistory('High Balance (Hist.)', 'high_balance_cents', (a) => Math.max(...a)),
+      date_opened: date('Date Opened', 'date_opened'),
+      date_reported: date('Date Updated', 'date_reported'),
+      // Printed on some collection and charged-off accounts only; never worked out from anything else.
+      date_of_first_delinquency: date('Date of First Delinquency', 'date_of_first_delinquency'),
+      payment_history,
+      remarks: notes.length ? notes.join(' · ').slice(0, 300) : null,
+      field_meta: m,
+    });
+    out.tradelines.push(t);
+    // Read with a name and nothing else, or with most of its rows empty: this file is not laid out the way the reader knows.
+    const rows = info.filter((l) => tuLabelOf(l));
+    const empty = info.filter((l, i) => { const k = tuLabelOf(l); return !!k && !l.slice(k.length).replace(/^:/, '').trim() && (i + 1 >= info.length || !!tuLabelOf(info[i + 1]!)); });
+    const noDetails = t.balance_cents === null && !t.date_opened && !t.date_reported && !t.payment_status && !t.account_type;
+    if (noDetails || (rows.length >= 3 && empty.length * 2 > rows.length)) unread++;
+  });
+
+  const inquiries = tuInquiries(lines);
+  out.inquiries = inquiries.rows;
+
+  // The reader checks itself. TransUnion prints no totals to compare with, so it looks for the ways a file laid out
+  // differently would show: accounts that came out with few or no details, and an inquiry section with dates and no rows.
+  if (unread) out.warnings.push(`${unread} ${unread === 1 ? 'account' : 'accounts'} on the TransUnion report ${unread === 1 ? 'was' : 'were'} read with few or no details. The file may be laid out differently from what the reader knows: compare every value with the original before approving.`);
+  if (inquiries.dates > 0 && !inquiries.rows.length) out.warnings.push('The Regular Inquiries section of the TransUnion report shows dates, but no inquiry could be read from it. Add the hard inquiries from the original by hand.');
+
+  // Public records are not read from this layout. When the section holds anything but a line saying there are none,
+  // say so. ("Docket No. 26-10001" is a record: only a whole sentence about having none counts as none.)
+  const recordsAt = lines.findIndex((l) => /^Public Records$/i.test(l));
+  if (recordsAt >= 0) {
+    const body: string[] = [];
+    for (let i = recordsAt + 1; i < lines.length && body.length < 3 && !TU_SECTION.test(lines[i]!) && !/^Account Name\b/.test(lines[i]!); i++) body.push(lines[i]!);
+    if (body.length && !TU_NO_RECORDS.test(body[0]!)) {
+      out.warnings.push('This report has a Public Records section. Public records are not imported from this layout: add them from the original by hand.');
+    }
+  }
+  return out;
+}
+
+// ---- TransUnion, read by position
+
+/**
+ * Every label an account prints, as a cell of its own. TransUnion lays an account out as a grid: up to three labels in
+ * a row, each value on the lines below under its label. (The list follows the MIT-licensed Errata project's TransUnion
+ * parser, github.com/wjwhitmire/errata, which was written from real reports; the code here is ours.)
+ */
+const TU_CARD_CELLS = new Set([
+  'Account Name', 'Account Number', 'Address', 'Phone', 'Monthly Payment', 'Date Opened', 'Responsibility', 'Account Type', 'Loan Type', 'Balance', 'Date Updated',
+  'Payment Received', 'Last Payment Made', 'Original Creditor', 'Original Amount', 'Original Balance', 'Pay Status', 'Terms', 'Date Closed', 'Date Paid', 'High Balance',
+  'High Balance (Hist.)', 'Credit Limit', 'Credit Limit (Hist.)', 'Maximum Delinquency Note', 'Maximum Delinquency', 'Remarks', 'Past Due', 'Date of First Delinquency',
+  'Date Placed for Collection', 'Placed for collection',
+]);
+const tuCardCell = (s: string): boolean => TU_CARD_CELLS.has(s) || /^Estimated month and year\b/.test(s);
+/** Lines one row of labels may be followed by: a wrapped address or remark runs to a few, never more. */
+const TU_VALUE_LINES = 8;
+
+/**
+ * A TransUnion report rewritten from where its text sits on the page into the one-value-per-line form
+ * parseTransUnionAcr reads ("Balance $612"). Whatever order the file stores its text in, the positions are the same:
+ * a row of labels, and each value under its label. A value is given to the label whose left edge it starts at or
+ * after. Rows that already hold a label and its value ("Balance $612"), the payment history grid and everything
+ * outside an account are passed through as they read across the page.
+ */
+export function tuTextFromLines(lines: { cells: { x: number; s: string }[] }[]): string {
+  // Page headers and footers first: between two pages they would otherwise be taken for values.
+  const rows = lines.map((l) => ({ cells: l.cells, text: l.cells.map((c) => c.s).join(' ') })).filter((l) => l.cells.length > 0 && tuLines(l.text).length > 0);
+  const labels = (l: (typeof rows)[number]): boolean => l.cells.every((c) => tuCardCell(c.s));
+  const out: string[] = [];
+  let mode: 'outside' | 'account' | 'history' = 'outside';
+  for (let i = 0; i < rows.length; i++) {
+    const l = rows[i]!;
+    const first = l.cells[0]!.s;
+    if (TU_SECTION.test(l.text)) { mode = 'outside'; out.push(l.text); continue; }
+    if (l.text === 'Payment History') { mode = 'history'; out.push(l.text); continue; }
+    if (first === 'Account Name' || first.startsWith('Account Name ')) mode = 'account';
+    if (mode !== 'account' || !labels(l)) { out.push(l.text); continue; }
+    const anchors = l.cells.map((c) => c.x);
+    const under: string[][] = anchors.map(() => []);
+    let j = i + 1;
+    for (; j < rows.length && j <= i + TU_VALUE_LINES; j++) {
+      const v = rows[j]!;
+      // The next row of labels, a row that carries its own label, or the end of the account's details.
+      // (The note under "Maximum Delinquency Note" begins with the same words as its label: it is a value.)
+      const ownLabel = tuCardCell(v.cells[0]!.s) || (!!tuLabelOf(v.text) && !/^Maximum Delinquency of\b/.test(v.text));
+      if (ownLabel || v.text === 'Payment History' || v.text === 'Account Information' || TU_SECTION.test(v.text)) break;
+      for (const c of v.cells) {
+        let k = 0;
+        anchors.forEach((a, n) => { if (c.x + 3 >= a) k = n; });
+        under[k]!.push(c.s);
+      }
+    }
+    // The name and the masked number go on one line, as the reader takes them; every other label gets its own.
+    if (first === 'Account Name') out.push(`Account Name ${under.flat().join(' ')}`.trim());
+    else l.cells.forEach((c, k) => out.push(`${c.s} ${under[k]!.join(' ')}`.trim()));
+    i = j - 1;
+  }
+  return out.join('\n');
+}
+
+/**
+ * How much of a report a reading filled in: what a reader got out of each account, and each dated inquiry. Used to
+ * choose between two readings of the same file; it says nothing about whether the values are right.
+ */
+export function readingScore(p: ParsedReport): number {
+  const filled = (t: ParsedTradeline): number => [t.balance_cents, t.date_opened, t.date_reported, t.payment_status, t.account_type, t.credit_limit_cents, t.high_balance_cents].filter((v) => v !== null && v !== undefined).length;
+  return p.tradelines.reduce((n, t) => n + filled(t), 0) + 2 * p.inquiries.filter((q) => q.inquiry_date).length;
+}
+
+/** The first line of a public records section that holds no record. */
+const TU_NO_RECORDS = /^(?:none\.?|(?:you have |there are |we (?:have|found) )?no public records?\b.*|no (?:records?|items?) (?:were |was |are |is )?(?:found|reported|on file)\b.*)$/i;

@@ -3,7 +3,7 @@ import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import { loadProgressFacts, suggestProgress, syncClientProgress } from '@/lib/client-progress';
 import { ProgressPicker } from './progress-picker';
-import { AlertTriangle, ArrowLeft, Check as CheckIcon, CheckCircle2, ChevronDown, ChevronRight, Download, FileText, Gavel, Mail, MapPin, Pencil, Phone, Pin, ScanSearch, Trash2 } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, Check as CheckIcon, CheckCircle2, ChevronDown, ChevronRight, Download, FileText, Gavel, Mail, MapPin, Pencil, Phone, Pin, ScanSearch, Sparkles, Trash2 } from 'lucide-react';
 import { ActionForm, Check, ConfirmButton, Field, Select, SubmitButton, TextArea } from '@/components/forms';
 import { AiTag, Avatar, Badge, DayMeter, DefinitionList, EmptyState, Notice, Section, StatusBadge, Tabs } from '@/components/ui';
 import { SplitBar } from '@/components/charts';
@@ -125,6 +125,8 @@ export default async function ClientPage({ params, searchParams }: { params: Pro
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Link href={`/app/clients/${id}/statement`} className="btn-secondary">Work statement</Link>
+            {/* "Ask about your clients" on the assistant page, opened for this client: answers come from this file. */}
+            <Link href={`/app/assistant?client=${id}#ask`} className="btn-secondary" title="Ask a question about this client’s file"><Sparkles size={15} aria-hidden /> Ask<span className="sr-only"> about this client’s file</span></Link>
             <Link href={`/app/clients/${id}/edit`} className="btn-secondary"><Pencil size={15} aria-hidden /> Edit</Link>
             {ctx.can('clients:delete') && <Link href={`/app/clients/${id}/edit#delete`} className="btn-secondary text-bad"><Trash2 size={15} aria-hidden /> Delete</Link>}
             <Link href={`/app/disputes/new?clientId=${id}`} className="btn-primary"><Gavel size={15} aria-hidden /> New dispute</Link>
@@ -220,8 +222,14 @@ async function Overview({ id, ctx, c, first }: { id: string; ctx: Ctx; c: C; fir
   const recordable = CONSENT_DOCS.filter(recordableIn(personal));
   // Which documents the record lists: an agency's required ones and whatever is on file; in a personal workspace only what is on file.
   const listed = CONSENT_DOCS.filter((x) => (!personal && x.required) || d.consents.some((k) => k.kind === x.kind));
+  // The compliance record folds down to one line once nothing in it needs anyone: every required document on file,
+  // no cancellation, nothing signed on the old drafts.
+  const onFile = listed.filter((doc) => d.consents.some((k) => k.kind === doc.kind && !k.revoked_at)).length;
+  const complianceSettled = !cs.missing.length && !cs.clientCancelledOn && !d.consents.some((k) => !k.revoked_at && !personal && isDraftEraSignature(k));
   return (
-    <div className="grid gap-x-8 gap-y-6 lg:grid-cols-3">
+    // On a phone the order is: the plan, what needs attention, progress, then the client's file. On a wide screen
+    // "Needs attention" heads the right-hand column (the third row takes the spare height, so nothing floats).
+    <div className="grid gap-x-8 gap-y-6 lg:grid-cols-3 lg:grid-rows-[auto_auto_1fr]">
       {/* The plan is the one thing to read first: a numbered list, most pressing on top, each row goes where the work is. */}
       <section className="panel overflow-hidden lg:col-span-3" aria-labelledby="plan-title">
         <div className="px-5 pb-4 pt-5 sm:px-6">
@@ -243,8 +251,22 @@ async function Overview({ id, ctx, c, first }: { id: string; ctx: Ctx; c: C; fir
         </ol>
       </section>
 
-      <div className="space-y-6 lg:col-span-2">
-        <Section title="Dispute progress" hint="Only counts disputes that were actually submitted. Outcomes are decided by the bureaus and furnishers.">
+      <div className="lg:col-start-3 lg:row-start-2">
+        <Section title="Needs attention">
+          <ul className="space-y-3 text-sm">
+            {cs.clientCancelledOn && <li className="flex gap-2.5"><AlertTriangle size={16} aria-hidden className="mt-0.5 shrink-0 text-warn" /><span><strong className="font-semibold">Agreement cancelled:</strong> {first} cancelled the service agreement in the portal on {sayDay(cs.clientCancelledOn)}. No dispute can be submitted and no letter recorded as sent unless {first} signs a new one.</span></li>}
+            {cs.missing.length > 0 && <li className="flex gap-2.5"><AlertTriangle size={16} aria-hidden className="mt-0.5 shrink-0 text-warn" /><span><strong className="font-semibold">Missing consents:</strong> {cs.missing.map((k) => CONSENT_DOCS.find((x) => x.kind === k)?.title.split(' (')[0] ?? k).join('; ')}</span></li>}
+            {cs.inCancellationWindow && cs.cancellationEndsOn && <li className="flex gap-2.5"><AlertTriangle size={16} aria-hidden className="mt-0.5 shrink-0 text-warn" /><span><strong className="font-semibold">Cancellation period:</strong> {first} can cancel without penalty through {sayDay(cs.cancellationEndsOn)}. No dispute can be submitted and no letter recorded as sent before then.</span></li>}
+            {d.requests.map((r) => <li key={r.id} className="flex gap-2.5"><FileText size={16} aria-hidden className="mt-0.5 shrink-0 text-muted" /><span>Waiting for {DOC_KIND_LABEL[r.kind] ?? r.kind}{r.due_at ? ` (due ${fmtDate(r.due_at)})` : ''}</span></li>)}
+            {d.tasks.map((t) => <li key={t.id} className="flex gap-2.5"><CheckIcon size={16} aria-hidden className="mt-0.5 shrink-0 text-muted" /><span>{t.title}{t.due_at ? <span className="text-muted"> · {fmtDate(t.due_at)}</span> : ''}</span></li>)}
+            {quiet && <li className="flex gap-2.5 text-muted"><CheckCircle2 size={16} aria-hidden className="mt-0.5 shrink-0 text-ok" />Nothing needs attention.</li>}
+          </ul>
+        </Section>
+      </div>
+
+      <div className="space-y-6 lg:col-span-2 lg:col-start-1 lg:row-span-2 lg:row-start-2">
+        <Section title="Dispute progress" hint="Only counts disputes that were actually submitted. Outcomes are decided by the bureaus and furnishers."
+          actions={<Link href={`/app/clients/${id}?tab=messages&draft=progress`} className="btn-secondary btn-sm">Draft update for {first}</Link>}>
           {d.o.total === 0 ? <p className="text-sm text-muted">No disputes submitted yet.</p> : (
             <>
               <div className="mb-4">
@@ -276,30 +298,20 @@ async function Overview({ id, ctx, c, first }: { id: string; ctx: Ctx; c: C; fir
             <li key={e.id} className="flex gap-3 text-sm"><span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-line-strong" aria-hidden /><div className="min-w-0"><div>{e.summary}</div><div className="text-xs text-muted">{e.actor ?? 'System'} · {relTime(e.created_at)}</div></div></li>))}</ol>}
         </Section>
 
-        <Section plain title="Details">
+        <Section plain title="Details" fold={{ summary: <>Client since {fmtDate(c.created_at)} · last activity {relTime(c.last_activity_at)}</> }}>
           <DefinitionList items={[['Email', c.email], ['Phone', c.phone], ['Preferred language', c.preferred_language === 'es' ? 'Español' : 'English'], ['SSN on file', c.ssn_last4 ? `••• •• ${c.ssn_last4}` : null], ['Source', c.source], ['Client since', fmtDate(c.created_at)], ['Last activity', relTime(c.last_activity_at)], ['Goals', c.goals]]} />
         </Section>
       </div>
 
-      <div className="space-y-6">
+      <div className="space-y-6 lg:col-start-3 lg:row-start-3">
         {/* A personal workspace has no client to invite: the person works on their own file. */}
         {!personal && <WelcomeBlock ctx={ctx} clientId={id} first={first} email={c.email} portalUserId={c.portal_user_id} />}
 
         {/* What the service agreement states this client will pay: the agency's figures or the client's own (LEG-9). */}
         {!personal && <AgreementTermsBlock ctx={ctx} clientId={id} first={first} />}
 
-        <Section title="Needs attention">
-          <ul className="space-y-3 text-sm">
-            {cs.clientCancelledOn && <li className="flex gap-2.5"><AlertTriangle size={16} aria-hidden className="mt-0.5 shrink-0 text-warn" /><span><strong className="font-semibold">Agreement cancelled:</strong> {first} cancelled the service agreement in the portal on {sayDay(cs.clientCancelledOn)}. No dispute can be submitted and no letter recorded as sent unless {first} signs a new one.</span></li>}
-            {cs.missing.length > 0 && <li className="flex gap-2.5"><AlertTriangle size={16} aria-hidden className="mt-0.5 shrink-0 text-warn" /><span><strong className="font-semibold">Missing consents:</strong> {cs.missing.map((k) => CONSENT_DOCS.find((x) => x.kind === k)?.title.split(' (')[0] ?? k).join('; ')}</span></li>}
-            {cs.inCancellationWindow && cs.cancellationEndsOn && <li className="flex gap-2.5"><AlertTriangle size={16} aria-hidden className="mt-0.5 shrink-0 text-warn" /><span><strong className="font-semibold">Cancellation period:</strong> {first} can cancel without penalty through {sayDay(cs.cancellationEndsOn)}. No dispute can be submitted and no letter recorded as sent before then.</span></li>}
-            {d.requests.map((r) => <li key={r.id} className="flex gap-2.5"><FileText size={16} aria-hidden className="mt-0.5 shrink-0 text-muted" /><span>Waiting for {DOC_KIND_LABEL[r.kind] ?? r.kind}{r.due_at ? ` (due ${fmtDate(r.due_at)})` : ''}</span></li>)}
-            {d.tasks.map((t) => <li key={t.id} className="flex gap-2.5"><CheckIcon size={16} aria-hidden className="mt-0.5 shrink-0 text-muted" /><span>{t.title}{t.due_at ? <span className="text-muted"> · {fmtDate(t.due_at)}</span> : ''}</span></li>)}
-            {quiet && <li className="flex gap-2.5 text-muted"><CheckCircle2 size={16} aria-hidden className="mt-0.5 shrink-0 text-ok" />Nothing needs attention.</li>}
-          </ul>
-        </Section>
-
-        <Section plain id="compliance" title="Compliance record" hint={personal ? 'In a personal workspace no credit repair agreement is needed: you are working on your own file. Record the authorization only if you use automatic report import.' : 'What this client has received and signed.'}>
+        <Section plain id="compliance" title="Compliance record" hint={personal ? 'In a personal workspace no credit repair agreement is needed: you are working on your own file. Record the authorization only if you use automatic report import.' : 'What this client has received and signed.'}
+          fold={complianceSettled ? { summary: personal ? (onFile ? `${onFile} on file. No agreement is needed in a personal workspace.` : 'No agreement is needed in a personal workspace.') : `All ${onFile} documents are on file.` } : undefined}>
           {listed.length > 0 && <ul className="space-y-3">
             {listed.map((doc) => {
               const rec = d.consents.find((k) => k.kind === doc.kind && !k.revoked_at);
@@ -371,11 +383,6 @@ async function Overview({ id, ctx, c, first }: { id: string; ctx: Ctx; c: C; fir
         <SmsConsentBlock ctx={ctx} clientId={id} phone={c.phone} lang={c.preferred_language} />
 
         <ReferredByBlock ctx={ctx} clientId={id} />
-
-        <Section plain title="Draft an update for the client">
-          <p className="text-sm text-muted">Creates a plain-language progress note from the dispute data above. You review and send it.</p>
-          <Link href={`/app/clients/${id}?tab=messages&draft=progress`} className="btn-secondary mt-3">Draft update for {first}</Link>
-        </Section>
       </div>
     </div>
   );
@@ -445,7 +452,7 @@ async function ReportsTab({ id, ctx }: { id: string; ctx: Ctx }) {
         ) : (
         <div className="space-y-4">
           <ReportDropzone clientId={id} action={uploadReportFileAction} accept={scans ? '.pdf,.txt,.html,.htm,.csv,.png,.jpg,.jpeg' : '.pdf,.txt,.html,.htm,.csv'} maxBytes={maxUploadBytes()} tooLarge={tooLargeMessage(maxUploadMb())} hint={`${scans ? 'PDF, photo, HTML, TXT or CSV' : 'PDF, HTML, TXT or CSV'} · max ${maxUploadMb()} MB each`} />
-          <p className="text-xs text-muted">AnnualCreditReport.com PDFs from Experian and Equifax are read exactly, field by field, for free. {scans ? `Other layouts (TransUnion, other printouts), scans and photos are read by AI (${AI_COSTS.report_scan} AI credits each, nothing taken if it can't be read) and every field is flagged for you to check.` : 'Other layouts read best as the CSV template; scans and photos need AI reading, which is off.'} The bureau is detected from the file. Files are stored encrypted. <a className="link" href="/templates/report-import.csv">CSV template</a></p>
+          <p className="text-xs text-muted">AnnualCreditReport.com PDFs from Experian, Equifax and TransUnion are read exactly, field by field, for free. The TransUnion reader is new, so every field it reads is flagged for you to check. {scans ? `Other printouts, scans and photos are read by AI (${AI_COSTS.report_scan} AI credits each, nothing taken if it can't be read) and every field is flagged for you to check.` : 'Other layouts read best as the CSV template; scans and photos need AI reading, which is off.'} The bureau is detected from the file. Files are stored encrypted. <a className="link" href="/templates/report-import.csv">CSV template</a></p>
         </div>
         )}
       </Section>

@@ -18,7 +18,8 @@ export async function ReferredByBlock({ ctx, clientId }: { ctx: Ctx; clientId: s
   }));
   if (!partners.length) return null;
   return (
-    <Section plain id="referred-by" title="Referred by" hint="The partner who sent this client to you, if one did.">
+    <Section plain id="referred-by" title="Referred by" hint="The partner who sent this client to you, if one did."
+      fold={{ summary: current ? current.business_name : 'No partner recorded.' }}>
       <p className="text-sm">{current ? <Link href={`/app/partners/${current.partner_id}`} className="font-medium hover:underline">{current.business_name}</Link> : <span className="text-muted">No partner recorded.</span>}</p>
       {ctx.can('clients:write') && (
         <ActionForm action={setReferredByAction} className="mt-3 space-y-3">

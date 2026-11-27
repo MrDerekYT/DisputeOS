@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import type { CSSProperties, ReactNode } from 'react';
-import { AlertCircle, AlertTriangle, ArrowLeft, CheckCircle2, Clock, Info, Sparkles } from 'lucide-react';
+import { AlertCircle, AlertTriangle, ArrowLeft, CheckCircle2, ChevronDown, Clock, Info, Sparkles } from 'lucide-react';
 import { dayWindow, windowStart, windowText } from '@/lib/day-meter';
 import { cn, fmtDate, initials } from '@/lib/util';
 import { PRODUCT, wordmarkParts } from '@/lib/product';
@@ -67,17 +67,45 @@ export function PageHeader({ title, subtitle, actions, back }: { title: string; 
  * A titled block. By default it is a panel (for things that are objects: a form, a list, a record).
  * `plain` drops the panel: just the heading, a rule above and room — use it for reference content so a page is not a
  * wall of identical boxes.
+ * `fold` turns the block into a disclosure: shut, it is its title and one line saying where things stand; open, it is
+ * the same block as before. Pass `open` while there is something to do in it, so a finished block gets out of the way
+ * and an unfinished one never hides.
  */
-export function Section({ title, hint, actions, children, className, id, plain }: { title?: string; hint?: ReactNode; actions?: ReactNode; children: ReactNode; className?: string; id?: string; plain?: boolean }) {
+export function Section({ title, hint, actions, children, className, id, plain, fold }: {
+  title?: string; hint?: ReactNode; actions?: ReactNode; children: ReactNode; className?: string; id?: string; plain?: boolean;
+  fold?: { summary: ReactNode; open?: boolean };
+}) {
+  const shell = cn(plain ? 'border-t border-line pt-6' : 'card card-pad', id && 'scroll-mt-28', className);
+  if (fold && title) {
+    return (
+      <section id={id} className={shell}>
+        <details open={fold.open} className="group/fold">
+          <summary className="flex cursor-pointer list-none items-start justify-between gap-3 rounded-lg [&::-webkit-details-marker]:hidden">
+            <span className="min-w-0">
+              <h2 className="text-lg font-semibold leading-snug">{title}</h2>
+              <span className="mt-0.5 block text-[0.8125rem] text-muted group-open/fold:hidden">{fold.summary}</span>
+              {hint && <span className="mt-0.5 hidden text-[0.8125rem] text-muted group-open/fold:block">{hint}</span>}
+            </span>
+            <ChevronDown size={18} aria-hidden className="mt-1 shrink-0 text-faint transition-transform group-open/fold:rotate-180" />
+          </summary>
+          <div className="mt-4">
+            {actions && <div className="mb-3 flex flex-wrap items-center gap-2">{actions}</div>}
+            {children}
+          </div>
+        </details>
+      </section>
+    );
+  }
   return (
-    <section id={id} className={cn(plain ? 'border-t border-line pt-6' : 'card card-pad', id && 'scroll-mt-28', className)}>
+    <section id={id} className={shell}>
       {(title || actions) && (
         <div className="mb-4 flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
-          <div className="min-w-0">
+          {/* The text gives way before the action does: with room, the action sits beside the title, not under a long hint. */}
+          <div className="min-w-0 flex-1 basis-56">
             {title && <h2 className="text-lg font-semibold leading-snug">{title}</h2>}
             {hint && <p className="mt-0.5 text-[0.8125rem] text-muted">{hint}</p>}
           </div>
-          {actions}
+          {actions && <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div>}
         </div>
       )}
       {children}

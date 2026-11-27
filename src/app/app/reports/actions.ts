@@ -12,9 +12,10 @@ import { parseMoneyToCents, normalizeDate } from '@/lib/reports/parser';
 import { staffReportRefusal } from '@/lib/credit/authorization';
 import { queueClientUpdate } from '@/lib/client-updates/service';
 import { ocrEnabled } from '@/lib/reports/ocr';
-import { readReportFile, ReportReadError, reportMimes, SCANS_OFF_IMAGE, type ReadResult } from '@/lib/reports/read-file';
+import { pagesNote, readReportFile, ReportReadError, reportMimes, SCANS_OFF_IMAGE, type ReadResult } from '@/lib/reports/read-file';
 import { requestReportPull } from '@/lib/credit/pull';
-import { decideReport, regenerateFindings, ReportError, storeParsedReport } from '@/lib/reports/service';
+import { rereadReport, type RereadResult } from '@/lib/reports/reread';
+import { decideReport, regenerateFindings, ReportChangedError, ReportError, storeParsedReport } from '@/lib/reports/service';
 import type { ParsedReport } from '@/lib/reports/types';
 import { deleteObject, getObject, putObject } from '@/lib/storage';
 import { readUpload, UploadError, type DetectedMime } from '@/lib/upload';
@@ -38,14 +39,44 @@ export async function uploadReportFileAction(_: ActionState, fd: FormData): Prom
     const r = await importUploadedReport(ctx, fd);
     const p = r.parsed;
     const accounts = p.tradelines.filter((t) => t.item_type === 'tradeline').length;
-    const collections = p.tradelines.length - accounts;
-    const parts = [`${accounts} account${accounts === 1 ? '' : 's'}`, `${collections} collection${collections === 1 ? '' : 's'}`, `${p.inquiries.length} inquir${p.inquiries.length === 1 ? 'y' : 'ies'}`];
-    if (p.publicRecords.length) parts.push(`${p.publicRecords.length} public record${p.publicRecords.length === 1 ? '' : 's'}`);
-    return { ok: `${BUREAU_NAME[p.bureau ?? ''] ?? 'Report'}: ${parts.join(', ')}${r.via.startsWith('ai') ? ' (read by AI, check each field)' : ''}`, data: { reportId: r.firstId } };
+    return { ok: readingLine(p.bureau, { accounts, collections: p.tradelines.length - accounts, inquiries: p.inquiries.length, publicRecords: p.publicRecords.length }, r), data: { reportId: r.firstId } };
   });
 }
 
 const BUREAU_NAME: Record<string, string> = { experian: 'Experian', equifax: 'Equifax', transunion: 'TransUnion' };
+
+/** One line on what a reading found: "TransUnion: 12 accounts, 3 collections, 3 inquiries, all 6 pages read". */
+function readingLine(bureau: string | null, n: { accounts: number; collections: number; inquiries: number; publicRecords: number }, r: Pick<ReadResult, 'via' | 'pages'>): string {
+  const parts = [`${n.accounts} account${n.accounts === 1 ? '' : 's'}`, `${n.collections} collection${n.collections === 1 ? '' : 's'}`, `${n.inquiries} inquir${n.inquiries === 1 ? 'y' : 'ies'}`];
+  if (n.publicRecords) parts.push(`${n.publicRecords} public record${n.publicRecords === 1 ? '' : 's'}`);
+  return `${BUREAU_NAME[bureau ?? ''] ?? 'Report'}: ${parts.join(', ')}${pagesNote(r)}${r.via.startsWith('ai') ? ' (read by AI, check each field)' : ''}`;
+}
+
+/**
+ * Reads the stored file of a report that is still waiting for review once more, with the readers as they are now, and
+ * puts what the fresh reading holds for that report in place of what it held before (src/lib/reports/reread.ts). Only
+ * that one report changes; an approved or rejected report is never touched, and nothing changes when the file cannot
+ * be read.
+ */
+export async function rereadReportAction(_: ActionState, fd: FormData): Promise<ActionState> {
+  const ctx = await requireStaff('reports:write');
+  return run(async () => {
+    const d = parseForm(z.object({ id: zUuid }), fd);
+    let r: RereadResult;
+    try { r = await rereadReport(ctx.tx, ctx, d.id); }
+    catch (e) {
+      // The report may have been approved or rejected in another tab meanwhile: the page is drawn again as it now stands.
+      if (e instanceof ReportError) revalidatePath(`/app/reports/${d.id}`);
+      throw e;
+    }
+    revalidatePath(`/app/clients/${r.clientId}`);
+    revalidatePath(`/app/reports/${d.id}`);
+    const also = r.alsoHolds.map((b) => BUREAU_NAME[b]).join(' and ');
+    return { ok: `Read again. ${readingLine(r.bureau, r, r)}.`
+      + (r.movedFrom ? ` The file reads as a ${BUREAU_NAME[r.bureau]} report, so this report is now filed under ${BUREAU_NAME[r.bureau]} (it was under ${BUREAU_NAME[r.movedFrom]}).` : '')
+      + (also ? ` The file also holds ${also} rows; they are not part of this report.` : '') };
+  });
+}
 
 async function importUploadedReport(ctx: Awaited<ReturnType<typeof requireStaff>>, fd: FormData) {
     const d = parseForm(z.object({ clientId: zUuid, bureau: z.enum(BUREAUS).optional().or(z.literal('')) }), fd);
@@ -62,7 +93,8 @@ async function importUploadedReport(ctx: Awaited<ReturnType<typeof requireStaff>
 
     let parsed: ParsedReport;
     let via: ReadResult['via'];
-    try { ({ parsed, via } = await readReportFile(up, { orgId: ctx.orgId, userId: ctx.userId })); }
+    let pages: ReadResult['pages'];
+    try { ({ parsed, via, pages } = await readReportFile(up, { orgId: ctx.orgId, userId: ctx.userId })); }
     catch (e) {
       if (e instanceof ReportReadError) throw new UserError(e.message);
       throw e;
@@ -89,7 +121,7 @@ async function importUploadedReport(ctx: Awaited<ReturnType<typeof requireStaff>
       throw e;
     }
     revalidatePath(`/app/clients/${d.clientId}`);
-    return { firstId, parsed, via };
+    return { firstId, parsed, via, pages };
 }
 
 /**
@@ -161,15 +193,17 @@ export async function pullReportAction(_: ActionState, fd: FormData): Promise<Ac
 
 export async function decideReportAction(fd: FormData) {
   const ctx = await requireStaff('reports:write');
-  const d = parseForm(z.object({ id: zUuid, decision: z.enum(['approved', 'rejected']) }), fd);
+  // `mark`: the reading that was on screen when the button was pressed (readingMark). A report read again, or with a
+  // row removed, since then is not decided: the person is shown it as it now stands and decides again.
+  const d = parseForm(z.object({ id: zUuid, decision: z.enum(['approved', 'rejected']), mark: z.string().regex(/^[0-9a-f]{32}$/) }), fd);
   let clientId = '';
   try {
-    ({ clientId } = await ctx.tx((db) => decideReport(db, ctx, d.id, d.decision)));
+    ({ clientId } = await ctx.tx((db) => decideReport(db, ctx, d.id, d.decision, d.mark)));
   } catch (e) {
     // Someone else (or another tab) already reviewed it, or it is gone: show the report as it now stands instead of an error page.
     if (!(e instanceof ReportError)) throw e;
     revalidatePath(`/app/reports/${d.id}`);
-    redirect(`/app/reports/${d.id}`);
+    redirect(`/app/reports/${d.id}${e instanceof ReportChangedError ? '?changed=1' : ''}`);
   }
   revalidatePath(`/app/clients/${clientId}`);
   redirect(d.decision === 'approved' ? `/app/clients/${clientId}/compare` : `/app/clients/${clientId}?tab=reports`);
@@ -204,12 +238,14 @@ export async function updateTradelineAction(_: ActionState, fd: FormData): Promi
       const t = await db.row<{ report_id: string; user_provided: Record<string, unknown>; client_id: string }>('select report_id, user_provided, client_id from public.tradelines where id = $1', [d.id]);
       if (!t || t.report_id !== d.reportId) throw new UserError('Account not found.');
       const up = { ...t.user_provided, not_mine: d.notMine || undefined, never_late: d.neverLate || undefined };
-      await db.run(
+      const saved = await db.run(
         `update public.tradelines set creditor_name = $2, account_last4 = $3, account_status = $4, payment_status = $5, balance_cents = $6, credit_limit_cents = $7,
                 date_opened = $8, date_reported = $9, date_of_first_delinquency = $10, payment_history = $11, user_provided = $12, confidence = 1, field_meta = '{}'::jsonb
           where id = $1`,
         [d.id, d.creditor, d.last4 || null, d.accountStatus ?? null, d.paymentStatus ?? null, d.balance, d.limit, d.opened, d.reported, d.dofd, d.history ?? null, JSON.stringify(up)],
       );
+      // The row was there a moment ago and is gone: the file was read again (or the row removed) while this was typed.
+      if (saved !== 1) throw new UserError('This account is no longer on the report: the file was read again or the row was removed. Reload the page.');
       const rep = await db.row<{ status: string }>('select status from public.credit_reports where id = $1', [d.reportId]);
       if (rep?.status === 'approved') {
         const c = await db.row<{ full_name: string; address: { line1?: string } }>('select full_name, address from public.clients where id = $1', [t.client_id]);
@@ -224,7 +260,13 @@ export async function updateTradelineAction(_: ActionState, fd: FormData): Promi
 export async function deleteTradelineAction(fd: FormData) {
   const ctx = await requireStaff('reports:write');
   const d = parseForm(z.object({ id: zUuid, reportId: zUuid }), fd);
-  await ctx.tx((db) => db.run("delete from public.tradelines where id = $1 and report_id = $2 and exists (select 1 from public.credit_reports r where r.id = $2 and r.status = 'pending_review')", [d.id, d.reportId]));
+  await ctx.tx(async (db) => {
+    // The report row is locked first, as an approval and a re-read lock it: a row is never removed from a report that
+    // is being approved at this moment (the approval either sees it gone and is refused, or the row stays).
+    const rep = await db.row<{ status: string }>('select status from public.credit_reports where id = $1 for update', [d.reportId]);
+    if (rep?.status !== 'pending_review') return;
+    await db.run('delete from public.tradelines where id = $1 and report_id = $2', [d.id, d.reportId]);
+  });
   revalidatePath(`/app/reports/${d.reportId}`);
 }
 

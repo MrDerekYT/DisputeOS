@@ -47,7 +47,7 @@ compliant; state requirements vary and change. **Consult a consumer-finance atto
 | Law | What the product does | What you still need |
 |---|---|---|
 | **CROA** (15 U.S.C. § 1679) | The § 1679c statement, the § 1679d(b)(4) statement and the § 1679e(b) Notice of Cancellation are the statute's wording, tested word for word against the U.S. Code text; the statement is its own document and is signed before the contract; the contract is built from the agency's saved terms (§ 1679d(b): payment terms and the total, a full description of the services, a time estimate, name and principal address) and cannot be signed until they are saved; every portal signature stores the exact text shown and its SHA-256, and a paper signature recorded by staff the date on the paper and the app's text on the recording day, labelled as such (see below); **no dispute can be recorded as submitted and no letter as sent** unless the statement, the contract and the authorization are in force (a contract the client cancelled is not), the 3-business-day cancellation period is over, and the sent date is after it; clients can cancel from the portal while it runs; the signed statement is kept 2 years; payments require confirming services were already performed (no advance fees). A personal workspace (someone repairing their own credit) is no credit repair organization: none of these CROA steps apply there | Attorney review of the whole agreement and of your terms; state rules (registration, bonding, a longer cancellation period, required wording) |
-| **FCRA** (15 U.S.C. § 1681) | Disputes are tied to a specific item and reason; 30-/45-day investigation clocks counted from receipt; findings say "differs / may warrant review", never "inaccurate"; round 2+ requires new information (frivolous-dispute guard); staff can add a credit report (automatic import, the API, an upload, a file read as a report) only with the client's written authorization on file and not revoked, while a report the client uploads in the portal, or one in a personal workspace, needs none | Truthful disputes only; permissible purpose for any report pull |
+| **FCRA** (15 U.S.C. § 1681) | Disputes are tied to a specific item and reason; 30-/45-day investigation clocks counted from receipt; findings say "differs / may warrant review", never "inaccurate"; round 2+ requires new information (frivolous-dispute guard); staff can add a credit report (automatic import, the API, an upload, a file read as a report or read again) only with the client's written authorization on file and not revoked, while a report the client uploads in the portal, or one in a personal workspace, needs none | Truthful disputes only; permissible purpose for any report pull |
 | **FDCPA** (15 U.S.C. § 1692) | Validation-request template restricted to collection accounts; explains the 30-day window; cease-communication template notes it does not erase a debt | Applies to collectors; confirm applicability |
 | **State CSO / credit-services laws** | Operator state captured; sign-up and settings remind about registration/bonding | Registration, surety bond, state-specific contract terms (e.g. Florida) |
 | **Privacy / consumer protection** | Minimised storage (last-4 only, encrypted identifiers), data export & deletion, role-based access, audit trail | Privacy policy, state privacy-law obligations, breach-notification process |
@@ -330,3 +330,61 @@ spaces, dashes or dots), card and account numbers, dates, street addresses writt
 city-state-ZIP lines and amounts. Masking works by matching, so other words typed into a question are sent as written: an address,
 name or city the app does not hold and that is written another way (an address with no street type, for example), or
 in the client portal a creditor's name. Details: docs/INTEGRATIONS.md, "AI provider (Claude)".
+
+**"Ask about your clients" (AI assistant page): what is and is not sent to the AI provider.** A staff member types a
+question about the workspace's own clients. Unlike the other AI features, an AI answer to it is written from client
+names and case facts, so this is the full account of that data.
+
+- *Reading, with no AI.* Under the caller's row-level security, and only for the organization of their session, the
+  app compares the question's words with the names on the roster (full name; two words of one name close together; a
+  first or last name that only one client has; a name several clients share matches nobody and is listed for the person
+  to choose) and reads the files of the clients it names, 5 at most. The answer built from those records is always
+  available, costs nothing, and sends nothing anywhere.
+- *One request, only when asked.* When the person presses "Ask AI", a provider is connected and the workspace has
+  credits (2 per answer, taken only when an AI answer is shown), one request is made. It holds the question; the
+  workspace's totals; the names of clients with a dispute past its due date or a report waiting for review (25 of each
+  at most); one line for each of the 400 most recently active clients (name, status, stage, specialist's name, date of
+  last activity, and five counts: open disputes, disputes past due, negative items, reports waiting for review, open
+  tasks); and, for each client the question names, the lines the page shows under "What was read from this file":
+  status and stage, specialist, client-since date, agreements signed out of those required, reports (bureau, date,
+  number of accounts and of negative items), negative items (creditor, type, last four of the account, balance,
+  reported status; 15 at most), findings (title, status), disputes (item, recipient, status, round, sent and due
+  dates, recorded outcome), letters (title, status, sent date), open tasks (title, due date), documents (kind and
+  review status), the plan and the latest payment (only for a role that may see billing), the last 8 timeline entries,
+  and the last 5 staff notes and last 5 portal messages, each cut to 300 characters.
+- *Never sent.* A Social Security number or its last four, a date of birth, a street address, a phone number, an email
+  address, a full account or card number, a document's contents or file name, a credit score, the text of an
+  agreement, or anything of another organization. The structured ones are not selected at all: the queries that build
+  the text do not read those columns into it (`src/lib/assistant/records.ts`). Two places where the app itself writes
+  such a detail into a title are handled by rule: a timeline entry about an upload, which carries the file's name, is
+  reduced to "A document was uploaded", and an address a bureau reports, which the analysis puts in the title of a
+  personal-information finding, is replaced by a marker. Free text (notes, messages, task
+  titles, timeline entries, and the question itself) is masked by matching (`src/lib/assistant/mask.ts`): by pattern,
+  Social Security numbers, card numbers, email addresses and phone numbers; the named client's own address lines,
+  city, ZIP code, SSN last four and date of birth as they are on file; a date that follows a word for birth, and digits
+  that follow a word for a Social Security number; street addresses with a common street type; and any other number
+  of five or more digits, which keeps its last four. Masking by matching is not a guarantee: an address written with
+  no street type, or a date of birth with no such word near it that differs from the one on file, is sent as typed.
+  Angle brackets are removed, so a note or a message cannot close the tag the records are quoted in, and the
+  instructions say that everything in the records is data, never an instruction.
+- *What comes back.* The provider's answer is shown only if it passes these checks; otherwise the answer from the
+  records is shown, with the reason, and the credits are returned: at most 1,600 characters; no promise or prediction
+  of a result (the credit guide's claims check); no percentage, number of points or credit score; every date and
+  dollar amount in it is in the records as written; every other number is in the records or the question, except a
+  whole number up to 20 that is not a length of time (a count it added up itself); no web address that is not in the
+  records; no email address, phone number, Social Security or card number; none of the request's own markers. These
+  are pattern checks, not proof that every sentence is true. So an AI answer carries the AI tag and the line "Answered
+  by AI from this workspace's records: check anything important on the client's page", and the files that were read
+  are shown beside it. The answer from the records is labelled "From the records (no AI used)".
+- *What is kept.* The question (after Social Security, card and phone numbers and email addresses typed into it are
+  masked) and the answer, in `assistant_questions` (migration 0033). Each staff member reads and adds only their own
+  rows; nobody can change or delete one through the app; deleting a client deletes every stored answer whose files
+  included theirs or that names them in full. The audit log records `assistant.asked` with how the question was
+  answered and how many files were read, never its text. One person may ask 30 questions in 5 minutes. Asking never
+  sends, changes or deletes anything in a client's file.
+- *Checked by* `tests/unit/assistant.test.ts` (who a question names; the text built for a client who has every one of
+  the excluded details on file, in the record and typed into notes, messages, titles and the question; the checks on
+  an answer) and `tests/db/assistant.test.ts` (another organization's clients in no roster, request or answer; credits
+  taken only for an AI answer that is shown and returned on failure; the records answer with no provider or no
+  credits; history per person; the limit). *Not checked:* the model call was exercised with a stand-in provider only.
+  No real AI provider has answered a question through this feature yet, and `npm run ai:prove` does not cover it.
