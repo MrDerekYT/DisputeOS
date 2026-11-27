@@ -43,7 +43,7 @@
 
   /* ---- things that settle into place when you reach them ---- */
 
-  const settlers = $$('.settle, .tag-wrap');
+  const settlers = $$('.settle');
   if (hasObserver && !reduceMotion) {
     const arrive = new IntersectionObserver((entries) => {
       entries.forEach(({ target, isIntersecting }) => {
