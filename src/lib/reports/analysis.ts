@@ -185,7 +185,8 @@ const SETTLED = /\b(paid|settled|transferr?ed|sold|purchased by another)\b/i;
  */
 export function settledWording(t: Pick<AnalysisTradeline, 'account_status' | 'payment_status'>): string | null {
   for (const s of [t.account_status, t.payment_status]) {
-    if (s && SETTLED.test(s.replace(NOT_SETTLED, ' '))) return s.trim();
+    // Underscores read as spaces: a status kept as a code ("PAID_AND_CLOSED") says the same as its words.
+    if (s && SETTLED.test(s.replace(/_/g, ' ').replace(NOT_SETTLED, ' '))) return s.trim();
   }
   return null;
 }
@@ -425,3 +426,17 @@ export function analyze(input: {
 }
 
 export const SEVERITY_ORDER = { strong: 0, review: 1, info: 2 } as const;
+
+/**
+ * How far the stored flags are behind what the approved reports say now: flags the analysis would raise that are not
+ * stored yet, plus stored suggestions it no longer raises. A flag a person has reviewed (kept, dismissed, disputed) is
+ * never counted as stale, and nor is one another check made (reinsertion, medical, bankruptcy): only the rules' own
+ * open suggestions are compared, the same rows regenerating would replace.
+ */
+export function flagsBehind(fresh: Iterable<string>, stored: { dedupe_key: string; status: string; generated_by: string }[]): number {
+  const now = new Set(fresh);
+  const have = new Set(stored.map((f) => f.dedupe_key));
+  const missing = [...now].filter((k) => !have.has(k)).length;
+  const gone = stored.filter((f) => f.status === 'suggested' && f.generated_by === 'rules' && !now.has(f.dedupe_key)).length;
+  return missing + gone;
+}

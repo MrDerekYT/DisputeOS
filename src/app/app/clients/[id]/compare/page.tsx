@@ -5,7 +5,7 @@ import { notFound } from 'next/navigation';
 import { ArrowDown, Check, Eye, Gavel, RefreshCw, X } from 'lucide-react';
 import { Badge, EmptyState, Notice, PageHeader, StatusBadge } from '@/components/ui';
 import { requireStaff } from '@/lib/auth/context';
-import { analyze, diffGroup, groupAccounts, SEVERITY_ORDER, FINDING_CATEGORIES, type AnalysisTradeline, type Evidence, type FindingCategory } from '@/lib/reports/analysis';
+import { analyze, diffGroup, flagsBehind, groupAccounts, SEVERITY_ORDER, FINDING_CATEGORIES, type AnalysisTradeline, type Evidence, type FindingCategory } from '@/lib/reports/analysis';
 import { loadAnalysisInput, regenerateFindings } from '@/lib/reports/service';
 import { BUREAU_LABEL, BUREAUS, cn, fmtDate, isUuid, money, type Bureau } from '@/lib/util';
 import { refreshFindingsAction, setFindingStatusAction } from '../../../reports/actions';
@@ -40,9 +40,7 @@ export default async function ComparePage({ params, searchParams }: { params: Pr
     // period last month may be past it now). Whoever may edit reports gets them brought up to date on opening the
     // page; anyone else is told they are behind. Reviewed flags are never touched (regenerateFindings).
     const address = c.address?.line1 ?? '';
-    const fresh = new Set(analyze({ ...input, clientName: c.full_name, clientAddress: address }).map((f) => f.dedupe_key));
-    const stored = new Set(all.map((f) => f.dedupe_key));
-    let behind = [...fresh].filter((k) => !stored.has(k)).length + all.filter((f) => f.status === 'suggested' && f.generated_by === 'rules' && !fresh.has(f.dedupe_key)).length;
+    let behind = flagsBehind(analyze({ ...input, clientName: c.full_name, clientAddress: address }).map((f) => f.dedupe_key), all);
     if (behind > 0 && ctx.can('reports:write')) {
       await regenerateFindings(db, ctx, id, c.full_name, address);
       all = await load();

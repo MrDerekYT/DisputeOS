@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { analyze, settledWording, type AnalysisTradeline } from '@/lib/reports/analysis';
+import { analyze, flagsBehind, settledWording, type AnalysisTradeline } from '@/lib/reports/analysis';
 import { categoryForFinding } from '@/lib/disputes/workflow';
 import { draftReason } from '@/lib/disputes/reasons';
 import type { Bureau } from '@/lib/util';
@@ -16,7 +16,7 @@ const conflicts = (tradelines: AnalysisTradeline[]) => run(tradelines).filter((f
 describe('wording that says nothing is owed any more', () => {
   it('reads paid, settled, sold and transferred to another lender', () => {
     for (const s of ['Paid, Closed/Never late.', 'Account Paid in Full; was a Charge-off', 'Settled; less than full balance', 'Transferred, closed/Never late.',
-      'TRANSFERRED TO ANOTHER LENDER', 'Purchased by another lender', 'Account transferred or sold', 'PAID']) {
+      'TRANSFERRED TO ANOTHER LENDER', 'Purchased by another lender', 'Account transferred or sold', 'PAID', 'PAID_AND_CLOSED']) {
       expect(settledWording({ account_status: s, payment_status: null }), s).toBe(s);
     }
     expect(settledWording({ account_status: 'Closed', payment_status: 'Paid, Closed; was Paid as agreed' })).toBe('Paid, Closed; was Paid as agreed');
@@ -71,5 +71,19 @@ describe('a collection and its original creditor', () => {
     expect(a.explanation).toContain('Experian does not name the original creditor for this account; the validation request asks the collector for it.');
     expect(b.evidence.at(-1)).toMatchObject({ field: 'Original creditor', value: 'CITY HOSPITAL' });
     expect(b.explanation).not.toContain('does not name the original creditor');
+  });
+});
+
+describe('stored flags against what the reports say now', () => {
+  const row = (dedupe_key: string, status = 'suggested', generated_by = 'rules') => ({ dedupe_key, status, generated_by });
+  it('is zero when every flag the analysis raises is stored, whatever a person did with it', () => {
+    expect(flagsBehind(['a', 'b', 'c'], [row('a'), row('b', 'dismissed'), row('c', 'disputed')])).toBe(0);
+  });
+  it('counts a flag that is not stored yet, and an open suggestion the analysis no longer raises', () => {
+    expect(flagsBehind(['a', 'new'], [row('a'), row('gone')])).toBe(2);
+    expect(flagsBehind([], [])).toBe(0);
+  });
+  it('never counts a reviewed flag or another check’s flag as stale', () => {
+    expect(flagsBehind([], [row('kept', 'accepted'), row('dismissed', 'dismissed'), row('sent', 'disputed'), row('reinsertion:1', 'suggested', 'reinsertion'), row('medical:1', 'suggested', 'case_tools')])).toBe(0);
   });
 });
