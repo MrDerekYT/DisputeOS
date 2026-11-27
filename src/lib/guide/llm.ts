@@ -242,6 +242,26 @@ const STREET = new RegExp(String.raw`\b\d{1,6}\s+(?:[\p{L}\d.]+\s+){1,4}(?<!\b(?
 const CALLE = new RegExp(String.raw`(?<![\p{L}\p{N}])(?:calle|avenida|avda|carretera|paseo|plaza|calzada|bulevar|callej[oó]n|privada|circuito|camino)\.?\s+(?:[\p{L}.]+\s+){0,4}(?:#\s*|n[uú]m(?:ero)?\.?\s*|no\.?\s*)?\d{1,6}\p{L}?(?![\p{L}\p{N}])${UNIT}`, 'giu');
 
 /**
+ * `text` with what the app holds about a person replaced by its marker, wherever it appears as written on file, the
+ * longest first. Anything shorter than 3 characters is left, since it would mask ordinary words.
+ */
+export function maskOnFile(text: string, identifiers: Redaction[]): string {
+  let out = text;
+  for (const id of [...identifiers].filter((i) => i.text.trim().length >= 3).sort((a, b) => b.text.trim().length - a.text.trim().length)) {
+    out = out.replace(literal(id.text), `[${id.as}]`);
+  }
+  return out;
+}
+
+/** `text` with street addresses masked: US order, Spanish order, and city-state-ZIP lines. */
+export function maskStreetAddresses(text: string): string {
+  return text
+    .replace(STREET, '[ADDRESS]')
+    .replace(CALLE, '[ADDRESS]')
+    .replace(/(?<![\p{L}\p{N}])\p{Lu}[\p{L}.'-]*(?:\s+\p{Lu}[\p{L}.'-]*){0,3},?\s+[A-Z]{2},?\s+\d{5}(?:-\d{4})?\b/gu, '[ADDRESS]');
+}
+
+/**
  * The question as it may leave the server, masked in this order:
  *  - by pattern (src/lib/scrub.ts): Social Security numbers (9 digits, or 3-2-4 groups split by spaces, dashes or
  *    dots), card numbers, email addresses and phone numbers;
@@ -254,18 +274,12 @@ const CALLE = new RegExp(String.raw`(?<![\p{L}\p{N}])(?:calle|avenida|avda|carre
  * street type, for example), a short number, and in the portal a creditor's name.
  */
 export function cleanQuestion(question: string, redact: string[] = [], identifiers: Redaction[] = []): string {
-  let q = scrubPii(question.slice(0, MAX_QUESTION_CHARS));
-  for (const id of [...identifiers].filter((i) => i.text.trim().length >= 3).sort((a, b) => b.text.trim().length - a.text.trim().length)) {
-    q = q.replace(literal(id.text), `[${id.as}]`);
-  }
+  let q = maskOnFile(scrubPii(question.slice(0, MAX_QUESTION_CHARS)), identifiers);
   for (const term of [...new Set(redact.map((r) => r.trim()).filter((r) => r.length >= 2))].sort((a, b) => b.length - a.length)) {
     q = q.replace(new RegExp(`(?<![\\p{L}\\p{N}])${escapeRe(term)}(?![\\p{L}\\p{N}])`, 'giu'), '[NAME]');
   }
   for (const d of DATES) q = q.replace(d, '[DATE]');
-  return q
-    .replace(STREET, '[ADDRESS]')
-    .replace(CALLE, '[ADDRESS]')
-    .replace(/(?<![\p{L}\p{N}])\p{Lu}[\p{L}.'-]*(?:\s+\p{Lu}[\p{L}.'-]*){0,3},?\s+[A-Z]{2},?\s+\d{5}(?:-\d{4})?\b/gu, '[ADDRESS]')
+  return maskStreetAddresses(q)
     .replace(/\$\s?\d[\d,]*(?:\.\d+)?/g, '[AMOUNT]')
     .replace(/[#xX*•]*\d[\d-]{2,}\d/g, '[NUMBER]')
     .replace(/[<>]/g, ' ')

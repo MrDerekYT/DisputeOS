@@ -5,16 +5,20 @@ import { ActionForm, SubmitButton, TextArea } from '@/components/forms';
 import { AiTag, Avatar, Notice, PageHeader, Section } from '@/components/ui';
 import { AI_COSTS, AI_FEATURE_LABEL, AI_OFF, BUYING_NOT_CONNECTED, getBalance, ledgerLabel, PORTAL_GUIDE_DAILY_CAP, recentLedger, type AiFeature } from '@/lib/ai/credits';
 import { providerStatus } from '@/lib/ai/provider';
+import { loadHistory } from '@/lib/assistant/ask';
+import { ROSTER_LINES_MAX } from '@/lib/assistant/records';
 import { requireStaff } from '@/lib/auth/context';
-import { fmtDate } from '@/lib/util';
+import { fmtDate, isUuid } from '@/lib/util';
 import { analyzeReplyAction } from '../disputes/actions';
 import { setPortalGuideAiAction } from '../settings/actions';
 import { autoTailorOn } from '@/lib/letters/tailor-load';
+import { AskClients } from './ask-clients';
 import { LetterTailoringSetting } from './letter-tailoring';
 
 export const metadata: Metadata = { title: 'AI assistant' };
 
 const CAN = [
+  'Answer a question about the people on file from this workspace’s own records, and show the files it read.',
   'Compare Experian, Equifax and TransUnion and list differences worth checking — with the exact values behind each one.',
   'Spot items whose reported dates suggest they may be past the reporting period, duplicates, and personal information that doesn’t match.',
   'Draft the reason for a dispute from the report data, phrased as a request to verify.',
@@ -23,15 +27,17 @@ const CAN = [
   'Suggest next steps and warn when another round would repeat a dispute without new information.',
 ];
 const CANNOT = [
-  'Invent facts, balances, dates or payment histories — it only works from what is in the client’s reports.',
+  'Invent facts, balances, dates or payment histories — it only works from what is in the client’s reports and file.',
   'Claim identity theft or fraud. It asks for the client’s account and, where relevant, an identity theft report.',
   'Label an item “inaccurate” just because bureaus differ. Differences are flagged to investigate.',
-  'Promise a score change or a deletion, or send anything. Every output is a draft that a person reviews, edits and approves.',
+  'Promise a score change or a deletion, or send anything. Every letter, note and reply it helps write is a draft that a person reviews, edits and approves, and an answer about your records is for you to read and check.',
 ];
 
-export default async function AssistantPage() {
+export default async function AssistantPage({ searchParams }: { searchParams: Promise<{ client?: string }> }) {
   const ctx = await requireStaff();
+  const sp = await searchParams;
   const ai = providerStatus();
+  const personal = ctx.session.orgMode === 'personal';
   const clients = await ctx.tx((db) => db.rows<{ id: string; full_name: string; approved: number; findings: number }>(
     `select c.id, c.full_name, (select count(*)::int from public.credit_reports r where r.client_id = c.id and r.status = 'approved') as approved,
             (select count(*)::int from public.findings f where f.client_id = c.id and f.status = 'suggested') as findings
@@ -41,11 +47,29 @@ export default async function AssistantPage() {
     balance: await getBalance(ctx.orgId, db), ledger: manage ? await recentLedger(db, ctx.orgId, 20) : [], autoTailor: await autoTailorOn(db, ctx.orgId),
     portalAi: (await db.row<{ on: boolean | null }>("select settings->>'portal_ai_guide' = 'true' as on from public.organizations where id = $1", [ctx.orgId]))?.on === true,
   }));
+  // "Ask about your clients": the person's own last questions, and the client the page was opened for (?client=).
+  // Both are read under their row-level security, so an id from another workspace shows nothing.
+  const { history, pinned } = await ctx.tx(async (db) => ({
+    history: await loadHistory(db, ctx.orgId, ctx.userId),
+    pinned: isUuid(sp.client) ? await db.row<{ id: string; name: string }>('select id, full_name as name from public.clients where org_id = $1 and id = $2', [ctx.orgId, sp.client]) : null,
+  }));
   const prices = Object.entries(AI_COSTS) as [AiFeature, number][];
   const cheapest = Math.min(...prices.map(([, n]) => n));
+  const askCost = AI_COSTS.client_question;
   return (
     <>
       <PageHeader title="AI assistant" subtitle="Analysis and drafting help that shows its work — and never acts on its own." />
+
+      <div className="mb-6">
+        <Section id="ask" title={personal ? 'Ask about your file' : 'Ask about your clients'}
+          hint={personal
+            ? 'Answers come from your own records in this workspace: status, reports, disputes, letters, tasks, documents, notes.'
+            : 'Answers come from this workspace’s own records: every client by name, with their status, reports, disputes, letters, tasks, documents, notes and messages.'}>
+          <AskClients personal={personal} credits={balance} cost={askCost} pinned={pinned} history={history}
+            aiReady={ai.active && balance >= askCost} aiOffNote={!ai.active ? AI_OFF.no_provider : balance < askCost ? AI_OFF.no_credits : null} />
+        </Section>
+      </div>
+
       <div className="mb-6"><Notice tone={ai.active ? 'ok' : 'info'} title={`Engine: ${ai.provider}`}>{ai.note}</Notice></div>
 
       <div className="mb-6">
@@ -128,7 +152,7 @@ export default async function AssistantPage() {
         <Section plain title="What it does"><ul className="space-y-2.5 text-sm">{CAN.map((t) => <li key={t} className="flex gap-2.5"><CheckCircle2 size={16} aria-hidden className="mt-0.5 shrink-0 text-ok" />{t}</li>)}</ul></Section>
         <Section plain title="What it will not do"><ul className="space-y-2.5 text-sm">{CANNOT.map((t) => <li key={t} className="flex gap-2.5"><Ban size={16} aria-hidden className="mt-0.5 shrink-0 text-bad" />{t}</li>)}</ul></Section>
       </div>
-      <p className="mt-6 flex flex-wrap items-start gap-x-2.5 gap-y-1.5 text-xs text-muted"><AiTag /> <span className="min-w-[16rem] flex-1">When an AI provider is connected and the workspace has AI credits, it may only reword text the rules engine produced, and its output is discarded automatically if a protected passage, a number or a date changes, or if it makes a prohibited claim. What leaves the server: a letter’s connective lines only (every line with a name, an address, an account, an amount, a date or a dispute statement is replaced by a marker); a progress note’s connective sentences only (not the client’s name, not the counts); and a credit-guide question with the client’s own address, city, ZIP code, SSN last four and date of birth as they are on file, the names the app knows, and, in their common written forms, email addresses, phone numbers, Social Security, card and account numbers, dates, street addresses and amounts masked. Masking works by matching: anything else typed into a question is sent as written, such as a name or city the app does not hold, an address written with no street type, or in the client portal a creditor’s name.</span></p>
+      <p className="mt-6 flex flex-wrap items-start gap-x-2.5 gap-y-1.5 text-xs text-muted"><AiTag /> <span className="min-w-[16rem] flex-1">When an AI provider is connected and the workspace has AI credits: for letters, progress notes and the credit guide it may only reword text the rules engine produced, and its output is discarded automatically if a protected passage, a number or a date changes, or if it makes a prohibited claim. What leaves the server: a letter’s connective lines only (every line with a name, an address, an account, an amount, a date or a dispute statement is replaced by a marker); a progress note’s connective sentences only (not the client’s name, not the counts); and a credit-guide question with the client’s own address, city, ZIP code, SSN last four and date of birth as they are on file, the names the app knows, and, in their common written forms, email addresses, phone numbers, Social Security, card and account numbers, dates, street addresses and amounts masked. Masking works by matching: anything else typed into a question is sent as written, such as a name or city the app does not hold, an address written with no street type, or in the client portal a creditor’s name. A question asked under “{personal ? 'Ask about your file' : 'Ask about your clients'}” is the one place where the AI writes from records instead of rewording. For an AI answer it is sent your question, one line of counts for each of the {ROSTER_LINES_MAX} most recently active people on file (name, status, stage, {personal ? '' : 'specialist, '}last activity), and for each person the question names, the lines listed under “What was read from this file”. Those lines hold names, case facts and the last four digits of account numbers. They never hold a Social Security number or its last four, a date of birth, a street address, a phone number, an email address, a full account number, or the contents or file name of a document; notes, messages and titles are shortened and masked by matching, and the same masking is applied to your question. Its answer is discarded, and the answer from the records shown, unless every date and amount in it is in what it was sent and it makes no prohibited claim: checks by pattern, so read an AI answer against the file. The answer from the records sends nothing anywhere.</span></p>
     </>
   );
 }
