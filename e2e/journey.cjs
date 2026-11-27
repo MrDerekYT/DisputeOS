@@ -327,7 +327,7 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
         await expectText(staff, `${bureau} report`);
         await expectText(staff, 'Review before this is used');
         if (bureau === 'Experian') await staff.screenshot({ path: `${SHOTS}/03-report-review.png`, fullPage: true, caret: 'initial' });
-        await staff.getByRole('button', { name: 'Approve report' }).click();
+        await staff.getByRole('button', { name: 'Approve & flag negatives' }).click();
         await staff.waitForURL('**/compare', { timeout: 20000 });
       }
     });

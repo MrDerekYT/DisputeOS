@@ -146,7 +146,7 @@ async function signUpAgency(browser, label) {
         await staff.waitForURL(/\/app\/reports\//, { timeout: 20000 });
         await see(staff, `${bureau} report`); await see(staff, 'Review before this is used');
         if (bureau === 'Experian') reportUrl = staff.url();
-        await staff.getByRole('button', { name: 'Approve report' }).click();
+        await staff.getByRole('button', { name: 'Approve & flag negatives' }).click();
         await staff.waitForURL('**/compare', { timeout: 20000 });
       }
     });
