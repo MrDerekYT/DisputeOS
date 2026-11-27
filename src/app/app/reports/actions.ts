@@ -12,7 +12,7 @@ import { parseMoneyToCents, normalizeDate } from '@/lib/reports/parser';
 import { staffReportRefusal } from '@/lib/credit/authorization';
 import { queueClientUpdate } from '@/lib/client-updates/service';
 import { ocrEnabled } from '@/lib/reports/ocr';
-import { readReportFile, ReportReadError, reportMimes, SCANS_OFF_IMAGE, type ReadResult } from '@/lib/reports/read-file';
+import { pagesNote, readReportFile, ReportReadError, reportMimes, SCANS_OFF_IMAGE, type ReadResult } from '@/lib/reports/read-file';
 import { requestReportPull } from '@/lib/credit/pull';
 import { decideReport, regenerateFindings, ReportError, storeParsedReport } from '@/lib/reports/service';
 import type { ParsedReport } from '@/lib/reports/types';
@@ -41,7 +41,7 @@ export async function uploadReportFileAction(_: ActionState, fd: FormData): Prom
     const collections = p.tradelines.length - accounts;
     const parts = [`${accounts} account${accounts === 1 ? '' : 's'}`, `${collections} collection${collections === 1 ? '' : 's'}`, `${p.inquiries.length} inquir${p.inquiries.length === 1 ? 'y' : 'ies'}`];
     if (p.publicRecords.length) parts.push(`${p.publicRecords.length} public record${p.publicRecords.length === 1 ? '' : 's'}`);
-    return { ok: `${BUREAU_NAME[p.bureau ?? ''] ?? 'Report'}: ${parts.join(', ')}${r.via.startsWith('ai') ? ' (read by AI, check each field)' : ''}`, data: { reportId: r.firstId } };
+    return { ok: `${BUREAU_NAME[p.bureau ?? ''] ?? 'Report'}: ${parts.join(', ')}${pagesNote(r)}${r.via.startsWith('ai') ? ' (read by AI, check each field)' : ''}`, data: { reportId: r.firstId } };
   });
 }
 
@@ -62,7 +62,8 @@ async function importUploadedReport(ctx: Awaited<ReturnType<typeof requireStaff>
 
     let parsed: ParsedReport;
     let via: ReadResult['via'];
-    try { ({ parsed, via } = await readReportFile(up, { orgId: ctx.orgId, userId: ctx.userId })); }
+    let pages: ReadResult['pages'];
+    try { ({ parsed, via, pages } = await readReportFile(up, { orgId: ctx.orgId, userId: ctx.userId })); }
     catch (e) {
       if (e instanceof ReportReadError) throw new UserError(e.message);
       throw e;
@@ -89,7 +90,7 @@ async function importUploadedReport(ctx: Awaited<ReturnType<typeof requireStaff>
       throw e;
     }
     revalidatePath(`/app/clients/${d.clientId}`);
-    return { firstId, parsed, via };
+    return { firstId, parsed, via, pages };
 }
 
 /**

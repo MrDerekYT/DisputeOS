@@ -70,9 +70,24 @@ const CHARGED_OFF = /charged?[\s_-]*off|charged to (profit|loss)|profit and loss
 const NOT_LATE = /never\s+late|not\s+late|no\s+late\s+payments?|pays?\s+as\s+agreed|paid\s+as\s+agreed|current\s+account/gi;
 /** Dates ("12/30/2023", "2023-12-30") are not late codes: their 30 must not read as "30 days late". */
 const DATES = /\b\d{1,2}\/\d{1,2}\/\d{2,4}\b|\b\d{4}-\d{2}-\d{2}\b/g;
+/** In a payment history, a full date ("12/30/2023") or a year ("2030") is not a late code. "30/60/90" is left alone. */
+const HISTORY_DATES = /\b\d{1,2}\/\d{1,2}\/\d{4}\b|\b\d{4}-\d{2}-\d{2}\b|\b(?:19|20)\d{2}\b/g;
+/** The bureaus' letter codes for a collection, charge-off, repossession, foreclosure and voluntary surrender. */
+const HISTORY_CODES = /\b(?:COL|CO|RPO|FC|VS|vs)\b|\b[Cc]\/[Oo]\b|\bC\.O\./;
+
+/**
+ * True when a payment history carries a late or derogatory code: days late ("30", "CC30CC", "120") or a bureau's
+ * letter code (TransUnion's COL, c/o, RPO, FC and vs; CO for a charge-off). "CCCCCC", "OK OK" and a year are not.
+ */
+export function historyShowsLate(history: string | null | undefined): boolean {
+  if (!history) return false;
+  const h = history.replace(HISTORY_DATES, ' ');
+  return /[3-9]0|120/.test(h) || HISTORY_CODES.test(h);
+}
+
 /** A reported item that carries negative information: a collection, a late / charged-off status, or late codes in the payment history. */
 export const isNegative = (t: Pick<ReportedItem, 'item_type' | 'account_status' | 'payment_status' | 'payment_history'>): boolean =>
-  t.item_type === 'collection' || LATE.test(`${t.payment_status ?? ''} ${t.account_status ?? ''}`.replace(NOT_LATE, ' ').replace(DATES, ' ')) || /[3-9]0|CO|\bC\.O\./.test(t.payment_history?.replace(/C/g, '') ?? '');
+  t.item_type === 'collection' || LATE.test(`${t.payment_status ?? ''} ${t.account_status ?? ''}`.replace(NOT_LATE, ' ').replace(DATES, ' ')) || historyShowsLate(t.payment_history);
 
 /** Placed for collection or charged off: the items § 1681c(c)(1) gives the 180-day lead to. */
 export const isCollectionOrChargeOff = (t: Pick<ReportedItem, 'item_type' | 'account_status' | 'payment_status'>): boolean =>

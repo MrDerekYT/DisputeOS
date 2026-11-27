@@ -198,6 +198,42 @@ describe('AnnualCreditReport.com and other bureau layouts', () => {
     await expect(readReportFile({ bytes: Buffer.from('Some bank statement\nNothing here'), mime: 'text/plain', name: 'x.txt' }, payer, { enabled: () => false, credits: credits() })).rejects.toThrow(LAYOUT_NOT_KNOWN);
   });
 
+  /** A bureau's own disclosure in a layout no reader knows: the rules find no account, only lines under "Inquiries". */
+  const UNKNOWN_DISCLOSURE = `Consumer Disclosure
+Prepared for JORDAN A RIVERA
+File Number: 123456789
+
+Account history
+FIRST BANK CARD 4111**** Opened 01/15/2024 Balance $612
+
+Inquiries
+The companies listed below received your credit information.
+NORTHWEST FCU 07/25/2025`;
+
+  it('with AI off, imports nothing from a bureau disclosure whose accounts it cannot read', async () => {
+    // The rules alone file two "inquiries" from this text, one of them a sentence of the report, and no account.
+    const rules = parseReportText(UNKNOWN_DISCLOSURE);
+    expect(rules.tradelines).toEqual([]);
+    expect(rules.inquiries.map((q) => q.name)).toEqual(['The companies listed below received your credit information.', 'NORTHWEST FCU']);
+    await expect(readReportFile({ bytes: Buffer.from(UNKNOWN_DISCLOSURE), mime: 'text/plain', name: 'x.txt' }, payer, { enabled: () => false, credits: credits() })).rejects.toThrow(LAYOUT_NOT_KNOWN);
+  });
+
+  it('with AI on, the same disclosure goes to AI instead of being refused', async () => {
+    const ocr = vi.fn(async () => TRANSCRIPT);
+    const r = await readReportFile({ bytes: Buffer.from(UNKNOWN_DISCLOSURE), mime: 'text/plain', name: 'x.txt' }, payer, { enabled: () => true, ocr, credits: credits() });
+    expect(r.via).toBe('ai_text');
+    expect(r.parsed.inquiries.map((q) => q.name)).toEqual(['CARMAX AUTO FINANCE']);
+  });
+
+  it('with AI off, still reads a plain file that lists inquiries only, and a disclosure whose accounts the rules can read', async () => {
+    const inquiriesOnly = await readReportFile({ bytes: Buffer.from('Experian Credit Report\n\nInquiries\nCARMAX AUTO FINANCE - 01/10/2026'), mime: 'text/plain', name: 'i.txt' }, payer, { enabled: () => false, credits: credits() });
+    expect(inquiriesOnly.via).toBe('rules');
+    expect(inquiriesOnly.parsed.inquiries).toHaveLength(1);
+    const readable = await readReportFile({ bytes: Buffer.from(`Prepared for JORDAN A RIVERA\nFile Number: 123456789\n${TRANSCRIPT}`), mime: 'text/plain', name: 'd.txt' }, payer, { enabled: () => false, credits: credits() });
+    expect(readable.via).toBe('rules');
+    expect(readable.parsed.tradelines).toHaveLength(2);
+  });
+
   it('a report in the plain layout is read by the rules for free, even with AI on', async () => {
     const c = credits();
     const ocr = vi.fn();

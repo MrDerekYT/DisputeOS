@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { analyze, canonAccountStatus, canonPaymentStatus, groupAccounts, sameAccountScore, type AnalysisTradeline } from '@/lib/reports/analysis';
-import { isNegative } from '@/lib/credit/reporting-period';
+import { historyShowsLate, isNegative } from '@/lib/credit/reporting-period';
+import { TU_NO_LATES } from '@/lib/reports/bureau-layouts';
 import type { Bureau } from '@/lib/util';
 
 let seq = 0;
@@ -22,6 +23,27 @@ describe('what counts as negative', () => {
     expect(isNegative({ item_type: 'tradeline', account_status: 'Open', payment_status: '30 - 59 Days Past Due', payment_history: null })).toBe(true);
     expect(isNegative({ item_type: 'tradeline', account_status: 'Closed', payment_status: 'Charge-off', payment_history: null })).toBe(true);
   });
+
+  describe('from the payment history alone', () => {
+    const withHistory = (payment_history: string | null) => isNegative({ item_type: 'tradeline', account_status: 'Open', payment_status: 'Pays As Agreed', payment_history });
+
+    it('days late count, written together or apart, 120 included', () => {
+      for (const late of ['CCC30CCC', '2026 30', 'OK OK 60', 'Jul 2026 30; Aug 2026 60', 'Sep 2030 90', '120', 'OK 120 OK', 'CC150C', '30/60/90']) expect([late, withHistory(late)]).toEqual([late, true]);
+    });
+    it('TransUnion’s codes count: COL, c/o, RPO, FC and vs, and CO for a charge-off', () => {
+      for (const code of ['Oct 2026 COL; Nov 2026 COL', 'Jan 2026 c/o', 'Mar 2026 RPO', 'Mar 2026 FC', 'Mar 2026 vs', 'OK OK CO', 'C.O.', 'Late codes reported: COL (months not matched; see the original)']) expect([code, withHistory(code)]).toEqual([code, true]);
+    });
+    it('a year such as 2030, a date, and a history with no late month do not', () => {
+      for (const fine of [null, '', 'CCCCCCCC', 'OK OK OK', 'N/R x OK', '2030', '2030 * * *', '2030; 2029', 'Closed 12/30/2030', '2023-12-30', TU_NO_LATES]) expect([fine, withHistory(fine)]).toEqual([fine, false]);
+      expect(historyShowsLate('2030')).toBe(false);
+      expect(historyShowsLate('2030 30')).toBe(true);
+    });
+    it('the old test read every year from 2030 on as 30 days late', () => {
+      // An Equifax history row is the year and that year's codes: a clean 2030 row is just "2030".
+      expect(/[3-9]0/.test('2030')).toBe(true);
+      expect(withHistory('2030')).toBe(false);
+    });
+  });
 });
 
 describe('negative items are flagged', () => {
@@ -41,6 +63,20 @@ describe('negative items are flagged', () => {
   it('a charge-off is strong', () => {
     const [f] = run([T('equifax', { payment_status: 'Charge-off', account_status: 'Closed' })]).filter((x) => x.category === 'negative_item');
     expect(f!.severity).toBe('strong');
+  });
+  it('an account whose only negative mark is a code in its history is flagged, and a clean history in 2030 is not', () => {
+    const flagged = (payment_history: string) => run([T('transunion', { payment_history })]).filter((x) => x.category === 'negative_item').length;
+    expect(flagged('Mar 2026 RPO')).toBe(1);
+    expect(flagged('Jul 2026 30; Aug 2026 60')).toBe(1);
+    expect(flagged(TU_NO_LATES)).toBe(0);
+    expect(flagged('2030')).toBe(0);
+  });
+  it('the client’s "never late" is set against the history only when the history shows a late code', () => {
+    const stated = (payment_history: string) => run([T('equifax', { payment_history, user_provided: { never_late: true } })]).filter((x) => x.dedupe_key.startsWith('client-never-late:')).length;
+    expect(stated('2026 30')).toBe(1);
+    expect(stated('Oct 2026 COL; Nov 2026 COL')).toBe(1);
+    expect(stated('2030')).toBe(0);
+    expect(stated(TU_NO_LATES)).toBe(0);
   });
 });
 
