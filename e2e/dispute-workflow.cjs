@@ -315,6 +315,30 @@ async function signUpAgency(browser, label) {
       if (await again.getByRole('button', { name: 'Read as credit report' }).count()) throw new Error('the same file can be imported twice');
     });
 
+    await check('staff ask the assistant about a client by name and are answered from the records, with the file that was read', async () => {
+      await staff.goto(BASE + '/app/assistant');
+      const order = await staff.locator('h2').allTextContents();
+      if (order.indexOf('Ask about your clients') < 0 || order.indexOf('Ask about your clients') > order.indexOf('AI credits')) throw new Error('the question box is not first on the page: ' + order.join(' | '));
+      await staff.getByLabel('Your question').fill('What is going on with Workflow Client’s disputes?');
+      await staff.getByRole('button', { name: /Look up in the records/ }).click();
+      await staff.getByText('From the records (no AI used)').first().waitFor({ timeout: 30000 });
+      const page = await staff.locator('main').innerText();
+      if (!/Workflow Client: /.test(page) || !/SYNTHETIC BANK NA/.test(page)) throw new Error('the answer does not state the client’s disputes: ' + page.slice(0, 600));
+      const href = await staff.getByRole('link', { name: /Open the client’s page/ }).first().getAttribute('href');
+      if (href !== new URL(clientUrl).pathname) throw new Error('the file card does not open the client: ' + href);
+      // A question that names nobody is answered from the workspace's counts, with no file card.
+      await staff.getByLabel('Your question').fill('Who has disputes past their due date?');
+      await staff.getByRole('button', { name: /Look up in the records/ }).click();
+      await staff.getByText(/This workspace has \d+ client/).first().waitFor({ timeout: 30000 });
+      // Opened from the client page, the box is set to that client; the questions are in this person's history.
+      await staff.goto(clientUrl);
+      await staff.getByRole('link', { name: /^Ask/ }).click();
+      await staff.waitForURL('**/app/assistant?client=*');
+      await staff.getByText('Asking about').waitFor();
+      if (!(await staff.locator('#ask').getByText('Workflow Client').count())) throw new Error('the box is not set to the client it was opened for');
+      if (!(await staff.getByText('What is going on with Workflow Client’s disputes?').count())) throw new Error('the question is not in the history');
+    });
+
     await check('access: the client can open only their own portal and letter; staff pages and the staff API are closed to them', async () => {
       const ids = { client: clientUrl.split('/').pop(), dispute: disputeUrl.split('/').pop(), letter: letterUrl.split('/').pop(), report: reportUrl.split('/').pop() };
       const own = await client.request.get(`${BASE}/api/letters/${ids.letter}/pdf`);
@@ -344,9 +368,35 @@ async function signUpAgency(browser, label) {
       if (/Workflow Client|SYNTHETIC BANK/.test(await s.text())) throw new Error('search leaked another agency’s records');
       await other.goto(BASE + '/app/disputes?view=table');
       if (await other.getByText('SYNTHETIC BANK NA').count()) throw new Error('another agency’s dispute is listed');
+      // The assistant reads only the asker's own workspace: the other agency's client is not found by id or by name.
+      await other.goto(`${BASE}/app/assistant?client=${ids.client}`);
+      if (await other.getByText('Asking about').count()) throw new Error('the assistant opened for another agency’s client');
+      await other.getByLabel('Your question').fill('What is going on with Workflow Client’s disputes?');
+      await other.getByRole('button', { name: /Look up in the records/ }).click();
+      await other.getByText('From the records (no AI used)').first().waitFor({ timeout: 30000 });
+      const told = await other.locator('main').innerText();
+      if (/SYNTHETIC BANK|Open the client’s page/.test(told)) throw new Error('the assistant answered from another agency’s records');
       await other.goto(BASE + '/app');
       const first = other.locator('section', { has: other.getByRole('heading', { name: 'Do these first' }) });
       if (await first.getByText('Thank you. What happens next?').count()) throw new Error('another agency’s client message is on the dashboard');
+    });
+
+    await check('a TransUnion report PDF is read by the built-in reader, reviewed, and shown in the three-bureau table with the removal month it prints', async () => {
+      // A generated sample in TransUnion's grid layout, written by someone else (tests/fixtures/errata/NOTICE.md): invented people.
+      await staff.goto(clientUrl + '?tab=reports');
+      await staff.setInputFiles('input[type=file][multiple]', { name: 'transunion.pdf', mimeType: 'application/pdf', buffer: require('fs').readFileSync('tests/fixtures/errata/tu_planted.pdf') });
+      const row = staff.locator('li', { hasText: 'transunion.pdf' });
+      const opened = row.getByRole('link', { name: 'Open' });
+      await opened.waitFor({ timeout: 30000 });
+      const line = await row.innerText();
+      if (!/TransUnion: 12 accounts, 3 collections, 3 inquiries, all 6 pages read/.test(line)) throw new Error('the upload result does not say what was read: ' + line);
+      await opened.click();
+      await staff.waitForURL(/\/app\/reports\//, { timeout: 20000 });
+      await see(staff, 'TransUnion report'); await see(staff, 'OLD EXAMPLE RETAIL'); await see(staff, 'The TransUnion reader is new');
+      await staff.getByRole('button', { name: 'Approve & flag negatives' }).click();
+      await staff.waitForURL('**/compare', { timeout: 20000 });
+      await see(staff, 'TransUnion’s own estimate'); await see(staff, 'month has passed');
+      await see(staff, 'OLD EXAMPLE RETAIL on TransUnion was still reported after the removal month the report prints');
     });
   } catch { /* failure already recorded */ }
 
