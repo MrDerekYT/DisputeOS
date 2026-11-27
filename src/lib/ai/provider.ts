@@ -215,6 +215,16 @@ export function anthropicProvider(apiKey: string, model: string, opts: Anthropic
 
 const KIND_BY_STATUS: Record<number, AiFailure> = { 400: 'request', 401: 'auth', 403: 'forbidden', 404: 'model', 429: 'busy' };
 
+/**
+ * AI_MODEL (and OCR_MODEL) may list several models separated by commas: the first is asked first and the others are
+ * OpenRouter's fallbacks (its `models` field), tried in order when one is busy or rate-limited — useful with free
+ * models, which often are. A single name is sent as is, so any OpenAI-compatible endpoint keeps working.
+ */
+export function modelFields(model: string): { model: string; models?: string[] } {
+  const list = model.split(',').map((m) => m.trim()).filter(Boolean);
+  return list.length > 1 ? { model: list[0]!, models: list } : { model: list[0] ?? model };
+}
+
 /** The cap stays at 800 here: OpenAI-compatible models differ in what they accept, and they do not think within it. */
 export function openAiCompatibleProvider(baseUrl: string, apiKey: string, model: string, fetchImpl: typeof fetch = fetch): AiProvider {
   return {
@@ -225,7 +235,7 @@ export function openAiCompatibleProvider(baseUrl: string, apiKey: string, model:
         res = await fetchImpl(`${baseUrl.replace(/\/$/, '')}/chat/completions`, {
           method: 'POST',
           headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
-          body: JSON.stringify({ model, max_tokens: req.maxTokens ?? 800, messages: [{ role: 'system', content: req.system }, { role: 'user', content: req.user }] }),
+          body: JSON.stringify({ ...modelFields(model), max_tokens: req.maxTokens ?? 800, messages: [{ role: 'system', content: req.system }, { role: 'user', content: req.user }] }),
           signal: AbortSignal.timeout(AI_CALL_DEADLINE_MS),
         });
       } catch (e) {

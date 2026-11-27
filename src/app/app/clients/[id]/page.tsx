@@ -399,7 +399,7 @@ async function ReportsTab({ id, ctx }: { id: string; ctx: Ctx }) {
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_22rem]">
       <div className="space-y-4">
-        {reports.length === 0 ? <EmptyState title="No reports yet" body="Upload a bureau report (text-based PDF, HTML, text or CSV). It is read automatically, then a person confirms it." icon={<ScanSearch size={20} />} /> : (
+        {reports.length === 0 ? <EmptyState title="No reports yet" body="Drop the client’s credit reports in the upload box (PDFs from AnnualCreditReport.com work best). Each one is read automatically, collections and late payments are flagged in red, and you approve it before anything is used." icon={<ScanSearch size={20} />} /> : (
           // Grouped by bureau: the newest report of each is the one in use, so it leads; earlier ones fold away.
           <div className="panel divide-y divide-line/70">
             {(Object.keys(BUREAU_LABEL) as Bureau[]).map((b) => {
@@ -437,7 +437,8 @@ async function ReportsTab({ id, ctx }: { id: string; ctx: Ctx }) {
         {specialty && <SpecialtyBlock clientId={id} states={specialty.states} bankingConcern={specialty.bankingConcern} files={specialtyFiles} today={businessToday()} />}
         <ProtectionsBlock ctx={ctx} clientId={id} />
       </div>
-      <div className="space-y-6">
+      {/* On a phone the upload comes first: it is what this tab is opened for. On a wide screen it sits in the side column. */}
+      <div className="order-first space-y-6 lg:order-none">
       <Section title="Upload a report">
         {!canAddReport ? (
           <Notice tone="warn" title="Authorization needed first">Record the client’s written authorization to review their credit reports (Overview → Compliance record) before you upload a report. A report the client uploads in their portal can still be read.</Notice>

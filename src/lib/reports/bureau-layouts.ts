@@ -123,12 +123,19 @@ export function parseExperianAcr(text: string): ParsedReport {
       const n = normalizeDate(v); m[key] = meta(g.line, n !== null); return n;
     };
     const acct = got['Account Number'];
-    const l4 = last4(clean(acct?.v));
+    // Experian usually prints the first digits and masks the end ("434813XXXXXX"): those digits are not the last 4,
+    // so nothing is stored rather than a number that would never match another bureau's last 4.
+    const acctRaw = clean(acct?.v);
+    const l4 = acctRaw && /[Xx*]$/.test(acctRaw) ? null : last4(acctRaw);
     if (acct && l4) m.account_last4 = meta(acct.line);
     const type = take('Account Type', 'account_type');
     const status = take('Status', 'account_status', 100);
+    const guideLine = block.find((l) => /^(Collection|Charge off|\d+ days past due|Past due).* as of /i.test(l));
     const pastDue = status && /past due/i.test(status) ? status.replace(/^[^.]*\.\s*/, '').slice(0, 100) : null;
+    // The payment history guide ("30 days past due as of Oct 2026") is the bureau's own summary of late months.
+    const lateGuide = guideLine && /days past due|charge off/i.test(guideLine) ? guideLine.slice(0, 100) : null;
     if (pastDue) m.payment_status = m.account_status!;
+    else if (lateGuide) m.payment_status = meta(guideLine!);
     const isCollection = /collection/i.test(type ?? '') || /^collection/i.test(status ?? '');
 
     // Remarks: what the bureau itself says about the account, in its words.
@@ -157,7 +164,7 @@ export function parseExperianAcr(text: string): ParsedReport {
       account_last4: l4,
       account_type: type,
       account_status: status,
-      payment_status: pastDue,
+      payment_status: pastDue ?? lateGuide,
       balance_cents: money('Balance', 'balance_cents'),
       credit_limit_cents: money('Credit Limit', 'credit_limit_cents'),
       high_balance_cents: money('Highest Balance', 'high_balance_cents') ?? money('Original Balance', 'high_balance_cents'),

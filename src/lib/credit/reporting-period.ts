@@ -66,9 +66,13 @@ export interface ReportedItem {
 const LATE = /\b(30|60|90|120|150|180)\b|late|delinq|charged?[\s_-]*off|collection|repo|foreclos|derog|past due/i;
 const CHARGED_OFF = /charged?[\s_-]*off|charged to (profit|loss)|profit and loss|collection/i;
 
+/** Words that say the opposite of late ("Open/Never late.", "Pays As Agreed", "Current"): removed before the late test. */
+const NOT_LATE = /never\s+late|not\s+late|no\s+late\s+payments?|pays?\s+as\s+agreed|paid\s+as\s+agreed|current\s+account/gi;
+/** Dates ("12/30/2023", "2023-12-30") are not late codes: their 30 must not read as "30 days late". */
+const DATES = /\b\d{1,2}\/\d{1,2}\/\d{2,4}\b|\b\d{4}-\d{2}-\d{2}\b/g;
 /** A reported item that carries negative information: a collection, a late / charged-off status, or late codes in the payment history. */
 export const isNegative = (t: Pick<ReportedItem, 'item_type' | 'account_status' | 'payment_status' | 'payment_history'>): boolean =>
-  t.item_type === 'collection' || LATE.test(`${t.payment_status ?? ''} ${t.account_status ?? ''}`) || /[3-9]0|CO|\bC\.O\./.test(t.payment_history?.replace(/C/g, '') ?? '');
+  t.item_type === 'collection' || LATE.test(`${t.payment_status ?? ''} ${t.account_status ?? ''}`.replace(NOT_LATE, ' ').replace(DATES, ' ')) || /[3-9]0|CO|\bC\.O\./.test(t.payment_history?.replace(/C/g, '') ?? '');
 
 /** Placed for collection or charged off: the items § 1681c(c)(1) gives the 180-day lead to. */
 export const isCollectionOrChargeOff = (t: Pick<ReportedItem, 'item_type' | 'account_status' | 'payment_status'>): boolean =>

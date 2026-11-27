@@ -43,7 +43,10 @@ export default async function ComparePage({ params, searchParams }: { params: Pr
   const canDispute = ctx.can('disputes:write');
   const groups = groupAccounts(input.tradelines);
   const have = new Set(input.reports.map((r) => r.bureau));
-  findings.sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity]);
+  // Negative items (collections, late payments, charge-offs, old items) first, then by severity.
+  const NEG = new Set(['collection_validation', 'negative_item', 'obsolete_item']);
+  findings.sort((a, b) => Number(NEG.has(b.category)) - Number(NEG.has(a.category)) || SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity]);
+  const negativeCount = findings.filter((f) => NEG.has(f.category)).length;
 
   const fieldRows: { label: string; get: (t: AnalysisTradeline) => string | null; field: string }[] = [
     { label: 'Balance', field: 'balance_cents', get: (t) => (t.balance_cents == null ? null : money(t.balance_cents)) },
@@ -61,6 +64,13 @@ export default async function ComparePage({ params, searchParams }: { params: Pr
         back={{ href: `/app/clients/${id}?tab=reports`, label: c.full_name }}
         actions={<form action={refreshFindingsAction}><input type="hidden" name="clientId" value={id} /><button className="btn-secondary" type="submit"><RefreshCw size={15} aria-hidden /> Re-run analysis</button></form>} />
 
+      {findings.length > 0 && (
+        <a href="#findings" className="mb-5 flex items-center justify-between gap-3 rounded-2xl border-2 border-bad bg-bad-soft px-5 py-4 text-ink no-underline hover:brightness-110">
+          <span><span className="block text-lg font-bold text-bad">{negativeCount} negative item{negativeCount === 1 ? '' : 's'} · {findings.length} flag{findings.length === 1 ? '' : 's'} to review</span>
+            <span className="text-sm text-muted">Start disputes from the flags below the account table.</span></span>
+          <span className="shrink-0 rounded-xl bg-bad px-3 py-2 text-sm font-semibold text-white">Go to flags ↓</span>
+        </a>
+      )}
       <div className="mb-5 flex flex-wrap items-center gap-2 text-sm">
         {BUREAUS.map((b) => <Badge key={b} tone={have.has(b) ? 'ok' : 'neutral'} dot>{BUREAU_LABEL[b]}: {have.has(b) ? 'approved report' : 'not uploaded'}</Badge>)}
         {pending > 0 && <Badge tone="warn">{pending} report{pending > 1 ? 's' : ''} awaiting review</Badge>}
@@ -150,18 +160,21 @@ export default async function ComparePage({ params, searchParams }: { params: Pr
               <ul className="space-y-3">
                 {findings.map((f) => {
                   const basis = BASIS_LABEL[f.basis]!;
+                  // Collections, charge-offs and late payments are what clients come to us for: shown in red.
+                  const negative = f.category === 'collection_validation' || f.category === 'negative_item' || f.category === 'obsolete_item';
                   return (
-                    <li key={f.id} className="card card-pad">
+                    <li key={f.id} className={negative ? 'card card-pad border-l-4 border-bad bg-bad-soft/50' : 'card card-pad'}>
                       <div className="flex flex-wrap items-start justify-between gap-3">
-                        <div className="min-w-0 flex-1">
+                        <div className="min-w-0 basis-full sm:basis-0 sm:flex-1">
                           <div className="mb-1.5 flex flex-wrap items-center gap-2">
                             {canDispute && f.status !== 'disputed' && <label className="flex items-center gap-1.5 text-xs font-medium"><input type="checkbox" form="bulk" name="finding" value={f.id} className="h-4 w-4 rounded border-line-strong accent-[rgb(var(--brand))]" /> Select</label>}
                             <Badge tone={basis.tone}>{basis.text}</Badge>
                             <Badge>{FINDING_CATEGORIES[f.category] ?? f.category}</Badge>
-                            {f.severity === 'strong' && <Badge tone="warn">Worth a close look</Badge>}
+                            {negative && <Badge tone="bad">Negative item</Badge>}
+                            {f.severity === 'strong' && <Badge tone={negative ? 'bad' : 'warn'}>Worth a close look</Badge>}
                             {f.status !== 'suggested' && <StatusBadge status={f.status} />}
                           </div>
-                          <h3 className="text-[0.9375rem] font-semibold leading-snug">{f.title}</h3>
+                          <h3 className={negative ? 'text-lg font-bold leading-snug text-bad' : 'text-[0.9375rem] font-semibold leading-snug'}>{f.title}</h3>
                           <p className="mt-1 text-sm text-muted">{f.explanation}</p>
                           <details className="mt-3">
                             <summary className="link cursor-pointer text-[0.8125rem]">What this is based on ({f.evidence.length})</summary>
@@ -176,7 +189,7 @@ export default async function ComparePage({ params, searchParams }: { params: Pr
                             </ul>
                           </details>
                         </div>
-                        <div className="flex shrink-0 flex-col gap-2">
+                        <div className="flex w-full shrink-0 flex-wrap items-center gap-2 sm:w-auto sm:flex-col sm:items-stretch">
                           {f.status !== 'disputed' && <Link href={`/app/disputes/new?clientId=${id}&findingId=${f.id}`} className="btn-primary btn-sm"><Gavel size={14} aria-hidden /> Start dispute</Link>}
                           <div className="flex gap-1.5">
                             <form action={setFindingStatusAction}><input type="hidden" name="id" value={f.id} /><input type="hidden" name="clientId" value={id} /><input type="hidden" name="status" value="accepted" /><button className="btn-secondary btn-sm" title="Mark as worth pursuing"><Check size={14} aria-hidden /> Keep</button></form>

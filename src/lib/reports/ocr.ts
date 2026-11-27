@@ -1,4 +1,5 @@
 import { getEnv } from '../env';
+import { modelFields } from '../ai/provider';
 
 /**
  * Reading scanned (image-only) credit reports and photos of them.
@@ -126,7 +127,7 @@ export async function ocrReport(input: ScanInput | TextInput, fetchImpl: typeof 
         : { type: 'image_url', image_url: { url: dataUrl } };
       content = [{ type: 'text', text: ask }, part];
     }
-    payload = { model: env.OCR_MODEL ?? env.AI_MODEL, max_tokens: MAX_OUTPUT_TOKENS, messages: [{ role: 'system', content: OCR_SYSTEM }, { role: 'user', content }] };
+    payload = { ...modelFields((env.OCR_MODEL ?? env.AI_MODEL)!), max_tokens: MAX_OUTPUT_TOKENS, messages: [{ role: 'system', content: OCR_SYSTEM }, { role: 'user', content }] };
   }
 
   let res: Response;

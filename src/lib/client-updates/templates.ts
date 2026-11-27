@@ -13,11 +13,13 @@ export type UpdateLang = 'en' | 'es';
 export type UpdateChannel = 'sms' | 'email';
 export const UPDATE_CHANNELS: UpdateChannel[] = ['sms', 'email'];
 
-export const UPDATE_EVENTS = ['dispute_sent', 'response_recorded', 'document_needed', 'document_rejected', 'window_passed', 'team_message'] as const;
+export const UPDATE_EVENTS = ['report_received', 'report_reviewed', 'dispute_sent', 'response_recorded', 'document_needed', 'document_rejected', 'window_passed', 'team_message'] as const;
 export type UpdateEvent = (typeof UPDATE_EVENTS)[number];
 
 /** Staff-facing label and one line on when it goes out (Settings → Client updates). */
 export const UPDATE_EVENT_LABEL: Record<UpdateEvent, { label: string; when: string }> = {
+  report_received: { label: 'Credit report received', when: 'When a credit report is added to the client’s file, by them in the portal or by you.' },
+  report_reviewed: { label: 'Credit report reviewed', when: 'When you approve a credit report and the items to work on are listed.' },
   dispute_sent: { label: 'Dispute sent', when: 'When a dispute is recorded as sent.' },
   response_recorded: { label: 'Response recorded', when: 'When a response is recorded on a dispute.' },
   document_needed: { label: 'Document needed', when: 'When you request a document. At most once a day per client.' },
@@ -144,6 +146,8 @@ export const SMS_MAX_CHARS = 320;
 type Text = Record<UpdateLang, string>;
 
 const SMS_LINE: Record<UpdateEvent, Text> = {
+  report_received: { en: 'We received your credit report.', es: 'Recibimos su reporte de crédito.' },
+  report_reviewed: { en: 'We finished reviewing your credit report.', es: 'Terminamos de revisar su reporte de crédito.' },
   dispute_sent: { en: 'There is an update on your file.', es: 'Hay una novedad en su expediente.' },
   response_recorded: { en: 'There is an update on your file.', es: 'Hay una novedad en su expediente.' },
   window_passed: { en: 'There is an update on your file.', es: 'Hay una novedad en su expediente.' },
@@ -157,6 +161,20 @@ const SMS_FRAME: Text = {
 };
 
 const EMAIL: Record<UpdateEvent, { subject: Text; body: Text }> = {
+  report_received: {
+    subject: { en: 'We received your credit report', es: 'Recibimos su reporte de crédito' },
+    body: {
+      en: 'Your credit report is in your file and your team is reviewing it now. We will let you know when the review is done. Sign in to your portal any time to see your file.',
+      es: 'Su reporte de crédito está en su expediente y su equipo lo está revisando. Le avisaremos cuando termine la revisión. Inicie sesión en su portal cuando quiera para ver su expediente.',
+    },
+  },
+  report_reviewed: {
+    subject: { en: 'Your credit report review is done', es: 'La revisión de su reporte de crédito está lista' },
+    body: {
+      en: 'We finished reviewing your credit report and listed the items we will look into with you. Sign in to your portal to see them and what happens next.',
+      es: 'Terminamos de revisar su reporte de crédito y anotamos las partidas que vamos a revisar con usted. Inicie sesión en su portal para verlas y saber qué sigue.',
+    },
+  },
   dispute_sent: {
     subject: { en: 'A dispute was sent for you', es: 'Enviamos una disputa en su nombre' },
     body: {

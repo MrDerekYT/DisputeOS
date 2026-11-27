@@ -218,3 +218,11 @@ describe('AnnualCreditReport.com and other bureau layouts', () => {
     for (const k of ['AI_BASE_URL', 'AI_API_KEY', 'AI_MODEL']) delete process.env[k];
   });
 });
+
+describe('free-model fallbacks', () => {
+  it('a comma list becomes OpenRouter fallbacks; one name is sent as is', async () => {
+    const { modelFields } = await import('@/lib/ai/provider');
+    expect(modelFields('a/one:free, b/two:free')).toEqual({ model: 'a/one:free', models: ['a/one:free', 'b/two:free'] });
+    expect(modelFields('gpt-x')).toEqual({ model: 'gpt-x' });
+  });
+});
