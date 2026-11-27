@@ -1,20 +1,30 @@
 import Link from 'next/link';
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
-import { AlertOctagon, AlertTriangle, CheckCircle2, ChevronDown } from 'lucide-react';
+import { AlertOctagon, AlertTriangle, CheckCircle2, ChevronDown, RefreshCw } from 'lucide-react';
 import { REPORT_SOURCE_LABEL } from '@/components/staff-kit';
 import { ActionForm, Check, ConfirmButton, Field, SubmitButton } from '@/components/forms';
 import { Badge, DefinitionList, EmptyState, label, Notice, PageHeader, Section, StatFigure, StatusBadge } from '@/components/ui';
 import { requireStaff } from '@/lib/auth/context';
 import { lowConfidenceFields } from '@/lib/reports/parser';
+import { readingMark, REPORT_CHANGED } from '@/lib/reports/service';
 import type { FieldMeta } from '@/lib/reports/types';
 import { BUREAU_LABEL, fmtDate, isUuid, money, type Bureau } from '@/lib/util';
-import { decideReportAction, deleteTradelineAction, updateTradelineAction } from '../actions';
+import { decideReportAction, deleteTradelineAction, rereadReportAction, updateTradelineAction } from '../actions';
+import { AI_COSTS } from '@/lib/ai/credits';
+import { ocrEnabled } from '@/lib/reports/ocr';
 import { PRODUCT } from '@/lib/product';
 import { FallOffNote } from '@/components/fall-off';
 import { isNegative, publicRecordFallOff, tradelineFallOff } from '@/lib/credit/reporting-period';
 
 export const metadata: Metadata = { title: 'Review report' };
+
+/** A field to confirm, in the words the form below uses for it (the stored name says “balance cents”). */
+const FIELD_LABEL: Record<string, string> = {
+  creditor_name: 'creditor', account_last4: 'account last 4', balance_cents: 'balance', credit_limit_cents: 'credit limit', high_balance_cents: 'high balance',
+  date_of_first_delinquency: 'first delinquency', payment_history: 'payment history',
+};
+const fieldLabel = (f: string) => FIELD_LABEL[f] ?? f.replace(/_/g, ' ');
 
 interface TL {
   id: string; creditor_name: string; original_creditor: string | null; account_last4: string | null; item_type: string; account_status: string | null; payment_status: string | null;
@@ -22,24 +32,29 @@ interface TL {
   payment_history: string | null; confidence: number; field_meta: Record<string, FieldMeta>; user_provided: { not_mine?: boolean; never_late?: boolean };
 }
 
-export default async function ReportReview({ params }: { params: Promise<{ id: string }> }) {
+export default async function ReportReview({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ changed?: string }> }) {
   const { id } = await params;
+  const { changed } = await searchParams;
   if (!isUuid(id)) notFound();
   const ctx = await requireStaff('clients:read');
   const data = await ctx.tx(async (db) => {
     const r = await db.row<{ id: string; client_id: string; bureau: Bureau; status: string; report_date: string | null; source: string; warnings: string[]; client_name: string; created_at: string; document_id: string | null }>(
       `select r.id, r.client_id, r.bureau, r.status, r.report_date, r.source, r.warnings, r.created_at, r.document_id, c.full_name as client_name from public.credit_reports r join public.clients c on c.id = r.client_id where r.id = $1`, [id]);
     if (!r) return null;
+    // The mark goes to the Approve and Reject buttons, so that what is decided is what was on screen. It is taken
+    // before the rows: if the file is read again in between, the page carries the old mark and the decision is
+    // refused, never the other way round.
+    const mark = await readingMark(db, id);
     const [tradelines, inquiries, records, identity] = await Promise.all([
       db.rows<TL>(`select id, creditor_name, original_creditor, account_last4, item_type, account_status, payment_status, balance_cents, credit_limit_cents, date_opened, date_reported, date_of_first_delinquency, payment_history, confidence, field_meta, user_provided from public.tradelines where report_id = $1 order by item_type, creditor_name`, [id]),
       db.rows<{ name: string; inquiry_date: string | null }>('select name, inquiry_date from public.inquiries where report_id = $1 order by inquiry_date desc nulls last', [id]),
       db.rows<{ kind: string; court: string | null; amount_cents: number | null; filed_date: string | null }>('select kind, court, amount_cents, filed_date from public.public_records where report_id = $1', [id]),
       db.rows<{ kind: string; value: string }>('select kind, value from public.report_identity_items where report_id = $1 order by kind', [id]),
     ]);
-    return { r, tradelines, inquiries, records, identity };
+    return { r, tradelines, inquiries, records, identity, mark };
   });
   if (!data) notFound();
-  const { r, identity, inquiries, records } = data;
+  const { r, identity, inquiries, records, mark } = data;
   // Negative items first, collections at the very top: they are what the client hired us for.
   const rank = (t: TL) => (t.item_type === 'collection' ? 0 : isNegative(t) ? 1 : 2);
   const tradelines = [...data.tradelines].sort((a, b) => rank(a) - rank(b) || a.creditor_name.localeCompare(b.creditor_name));
@@ -58,11 +73,25 @@ export default async function ReportReview({ params }: { params: Promise<{ id: s
         actions={<StatusBadge status={r.status} />}
       />
 
+      {pending && changed && <div className="mb-4"><Notice tone="bad" title="Not decided">{REPORT_CHANGED}</Notice></div>}
       {pending ? (
-        <Notice tone="warn" title="Review before this is used">
-          {PRODUCT.name} read this file automatically and can make mistakes. Check each account below against the original, correct anything that is off, then approve. Nothing is analysed or disputed until a person approves the report.
-          {needsConfirm > 0 && <> <strong>{needsConfirm} account{needsConfirm > 1 ? 's have' : ' has'} fields with low confidence.</strong></>}
-        </Notice>
+        <>
+          <Notice tone="warn" title="Review before this is used">
+            {PRODUCT.name} read this file automatically and can make mistakes. Check each account below against the original, correct anything that is off, then approve. Nothing is analysed or disputed until a person approves the report.
+            {needsConfirm > 0 && <> <strong>{needsConfirm} account{needsConfirm > 1 ? 's have' : ' has'} fields with low confidence.</strong></>}
+          </Notice>
+          {/* The file is in the vault, so a reading that came out wrong (an older reader, a row removed by mistake) is
+              made again from it instead of asking for the file a second time. Approved and rejected reports never get this. */}
+          {r.document_id && ctx.can('reports:write') && (
+            <ActionForm action={rereadReportAction} className="mt-3">
+              <input type="hidden" name="id" value={r.id} />
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                <ConfirmButton pendingText="Reading…" message={`Read this file again? What this report holds now is replaced by a fresh reading. Corrections typed on this page, and what the client told you about an account, are lost.${ocrEnabled() ? ` If the file needs AI to be read, that takes ${AI_COSTS.report_scan} AI credits again.` : ''}`}><RefreshCw size={14} aria-hidden /> Read the file again</ConfirmButton>
+                <p className="text-[0.8125rem] text-muted">Reads the stored file with the reader as it is today and replaces this reading. For a reading that came out wrong, or a row removed by mistake.</p>
+              </div>
+            </ActionForm>
+          )}
+        </>
       ) : (
         <Notice tone={r.status === 'approved' ? 'ok' : 'neutral'} title={r.status === 'approved' ? 'Approved' : 'Rejected'}>
           {r.status === 'approved' ? <>This report feeds the <Link className="link" href={`/app/clients/${r.client_id}/compare`}>three-bureau comparison</Link>.</> : 'This report is not used for analysis.'}
@@ -106,7 +135,9 @@ export default async function ReportReview({ params }: { params: Promise<{ id: s
                     </div>
                     <div className="flex flex-wrap items-center gap-1.5">
                       {isColl ? <Badge tone="bad"><AlertOctagon size={12} aria-hidden /> Collection</Badge> : neg && <Badge tone="bad"><AlertOctagon size={12} aria-hidden /> Late payments</Badge>}
-                      {low.length > 0 ? <Badge tone="warn"><AlertTriangle size={12} aria-hidden /> Confirm {low.map((f) => f.replace(/_/g, ' ')).join(', ')}</Badge> : <Badge tone="ok"><CheckCircle2 size={12} aria-hidden /> Read cleanly</Badge>}
+                      {/* A badge is one line. A reader that holds every field for review (TransUnion's does) would make
+                          it wider than a phone, so past two fields it gives the count; each field is listed just below. */}
+                      {low.length > 0 ? <Badge tone="warn"><AlertTriangle size={12} aria-hidden /> Confirm {low.length > 2 ? `${low.length} fields` : low.map(fieldLabel).join(', ')}</Badge> : <Badge tone="ok"><CheckCircle2 size={12} aria-hidden /> Read cleanly</Badge>}
                       {t.user_provided.not_mine && <Badge tone="info">Client: not recognised</Badge>}
                       {t.user_provided.never_late && <Badge tone="info">Client: never late</Badge>}
                     </div>
@@ -118,7 +149,7 @@ export default async function ReportReview({ params }: { params: Promise<{ id: s
                   <FallOffNote fallOff={tradelineFallOff(t)} className="mt-2" />
                   {low.length > 0 && (
                     <div className="mt-3 rounded-xl bg-warn-soft p-3 text-xs text-ink">
-                      {low.map((f) => <p key={f}><strong className="text-warn">{f.replace(/_/g, ' ')}</strong>: source line “{t.field_meta[f]?.snippet}”</p>)}
+                      {low.map((f) => <p key={f}><strong className="text-warn">{fieldLabel(f)}</strong>: source line “{t.field_meta[f]?.snippet}”</p>)}
                     </div>
                   )}
                   <details className="group mt-3">
@@ -175,8 +206,8 @@ export default async function ReportReview({ params }: { params: Promise<{ id: s
         <div className="sticky bottom-4 mt-8 flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-raised p-4 shadow-pop">
           <p className="text-sm text-muted">Approving flags every negative item and runs the cross-bureau comparison for this client.</p>
           <div className="flex gap-2">
-            <form action={decideReportAction}><input type="hidden" name="id" value={r.id} /><input type="hidden" name="decision" value="rejected" /><ConfirmButton className="btn-secondary" message="Reject this report? This is final: it will not be used, and the same file cannot be read again. To try again you would upload the report as a new file.">Reject</ConfirmButton></form>
-            <form action={decideReportAction}><input type="hidden" name="id" value={r.id} /><input type="hidden" name="decision" value="approved" /><button className="btn-primary" type="submit">Approve & flag negatives</button></form>
+            <form action={decideReportAction}><input type="hidden" name="id" value={r.id} /><input type="hidden" name="mark" value={mark} /><input type="hidden" name="decision" value="rejected" /><ConfirmButton className="btn-secondary" message="Reject this report? This is final: it will not be used, and the same file cannot be read again. To try again you would upload the report as a new file.">Reject</ConfirmButton></form>
+            <form action={decideReportAction}><input type="hidden" name="id" value={r.id} /><input type="hidden" name="mark" value={mark} /><input type="hidden" name="decision" value="approved" /><button className="btn-primary" type="submit">Approve & flag negatives</button></form>
           </div>
         </div>
       )}

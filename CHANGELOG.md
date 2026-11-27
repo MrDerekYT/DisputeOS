@@ -40,6 +40,21 @@ deleted. Additive; nothing existing changes. No new dependency.
 - **The removal month TransUnion prints** (“Estimated month and year this item will be removed”) is shown on the
   comparison as TransUnion's own estimate. An account that prints it is not flagged for showing no date of first
   delinquency, and it is flagged when the same account was still updated in a later month.
+- **“Read the file again”** on a report that is still waiting for review. The file is already in the vault, so a
+  reading that came out wrong (it was read before a reader was improved, or a row was removed by mistake) is made
+  again from it instead of asking for the file a second time. What the fresh reading holds for that report takes the
+  place of what it held, and the report keeps its address. Corrections typed into the earlier reading, and what the
+  client said about an account, go with it, and the button says so first. Only the one report changes: an approved or
+  rejected report is never read again or changed (upload the file as a new report for that), other reports from the
+  same file are not touched, nothing changes when the file cannot be read, and a reading with a dispute or a collector
+  notice on one of its accounts is not replaced. Who may do it is the rule of the first reading: a file staff added
+  needs the client's written authorization on file. The client is not told again and no automation runs. The timeline
+  says “read again” and the audit log has `report.reread`.
+- **Approve and Reject decide the reading that was on screen.** If the file was read again, or a row was removed,
+  after the page was opened (in another tab, or by someone else), nothing is decided: the page comes back with “Not
+  decided” and the report as it now stands. A correction typed into a row that is no longer there says so instead of
+  “Account updated”. “Remove (misread row)” now waits for an approval that is in progress: pressed at the same
+  moment as Approve, it could take a row out of a report that had just been approved.
 
 ## Three bureaus in one table, flags that keep up, a tidier client page (unreleased)
 
@@ -62,7 +77,10 @@ No migration for this part.
 - **Client page.** Sections that are settled fold to one line (welcome link, agreement terms, compliance record, text
   consent, referred by, details); “Needs attention” sits next to the plan; “Draft update” moved into Dispute
   progress. Across the app, a section’s button sits beside its title instead of under a long hint.
-- **Report page.** Negative items are summarised as figures, and negative accounts are marked in red.
+- **Report page.** Negative items are summarised as figures, and negative accounts are marked in red. An account with
+  many fields to confirm (every field of a TransUnion report is held for review) no longer runs off a phone's screen:
+  past two fields the badge gives the count, and the fields are listed below it in the form's own words (“balance”,
+  not “balance cents”).
 - **Landing page.** A new “Three bureaus, one table” section with a drawn sample of the comparison (sample data,
   labelled as such).
 

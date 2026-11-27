@@ -112,11 +112,12 @@ export function Check({ name, children, defaultChecked, required, value }: { nam
 }
 
 /** Confirm-before-submit for destructive or outward-facing actions. */
-export function ConfirmButton({ children, message, className = 'btn-secondary btn-sm' }: { children: ReactNode; message: string; className?: string }) {
+export function ConfirmButton({ children, message, className = 'btn-secondary btn-sm', pendingText }: { children: ReactNode; message: string; className?: string; /** Shown while the action runs, for one that takes a moment. */ pendingText?: string }) {
   const { pending } = useFormStatus();
   return (
-    <button type="submit" disabled={pending} className={className} onClick={(e) => { if (!window.confirm(message)) e.preventDefault(); }}>
-      {children}
+    <button type="submit" disabled={pending} aria-busy={pending} className={className} onClick={(e) => { if (!window.confirm(message)) e.preventDefault(); }}>
+      {pending && pendingText && <Loader2 size={14} className="animate-spin" aria-hidden />}
+      {pending && pendingText ? pendingText : children}
     </button>
   );
 }

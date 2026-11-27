@@ -680,6 +680,48 @@ name and the addresses, and the report date. A text file with the same content i
   disclosure in which the rules find no account is refused ("The accounts in this report could not be recognised…")
   instead of importing the lines that only look like inquiries.
 
+### Reading a stored file again
+
+A file is read once when it arrives. Two things make that first reading worth redoing without asking for the file
+again: the readers change (a file read before TransUnion had its own reader was read by the general rules), and a row
+removed from a reading by mistake cannot be put back by hand. Two buttons cover it, both reading the file that is
+already in the vault (`src/lib/reports/reread.ts`, `importDocumentAsReportAction`):
+
+- **"Read as credit report"** (client page, Documents): a file filed as a credit report that was never read, such as
+  one the client uploaded that could not be read at the time.
+- **"Read the file again"** (the report's review page): a report that is still waiting for review. What the fresh
+  reading holds for that report takes the place of what it held, and the report keeps its id, so the review link staff
+  were sent still opens it. Corrections typed into the earlier reading, and what was recorded as the client's own
+  statements about an account ("does not recognise it", "never late"), go with it; the button says so before anything
+  happens.
+
+What "Read the file again" will not do:
+
+- Touch an approved report (flags, disputes and letters stand on it) or a rejected one (a person refused it). For
+  those, upload the file as a new report.
+- Touch any other report. A file that holds several bureaus has one report per bureau; each one still waiting for
+  review has its own button, and pressing it replaces that report only, with the rows the file holds for its bureau.
+  If the file, read again, holds nothing for that bureau, nothing changes and the message names what was found. In
+  such a file, rows that name no bureau are not guessed at: nothing records which of its reports took them at the first
+  reading, so the re-read is refused and the file is uploaded as a new report instead.
+- Change anything when the file cannot be read or nothing is recognised in it.
+- Replace a reading that has a dispute or a collector notice on one of its accounts (checked before the file is read,
+  so an AI read is not paid for and then thrown away, and again under a lock when the rows are swapped).
+- Tell the client again or run the "report uploaded" automation.
+
+A report keeps the bureau it was filed under, with one exception that matches a first reading: when the file is that
+one report and today's reader names another bureau on every row (a bureau's own layout does), the report moves to that
+bureau and the result says so. A file staff added needs the client's written authorization on file, as for the first
+reading; a file the client uploaded, and any file in a personal workspace, does not. An AI read costs its credits
+again (the button says so when AI reading is on). The timeline says "read again"; the audit log has `report.reread`.
+
+**Approving the reading that was on screen.** The review page carries a mark of the rows it showed (`readingMark` in
+`src/lib/reports/service.ts`: the ids of the reading's rows) to the Approve and Reject buttons. A re-read gives every
+row a new id and a removed row takes one away, so a decision made on a page that was loaded before either is not
+carried out: the page comes back with "Not decided" and the report as it now stands. A corrected value does not change
+the mark. The page takes the mark before it loads the rows, and approving, reading again and removing a row all lock
+the report row first, so none of them can slip in beside another.
+
 ## Reading reports with AI: other layouts, scans and photos
 
 Off by default, and not needed for the three bureaus' AnnualCreditReport.com reports (above). The rules-based parser

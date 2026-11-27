@@ -300,11 +300,18 @@ async function signUpAgency(browser, label) {
       await client.setInputFiles('input[name=file]', { name: 'transunion-report.pdf', mimeType: 'application/pdf', buffer: pdf });
       await client.getByRole('button', { name: 'Upload' }).click();
       await client.waitForURL('**/portal/documents?uploaded=1');
-      await staff.goto(clientUrl + '?tab=documents');
-      const row = staff.locator('li', { hasText: 'transunion-report.pdf' });
-      await row.getByText('uploaded by client').waitFor();
-      // A report the client uploads is read as it arrives: it is already waiting for a person to review it.
-      if (await row.getByRole('button', { name: 'Read as credit report' }).count()) throw new Error('the report was not read when the client uploaded it');
+      // A report the client uploads is read as it arrives, once the page has answered the client (they never wait on
+      // the reading). So within moments it is waiting for a person to review it, and nobody pressed "Read as credit
+      // report": the page is looked at again until the report is there.
+      let row;
+      for (let tries = 0; ; tries++) {
+        await staff.goto(clientUrl + '?tab=documents');
+        row = staff.locator('li', { hasText: 'transunion-report.pdf' });
+        await row.getByText('uploaded by client').waitFor();
+        if (await row.getByRole('link', { name: 'Open report' }).count()) break;
+        if (tries >= 20) throw new Error('the report was not read when the client uploaded it');
+        await staff.waitForTimeout(1000);
+      }
       await row.getByRole('link', { name: 'Open report' }).click();
       await staff.waitForURL(/\/app\/reports\//, { timeout: 20000 });
       await see(staff, 'TransUnion report'); await see(staff, 'Review before this is used'); await see(staff, 'SYNTHETIC BANK NA');
@@ -381,7 +388,7 @@ async function signUpAgency(browser, label) {
       if (await first.getByText('Thank you. What happens next?').count()) throw new Error('another agency’s client message is on the dashboard');
     });
 
-    await check('a TransUnion report PDF is read by the built-in reader, reviewed, and shown in the three-bureau table with the removal month it prints', async () => {
+    await check('a TransUnion report PDF is read by the built-in reader, read again from the stored file after a row is removed (an Approve from a tab opened before that decides nothing), approved, and shown in the three-bureau table with the removal month it prints', async () => {
       // A generated sample in TransUnion's grid layout, written by someone else (tests/fixtures/errata/NOTICE.md): invented people.
       await staff.goto(clientUrl + '?tab=reports');
       await staff.setInputFiles('input[type=file][multiple]', { name: 'transunion.pdf', mimeType: 'application/pdf', buffer: require('fs').readFileSync('tests/fixtures/errata/tu_planted.pdf') });
@@ -393,10 +400,37 @@ async function signUpAgency(browser, label) {
       await opened.click();
       await staff.waitForURL(/\/app\/reports\//, { timeout: 20000 });
       await see(staff, 'TransUnion report'); await see(staff, 'OLD EXAMPLE RETAIL'); await see(staff, 'The TransUnion reader is new');
+      // A row removed by mistake cannot be put back by hand. The file is in the vault, so it is read again: the reading
+      // is whole again, and the report stays at the same address.
+      const reportUrl = staff.url();
+      await see(staff, 'Accounts (15)');
+      const account = staff.locator('ul.panel > li', { hasText: 'OLD EXAMPLE RETAIL' }).first();
+      await account.locator('summary').click();
+      staff.once('dialog', (d) => d.accept());
+      await account.getByRole('button', { name: 'Remove (misread row)' }).click();
+      await see(staff, 'Accounts (14)');
+      // A second tab still shows the reading with the row removed.
+      const stale = await staffCtx.newPage(); watch(stale, 'staff, second tab');
+      await stale.goto(reportUrl); await see(stale, 'Accounts (14)');
+      staff.once('dialog', (d) => d.accept());
+      await staff.getByRole('button', { name: 'Read the file again' }).click();
+      await see(staff, 'Read again. TransUnion: 12 accounts, 3 collections, 3 inquiries, all 6 pages read', 30000);
+      await see(staff, 'Accounts (15)'); await see(staff, 'OLD EXAMPLE RETAIL');
+      if (staff.url() !== reportUrl) throw new Error('the report moved to another address after being read again: ' + staff.url());
+      // Approve pressed in that second tab would approve a reading nobody looked at there: nothing is decided, and
+      // the person is shown the report as it now stands.
+      await stale.getByRole('button', { name: 'Approve & flag negatives' }).click();
+      await stale.waitForURL(/\/app\/reports\/[^?]+\?changed=1$/, { timeout: 20000 });
+      await see(stale, 'Not decided'); await see(stale, 'This report changed after you opened it'); await see(stale, 'Accounts (15)'); await see(stale, 'Review before this is used');
+      await stale.close();
       await staff.getByRole('button', { name: 'Approve & flag negatives' }).click();
       await staff.waitForURL('**/compare', { timeout: 20000 });
       await see(staff, 'TransUnion’s own estimate'); await see(staff, 'month has passed');
       await see(staff, 'OLD EXAMPLE RETAIL on TransUnion was still reported after the removal month the report prints');
+      // An approved report is in use: it is never read again.
+      await staff.goto(reportUrl);
+      await see(staff, 'This report feeds the');
+      if (await staff.getByRole('button', { name: 'Read the file again' }).count()) throw new Error('an approved report offers to be read again');
     });
   } catch { /* failure already recorded */ }
 
