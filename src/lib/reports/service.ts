@@ -9,6 +9,7 @@ import { analyze, normCreditor, type AnalysisIdentity, type AnalysisInquiry, typ
 import type { ParsedReport } from './types';
 import { watchReinsertions } from '../disputes/reinsertion';
 import { syncCaseFindings } from '../credit/case-tools';
+import { kindLabelSql } from '../credit/kind-label-sql';
 import { businessToday } from '../letters/service';
 
 export interface Actor { orgId: string; userId: string; meta?: { ip?: string | null } }
@@ -110,8 +111,9 @@ export async function loadAnalysisInput(db: Db, clientId: string) {
   const ids = latest.map((r) => r.id);
   if (!ids.length) return { reports: latest, tradelines: [] as AnalysisTradeline[], inquiries: [] as AnalysisInquiry[], publicRecords: [] as AnalysisPublicRecord[], identity: [] as AnalysisIdentity[] };
   const tradelines = await db.rows<AnalysisTradeline>(
-    `select id, bureau, item_type, creditor_name, original_creditor, account_last4, account_status, payment_status, balance_cents, credit_limit_cents, date_opened, date_reported,
-            date_of_first_delinquency, payment_history, user_provided, remarks from public.tradelines where report_id = any($1::uuid[]) order by creditor_name`, [ids]);
+    `select t.id, t.bureau, t.item_type, t.creditor_name, t.original_creditor, t.account_last4, t.account_type, t.account_status, t.payment_status, t.balance_cents, t.credit_limit_cents,
+            t.date_opened, t.date_reported, t.date_of_first_delinquency, t.payment_history, t.user_provided, t.remarks, ${kindLabelSql('t')}
+       from public.tradelines t where t.report_id = any($1::uuid[]) order by t.creditor_name`, [ids]);
   const inquiries = await db.rows<AnalysisInquiry>('select id, bureau, name, inquiry_date, kind from public.inquiries where report_id = any($1::uuid[])', [ids]);
   const publicRecords = await db.rows<AnalysisPublicRecord>('select id, bureau, kind, filed_date, status from public.public_records where report_id = any($1::uuid[])', [ids]);
   const identity = await db.rows<AnalysisIdentity>('select bureau, kind, value from public.report_identity_items where report_id = any($1::uuid[])', [ids]);

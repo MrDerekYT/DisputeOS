@@ -35,6 +35,7 @@ import { loadIntake } from '@/lib/intake-load';
 import { IntakeBlock } from './intake-block';
 import { SpecialtyBlock } from './specialty-block';
 import { ProtectionsBlock } from './protections-block';
+import { AccountsBlock } from './accounts-block';
 import { AgingOffBlock } from './aging-off-block';
 import { CaseToolsBlock } from './case-tools-block';
 import { BankCollectionsBlock } from './bank-collections-block';
@@ -437,6 +438,7 @@ async function ReportsTab({ id, ctx }: { id: string; ctx: Ctx }) {
             <Link href={`/app/clients/${id}/what-if`} className="btn-secondary">What-if calculator</Link>
           </div>
         )}
+        <AccountsBlock ctx={ctx} clientId={id} />
         <AgingOffBlock ctx={ctx} clientId={id} />
         <CaseToolsBlock ctx={ctx} clientId={id} />
         <BankCollectionsBlock ctx={ctx} clientId={id} />

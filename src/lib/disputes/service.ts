@@ -17,6 +17,7 @@ import { businessToday, checkSentOn } from '../letters/service';
 import { queueClientUpdate } from '../client-updates/service';
 import { sayDay, toDay } from './clock';
 import { getEnv } from '../env';
+import { kindLabelSql } from '../credit/kind-label-sql';
 
 export interface DActor { orgId: string; userId: string; role: Role; meta?: { ip?: string | null } }
 export class DisputeError extends UserError {}
@@ -355,6 +356,7 @@ export async function addEvidence(db: Db, actor: DActor, disputeId: string, e: {
 export async function loadReportedRows(db: Db, clientId: string): Promise<(ReportedRow & { item_type: string })[]> {
   return db.rows<ReportedRow & { item_type: string }>(
     `select t.id, t.bureau, t.creditor_name, t.account_last4, t.item_type, t.balance_cents, t.date_opened::text, t.date_of_first_delinquency::text,
+            t.original_creditor, t.account_type, t.account_status, t.payment_status, t.payment_history, t.remarks, ${kindLabelSql('t')},
             t.report_id in (select distinct on (bureau) id from public.credit_reports where client_id = $1 and status = 'approved'
                              order by bureau, coalesce(report_date, created_at::date) desc, created_at desc) as newest
        from public.tradelines t

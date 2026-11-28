@@ -1,5 +1,6 @@
 import type { Permission } from '../rbac';
 import { reinvestigationDays } from './clock';
+import type { AccountKind } from '../credit/account-kind';
 
 export const DISPUTE_STATUSES = ['draft', 'ready_for_review', 'approved', 'submitted', 'under_investigation', 'response_received', 'resolved', 'on_hold', 'cancelled'] as const;
 export type DisputeStatus = (typeof DISPUTE_STATUSES)[number];
@@ -69,6 +70,21 @@ export const FINDING_TO_CATEGORY: Record<string, string> = {
   // Case tools: the two report checks start as a neutral "please verify" to the bureau; a collector notice starts a validation request to the collector.
   medical_collection: 'other', bankruptcy_reporting: 'other', collector_notice: 'unverifiable_collection',
 };
+
+/**
+ * The type of dispute the new dispute form suggests for an account, from its confirmed label (the report's words or a
+ * person's: src/lib/credit/account-kind.ts confirmedLabel; an AI suggestion suggests nothing). Only an account that
+ * carries something negative gets one, and it is a starting point a person changes freely. A validation request is
+ * for a collector's account only (`collector`): a creditor's own account in collection gets a status dispute. It is
+ * never "not mine" or identity theft: only the client can say that.
+ */
+export function categoryForAccount(kind: AccountKind, collector: boolean): string | undefined {
+  if (kind === 'collection') return collector ? 'unverifiable_collection' : 'incorrect_status';
+  if (kind === 'bankruptcy') return 'bankruptcy_included';
+  if (kind === 'late' || kind === 'was_late') return 'incorrect_payment_history';
+  if (kind === 'charge_off' || kind === 'foreclosure' || kind === 'repossession' || kind === 'settled' || kind === 'negative') return 'incorrect_status';
+  return undefined;
+}
 
 /**
  * The dispute category a finding starts as. A "client statement" finding records one of two different things the

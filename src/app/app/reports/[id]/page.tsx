@@ -15,7 +15,10 @@ import { AI_COSTS } from '@/lib/ai/credits';
 import { ocrEnabled } from '@/lib/reports/ocr';
 import { PRODUCT } from '@/lib/product';
 import { FallOffNote } from '@/components/fall-off';
-import { isNegative, publicRecordFallOff, tradelineFallOff } from '@/lib/credit/reporting-period';
+import { publicRecordFallOff, tradelineFallOff } from '@/lib/credit/reporting-period';
+import { accountLabel, confirmedLabel, isBadKind, isCollectorAccount, labelBasis, labelOrder } from '@/lib/credit/account-kind';
+import { kindLabelSql } from '@/lib/credit/kind-label-sql';
+import { KindBadge } from '@/components/kind-badge';
 
 export const metadata: Metadata = { title: 'Review report' };
 
@@ -30,6 +33,7 @@ interface TL {
   id: string; creditor_name: string; original_creditor: string | null; account_last4: string | null; item_type: string; account_status: string | null; payment_status: string | null;
   balance_cents: number | null; credit_limit_cents: number | null; date_opened: string | null; date_reported: string | null; date_of_first_delinquency: string | null;
   payment_history: string | null; confidence: number; field_meta: Record<string, FieldMeta>; user_provided: { not_mine?: boolean; never_late?: boolean };
+  account_type: string | null; remarks: string | null; kind_label: unknown;
 }
 
 export default async function ReportReview({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ changed?: string }> }) {
@@ -46,7 +50,9 @@ export default async function ReportReview({ params, searchParams }: { params: P
     // refused, never the other way round.
     const mark = await readingMark(db, id);
     const [tradelines, inquiries, records, identity] = await Promise.all([
-      db.rows<TL>(`select id, creditor_name, original_creditor, account_last4, item_type, account_status, payment_status, balance_cents, credit_limit_cents, date_opened, date_reported, date_of_first_delinquency, payment_history, confidence, field_meta, user_provided from public.tradelines where report_id = $1 order by item_type, creditor_name`, [id]),
+      db.rows<TL>(`select t.id, t.creditor_name, t.original_creditor, t.account_last4, t.item_type, t.account_status, t.payment_status, t.balance_cents, t.credit_limit_cents, t.date_opened, t.date_reported,
+                          t.date_of_first_delinquency, t.payment_history, t.confidence, t.field_meta, t.user_provided, t.account_type, t.remarks, ${kindLabelSql('t')}
+                     from public.tradelines t where t.report_id = $1 order by t.item_type, t.creditor_name`, [id]),
       db.rows<{ name: string; inquiry_date: string | null }>('select name, inquiry_date from public.inquiries where report_id = $1 order by inquiry_date desc nulls last', [id]),
       db.rows<{ kind: string; court: string | null; amount_cents: number | null; filed_date: string | null }>('select kind, court, amount_cents, filed_date from public.public_records where report_id = $1', [id]),
       db.rows<{ kind: string; value: string }>('select kind, value from public.report_identity_items where report_id = $1 order by kind', [id]),
@@ -55,11 +61,16 @@ export default async function ReportReview({ params, searchParams }: { params: P
   });
   if (!data) notFound();
   const { r, identity, inquiries, records, mark } = data;
-  // Negative items first, collections at the very top: they are what the client hired us for.
-  const rank = (t: TL) => (t.item_type === 'collection' ? 0 : isNegative(t) ? 1 : 2);
-  const tradelines = [...data.tradelines].sort((a, b) => rank(a) - rank(b) || a.creditor_name.localeCompare(b.creditor_name));
-  const collections = tradelines.filter((t) => t.item_type === 'collection');
-  const lates = tradelines.filter((t) => t.item_type !== 'collection' && isNegative(t));
+  // Every account carries what its words say it is (src/lib/credit/account-kind.ts). Negative ones first, collections
+  // at the very top: they are what the client hired us for.
+  // Shown: the label with any AI suggestion. Counted: what the report's words or a person say (confirmedLabel).
+  const labels = new Map(data.tradelines.map((t) => [t.id, accountLabel(t)]));
+  const kindOf = (t: TL) => confirmedLabel(t).kind;
+  const isColl = (t: TL) => isCollectorAccount(t) || kindOf(t) === 'collection';
+  const tradelines = [...data.tradelines].sort((a, b) => (isColl(b) ? 1 : 0) - (isColl(a) ? 1 : 0) || labelOrder(labels.get(a.id)!.kind) - labelOrder(labels.get(b.id)!.kind) || a.creditor_name.localeCompare(b.creditor_name));
+  const collections = tradelines.filter(isColl);
+  const lates = tradelines.filter((t) => !isColl(t) && (kindOf(t) === 'late' || kindOf(t) === 'was_late'));
+  const otherBad = tradelines.filter((t) => !isColl(t) && isBadKind(kindOf(t)) && kindOf(t) !== 'late' && kindOf(t) !== 'was_late');
   const owedInCollections = collections.reduce((sum, t) => sum + (t.balance_cents ?? 0), 0);
   const pending = r.status === 'pending_review';
   const needsConfirm = tradelines.filter((t) => lowConfidenceFields(t).length > 0).length;
@@ -99,12 +110,13 @@ export default async function ReportReview({ params, searchParams }: { params: P
       )}
       {/* Negative items stay red, as figures with a label and a rule instead of one loud box: what they are is said in
           words, and the accounts themselves carry the same red rule in the list below. */}
-      {collections.length + lates.length > 0 ? (
+      {collections.length + lates.length + otherBad.length > 0 ? (
         <section aria-label="Negative items" className="mt-7">
           <h2 className="flex items-center gap-2 text-lg font-semibold text-bad"><AlertOctagon size={18} aria-hidden className="shrink-0" />Negative items on this report</h2>
-          <div className="mt-3 grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-3">
+          <div className="mt-3 grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-4">
             <StatFigure tone="bad" label={`Collection${collections.length === 1 ? '' : 's'}`} value={collections.length} />
             <StatFigure tone="bad" label={`Late or past-due account${lates.length === 1 ? '' : 's'}`} value={lates.length} />
+            {otherBad.length > 0 && <StatFigure tone="bad" label={`Charge-off${otherBad.length === 1 ? '' : 's'} and other negative`} value={otherBad.length} />}
             {owedInCollections > 0 && <StatFigure tone="bad" label="In collections" value={money(owedInCollections)} />}
           </div>
           <p className="mt-3 text-sm text-muted">{pending ? 'Approve this report to turn these into dispute suggestions for the client.' : <>These are on the client’s <Link className="link" href={`/app/clients/${r.client_id}/compare`}>dispute suggestions</Link>.</>}</p>
@@ -123,8 +135,8 @@ export default async function ReportReview({ params, searchParams }: { params: P
           <ul className="panel divide-y divide-line/70">
             {tradelines.map((t) => {
               const low = lowConfidenceFields(t);
-              const isColl = t.item_type === 'collection';
-              const neg = isColl || isNegative(t);
+              const kl = labels.get(t.id)!;
+              const neg = isColl(t) || isBadKind(kl.kind);
               const statuses = [t.item_type === 'collection' ? 'Collection' : 'Account', t.item_type === 'collection' ? t.account_status?.replace(/^collection(?: account)?[:.]?\s*/i, '') || null : t.account_status, t.payment_status, t.original_creditor ? `original creditor ${t.original_creditor}` : null].filter((v, i, all) => !!v && all.findIndex((o) => o?.toLowerCase() === v.toLowerCase()) === i).join(' · ');
               return (
                 <li key={t.id} className={neg ? 'border-l-4 border-bad bg-bad-soft/25 px-5 py-4 sm:px-6' : 'px-5 py-4 sm:px-6'}>
@@ -132,9 +144,10 @@ export default async function ReportReview({ params, searchParams }: { params: P
                     <div className="min-w-0">
                       <h3 className={`${neg ? 'text-base font-semibold text-bad' : 'text-[0.9375rem] font-semibold'} leading-snug [overflow-wrap:anywhere]`}>{t.creditor_name} {t.account_last4 && <span className="font-normal text-muted">••{t.account_last4}</span>}</h3>
                       <p className="mt-0.5 text-[0.8125rem] text-muted">{statuses}</p>
+                      <p className="mt-0.5 text-[0.8125rem] text-muted [overflow-wrap:anywhere]">{labelBasis(kl)}</p>
                     </div>
                     <div className="flex flex-wrap items-center gap-1.5">
-                      {isColl ? <Badge tone="bad"><AlertOctagon size={12} aria-hidden /> Collection</Badge> : neg && <Badge tone="bad"><AlertOctagon size={12} aria-hidden /> Late payments</Badge>}
+                      <KindBadge label={kl} />
                       {/* A badge is one line. A reader that holds every field for review (TransUnion's does) would make
                           it wider than a phone, so past two fields it gives the count; each field is listed just below. */}
                       {low.length > 0 ? <Badge tone="warn"><AlertTriangle size={12} aria-hidden /> Confirm {low.length > 2 ? `${low.length} fields` : low.map(fieldLabel).join(', ')}</Badge> : <Badge tone="ok"><CheckCircle2 size={12} aria-hidden /> Read cleanly</Badge>}

@@ -1,5 +1,43 @@
 # Changelog
 
+## Every account labelled good or bad; collections, medical and bankruptcy fill themselves in (unreleased)
+
+Migration `0034_account_labels.sql`: one nullable column, `tradelines.kind_label`, for a person's label or an AI
+suggestion. Additive; nothing existing changes. No new dependency.
+
+- **Every account says what it is**: Collection, Charge-off, Foreclosure, Repossession, In bankruptcy, Settled, Late
+  now, Late payments in the history, Negative item (red); Good standing, Nothing negative shown (green); or Not
+  labelled. Read from the report's own words by rules (free), with the words it rests on shown beside it. On the
+  Reports tab ("Accounts, good and bad", negative first), the report review page, the three-bureau comparison and the
+  new dispute form.
+- **A person can change any label**; it wins over the report's words (both are shown when they differ) and stays with
+  the account on later reports.
+- **AI suggests labels for what the rules cannot read** (2 AI credits a press, only when something is kept): it sees
+  the account's own words, must quote them, and a person confirms each suggestion before it counts.
+- **Collector notices**: every collector's account on the reports is listed with its account already chosen; only
+  the date on the notice is left to enter.
+- **Medical collections**: a collector whose own name sounds medical is marked as a suggestion to tick.
+- **Bankruptcy**: a bankruptcy public record on a report fills in the chapter and filing date (saved only when a person
+  presses Save).
+- **New dispute**: accounts listed negative first with their label; "Suggested from the account" picks the type of
+  dispute from the label, and never "not mine" or identity theft.
+- The review page counts charge-offs and other negative accounts beside collections and late payments.
+- After an independent review: an AI suggestion is shown but does nothing (no finding, no pre-chosen notice, no
+  suggested dispute) until a person confirms it; AI never turns an account green (good standing is a hint to
+  confirm); AI answers must quote whole, un-negated words of the account's own kind; amounts, long numbers, joint
+  holders' remarks and the client's name are kept out of what AI is sent. Collector notices and the medical screen
+  are for collectors' accounts only (a creditor's own account "in collection" or "transferred to recovery" is
+  negative but has no collector); a collector's name that sounds medical is a suggestion, not a finding. Zero
+  amounts, "less than the full balance", "not paid as agreed", "$0.00 past due" and Experian's history summary are
+  read correctly. Accounts without a number are matched across bureaus and reports by creditor and open date.
+  Labelling, notices, medical answers and the bankruptcy record are written only for the workspace the person is
+  working in, also for someone who is staff in two.
+- Rules adapted from the MIT-licensed Errata project's classifier, with Metro 2 codes (list from the Apache-2.0
+  moov-io/metro2 library). CreditMaster Pro (proprietary) was read for ideas only; nothing was taken from it.
+- Tests: `tests/unit/account-kind.test.ts` (wordings from the readers and the fixtures), `tests/unit/account-labels.test.ts`
+  (the checks on an AI reply), `tests/db/account-labels.test.ts` (labels kept and carried, AI paid only when kept,
+  never over a person's label, never another workspace's, the case tools).
+
 ## Ask about your clients, TransUnion reports read, long reports (unreleased)
 
 Migration `0033_assistant_questions.sql`: one new table (each person's own questions and answers, row-level security,

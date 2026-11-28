@@ -347,6 +347,36 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
       await staff.screenshot({ path: `${SHOTS}/04-compare.png`, fullPage: true, caret: 'initial' });
     });
 
+    await check('every account is labelled; the collection is already chosen for its notice; the dispute type is suggested from it', async () => {
+      const clientId = clientUrl.split('/').pop();
+      await staff.goto(clientUrl + '?tab=reports');
+      const accounts = staff.locator('section#accounts');
+      await accounts.getByText('1 negative').waitFor();
+      const coll = accounts.locator('li', { hasText: 'FIRST RECOVERY LLC' });
+      await coll.getByText('Collection', { exact: true }).first().waitFor(); // the badge (the label choices below it are folded away)
+      await coll.getByText('Listed under collections.').waitFor();
+      await coll.getByText('Experian, Equifax').waitFor(); // one row for the account, however many bureaus report it
+      await accounts.getByText('1 account with nothing negative').click();
+      await accounts.locator('li', { hasText: 'ACME BANK USA' }).getByText('Good standing', { exact: true }).first().waitFor();
+      // Collector notices: the collection on the reports is listed with its account chosen; only the date is typed.
+      await staff.locator('#case-tools').getByText('Collector notices (validation period)').click();
+      // The notice row is the form that names the collection and has its own Record button (the medical list names it too).
+      const noticeRow = () => staff.locator('#case-tools form', { hasText: 'FIRST RECOVERY LLC', has: staff.getByRole('button', { name: 'Record', exact: true }) });
+      await noticeRow().getByLabel('Date on the notice').fill('2026-01-10');
+      await noticeRow().getByRole('button', { name: 'Record', exact: true }).click();
+      await staff.locator('#case-tools').getByText(/Validation period end(s|ed) /).first().waitFor({ timeout: 10000 });
+      if (await noticeRow().count()) throw new Error('the collection is still offered for a notice after one was recorded');
+      // New dispute: the account list leads with what is negative, and the type follows the account's label.
+      await staff.goto(BASE + `/app/disputes/new?clientId=${clientId}`);
+      const pick = staff.getByLabel('Account or item');
+      const first = (await pick.locator('option').nth(1).innerText());
+      if (!/FIRST RECOVERY LLC .*· Collection$/.test(first)) throw new Error('the negative account is not listed first with its label: ' + first);
+      await pick.selectOption({ label: first });
+      await staff.getByRole('button', { name: 'Continue' }).click();
+      await expectText(staff, 'Collection — request validation');
+      await staff.goto(clientUrl + '/compare');
+    });
+
     await check('start a dispute from the finding; reason is drafted from the evidence', async () => {
       await staff.locator('li', { hasText: 'Balance differs for ACME BANK USA' }).getByRole('link', { name: /Start dispute/ }).click();
       await staff.waitForURL(/disputes\/new/);
