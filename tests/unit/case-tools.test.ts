@@ -77,6 +77,16 @@ describe('medical collection screen', () => {
     expect(medicalBasis(med({ original_creditor: 'Riverside Hospital' }))).toBe('report');
     expect(medicalBasis(med({ medical_flag: true }))).toBe('staff');
     expect(medicalBasis(med({ remarks: 'Medical', medical_flag: false }))).toBeNull(); // staff's answer wins
+    // The collector's own name is a suggestion, below what the report says and what staff said.
+    expect(medicalBasis(med({ creditor_name: 'VALLEY RADIOLOGY ASSOC' }))).toBe('name');
+    expect(medicalBasis(med({ creditor_name: 'VALLEY RADIOLOGY ASSOC', medical_flag: false }))).toBeNull();
+    expect(medicalBasis(med({ account_type: '90' }))).toBe('report'); // Metro 2 account type 90: medical debt
+  });
+
+  it('says so when only the collector’s name suggests medical', () => {
+    const f = medicalScreen([med({ creditor_name: 'VALLEY RADIOLOGY ASSOC', balance_cents: 30000 })], TODAY)[0]!;
+    expect(f.explanation).toMatch(/^The collector’s name \(“VALLEY RADIOLOGY ASSOC”\) suggests a medical debt; the report itself does not say so, and it is reported with a balance of \$300\.00, under \$500\./);
+    expect(f.evidence[0]).toMatchObject({ field: 'Collector’s name', value: 'VALLEY RADIOLOGY ASSOC', source: 'reported' });
   });
 
   it('applies the three policy tests to the reported values', () => {
@@ -94,7 +104,9 @@ describe('medical collection screen', () => {
   it('creates one finding per medical collection that meets a test, and none otherwise', () => {
     expect(medicalScreen([med({ balance_cents: 30000 })], TODAY)).toEqual([]); // under $500 but not medical
     expect(medicalScreen([med({ medical_flag: true })], TODAY)).toEqual([]); // medical but meets no test
-    expect(medicalScreen([med({ item_type: 'tradeline', medical_flag: true, balance_cents: 0 })], TODAY)).toEqual([]); // not a collection
+    // Not a collection: a card in good standing. (An account whose own status says "Collection" is one, wherever it is listed.)
+    expect(medicalScreen([med({ item_type: 'tradeline', account_type: 'Credit card', account_status: 'Open', payment_status: 'Current', medical_flag: true, balance_cents: 0 })], TODAY)).toEqual([]);
+    expect(medicalScreen([med({ item_type: 'tradeline', medical_flag: true, balance_cents: 0 })], TODAY)).toHaveLength(1);
     const [f, ...rest] = medicalScreen([med({ medical_flag: true, balance_cents: 30000, date_of_first_delinquency: '2026-03-01' })], TODAY);
     expect(rest).toEqual([]);
     expect(f!.dedupe_key).toBe('medical:experian:abc collections|4321');

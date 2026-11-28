@@ -12,7 +12,10 @@ import { UserError } from '../errors';
 import { businessToday } from '../letters/service';
 import { can, PermissionError, type Role } from '../rbac';
 import type { Evidence } from '../reports/analysis';
+import { BUREAU_LABEL, type Bureau } from '../util';
+import { accountLabel, isCollectionLine } from './account-kind';
 import { BANKRUPTCY_CHAPTERS, bankruptcyFindings, type Bankruptcy, type BankruptcyChapter, type BankruptcyLine } from './bankruptcy-audit';
+import { kindLabelSql } from './kind-label-sql';
 import { medicalScreen, type MedicalLine } from './medical-screen';
 import { validationPeriod, VALIDATION_PERIOD_DAYS, type NoticeDateKind, type ValidationPeriod } from './validation-clock';
 
@@ -25,13 +28,20 @@ export const COLLECTOR_NOTICE_CATEGORY = 'collector_notice';
 const isDay = (v: string) => /^\d{4}-\d{2}-\d{2}$/.test(v) && !Number.isNaN(new Date(`${v}T00:00:00Z`).getTime());
 const notFuture = (day: string) => day <= businessToday() || day <= new Date().toISOString().slice(0, 10);
 
-export type CaseLine = MedicalLine & BankruptcyLine;
+/** What tells a collection from another account (./account-kind.ts isCollectionLine), for one account row aliased `t`. */
+type NoticeAccount = { item_type: string; creditor_name: string; original_creditor: string | null; account_type: string | null; account_status: string | null; payment_status: string | null; payment_history: string | null; remarks: string | null; kind_label: unknown };
+const NOTICE_ACCOUNT_SQL = `t.item_type, t.creditor_name, t.original_creditor, t.account_type, t.account_status, t.payment_status, t.payment_history, t.remarks, ${kindLabelSql('t')}`;
 
-/** Every account on the newest approved report of each bureau, with staff's "medical debt" answer (carried over from an earlier report of the same account). */
+export type CaseLine = MedicalLine & BankruptcyLine & { kind_label: unknown };
+
+/**
+ * Every account on the newest approved report of each bureau, with staff's "medical debt" answer (carried over from an
+ * earlier report of the same account) and the account's stored label (./kind-label-sql.ts).
+ */
 export async function loadCaseLines(db: Db, clientId: string): Promise<CaseLine[]> {
   const rows = await db.rows<Omit<CaseLine, 'balance_cents'> & { balance_cents: string | number | null }>(
     `select t.id, t.bureau, t.item_type, t.creditor_name, t.original_creditor, t.account_last4, t.account_type, t.account_status, t.payment_status, t.payment_history, t.remarks,
-            t.balance_cents, t.date_opened::text, t.date_of_first_delinquency::text, t.match_key,
+            t.balance_cents, t.date_opened::text, t.date_of_first_delinquency::text, t.match_key, ${kindLabelSql('t')},
             coalesce((t.user_provided ->> 'medical')::boolean,
               (select (p.user_provided ->> 'medical')::boolean from public.tradelines p
                 where p.client_id = t.client_id and p.match_key = t.match_key and t.match_key ~ '^[^|]+\\|[^|]+$' and p.user_provided ? 'medical'
@@ -43,6 +53,34 @@ export async function loadCaseLines(db: Db, clientId: string): Promise<CaseLine[
       order by t.creditor_name, t.bureau`, [clientId]);
   return rows.map((r) => ({ ...r, balance_cents: r.balance_cents == null ? null : Number(r.balance_cents) }));
 }
+
+/**
+ * What the newest approved reports say about a bankruptcy, to fill in the form before a person saves it: the newest
+ * bankruptcy public record (its chapter when it is 7 or 13, and its filing date), and how many accounts are reported as
+ * included in a bankruptcy. Nothing is saved from here; the discharge date is never on a report's record and is left
+ * for the person to enter from the client's papers.
+ */
+export interface BankruptcyOnReports {
+  record: { bureau: Bureau; kind: string; chapter: BankruptcyChapter | null; filedOn: string | null; status: string | null } | null;
+  accounts: number;
+}
+export async function loadBankruptcyOnReports(db: Db, clientId: string, lines?: CaseLine[]): Promise<BankruptcyOnReports> {
+  const recs = await db.rows<{ bureau: Bureau; kind: string; filed_date: string | null; status: string | null }>(
+    `select p.bureau, p.kind, p.filed_date::text, p.status from public.public_records p
+      where p.client_id = $1 and (p.kind ~* 'bankrupt|chapter' or coalesce(p.status, '') ~* 'bankrupt|chapter') and p.report_id in (
+        select distinct on (bureau) id from public.credit_reports where client_id = $1 and status = 'approved' and bureau is not null
+         order by bureau, coalesce(report_date, created_at::date) desc, created_at desc)
+      order by p.filed_date desc nulls last, p.bureau`, [clientId]);
+  const r = recs[0];
+  const chapter = r ? (/\b(?:chapter|ch\.?)\s*(7|13)\b/i.exec(`${r.kind} ${r.status ?? ''}`)?.[1] as BankruptcyChapter | undefined) ?? null : null;
+  const all = lines ?? await loadCaseLines(db, clientId);
+  return {
+    record: r ? { bureau: r.bureau, kind: r.kind, chapter, filedOn: r.filed_date, status: r.status } : null,
+    accounts: all.filter((t) => accountLabel(t).kind === 'bankruptcy').length,
+  };
+}
+export const bankruptcyRecordText = (r: NonNullable<BankruptcyOnReports['record']>) =>
+  `${BUREAU_LABEL[r.bureau]} reports “${r.kind}”${r.filedOn ? `, filed ${r.filedOn}` : ''}${r.status ? ` (${r.status})` : ''}`;
 
 export async function loadBankruptcy(db: Db, clientId: string): Promise<Bankruptcy | null> {
   const c = await db.row<{ chapter: string | null; filed_on: string | null; discharged_on: string | null }>(
@@ -105,10 +143,10 @@ export async function setMedicalFlags(db: Db, actor: CActor, clientId: string, l
   if (!can(actor.role, 'clients:write')) throw new PermissionError('clients:write');
   const yes = new Set(medical);
   for (const id of listed) {
-    const n = await db.run(
-      `update public.tradelines set user_provided = user_provided || jsonb_build_object('medical', $3::boolean) where id = $1 and client_id = $2 and item_type = 'collection'`,
-      [id, clientId, yes.has(id)]);
-    if (!n) throw new UserError('That account does not belong to this client.');
+    // A collection: listed under collections, or labelled one by its words or by a person (./account-kind.ts).
+    const t = await db.row<NoticeAccount>(`select ${NOTICE_ACCOUNT_SQL} from public.tradelines t where t.id = $1 and t.client_id = $2`, [id, clientId]);
+    if (!t || !isCollectionLine(t)) throw new UserError('That account does not belong to this client.');
+    await db.run(`update public.tradelines set user_provided = user_provided || jsonb_build_object('medical', $3::boolean) where id = $1 and client_id = $2`, [id, clientId, yes.has(id)]);
   }
   await logEvent(db, actor, clientId, 'case_tools', `Medical debt marked on ${yes.size} of ${listed.length} collection account${listed.length === 1 ? '' : 's'}`);
   await syncCaseFindings(db, actor, clientId);
@@ -116,14 +154,23 @@ export async function setMedicalFlags(db: Db, actor: CActor, clientId: string, l
 
 // ---------------------------------------------------------------- collector notices (validation period)
 
-export interface CollectorNotice { id: string; tradelineId: string | null; collectorName: string; kind: NoticeDateKind; date: string; period: ValidationPeriod; isCollection: boolean }
+export interface CollectorNotice {
+  id: string; tradelineId: string | null; collectorName: string; kind: NoticeDateKind; date: string; period: ValidationPeriod; isCollection: boolean;
+  /** The account's creditor and number (reports/service.ts matchKey), so a notice is found again on a later report of the same account. */
+  matchKey: string | null;
+}
+
 
 export async function loadCollectorNotices(db: Db, clientId: string, today = businessToday()): Promise<CollectorNotice[]> {
-  const rows = await db.rows<{ id: string; tradeline_id: string | null; collector_name: string; date_kind: NoticeDateKind; notice_date: string; is_collection: boolean }>(
-    `select n.id, n.tradeline_id, n.collector_name, n.date_kind, n.notice_date::text,
-            exists (select 1 from public.tradelines t where t.id = n.tradeline_id and t.item_type = 'collection') as is_collection
-       from public.collector_notices n where n.client_id = $1 order by n.notice_date desc, n.created_at desc`, [clientId]);
-  return rows.map((r) => ({ id: r.id, tradelineId: r.tradeline_id, collectorName: r.collector_name, kind: r.date_kind, date: r.notice_date, isCollection: r.is_collection, period: validationPeriod({ kind: r.date_kind, date: r.notice_date }, today) }));
+  const rows = await db.rows<{ id: string; tradeline_id: string | null; collector_name: string; date_kind: NoticeDateKind; notice_date: string; match_key: string | null } & Partial<NoticeAccount>>(
+    `select n.id, n.tradeline_id, n.collector_name, n.date_kind, n.notice_date::text, t.match_key, ${NOTICE_ACCOUNT_SQL}
+       from public.collector_notices n left join public.tradelines t on t.id = n.tradeline_id
+      where n.client_id = $1 order by n.notice_date desc, n.created_at desc`, [clientId]);
+  return rows.map((r) => ({
+    id: r.id, tradelineId: r.tradeline_id, collectorName: r.collector_name, kind: r.date_kind, date: r.notice_date, matchKey: r.match_key ?? null,
+    isCollection: !!r.tradeline_id && r.item_type != null && isCollectionLine(r as NoticeAccount),
+    period: validationPeriod({ kind: r.date_kind, date: r.notice_date }, today),
+  }));
 }
 
 export async function recordCollectorNotice(db: Db, actor: CActor, input: { clientId: string; tradelineId?: string | null; collectorName?: string | null; kind: NoticeDateKind; date: string }): Promise<string> {
@@ -133,9 +180,10 @@ export async function recordCollectorNotice(db: Db, actor: CActor, input: { clie
   if (!isDay(input.date) || !notFuture(input.date)) throw new UserError('Enter the date on or before today.');
   let name = input.collectorName?.trim() ?? '';
   if (input.tradelineId) {
-    const t = await db.row<{ creditor_name: string; client_id: string; item_type: string }>('select creditor_name, client_id, item_type from public.tradelines where id = $1', [input.tradelineId]);
+    const t = await db.row<NoticeAccount & { client_id: string }>(`select t.client_id, ${NOTICE_ACCOUNT_SQL} from public.tradelines t where t.id = $1`, [input.tradelineId]);
     if (!t || t.client_id !== input.clientId) throw new UserError('That account does not belong to this client.');
-    if (t.item_type !== 'collection') throw new UserError('Choose a collection account.');
+    // Listed under collections, or labelled one by its own words or by a person (./account-kind.ts).
+    if (!isCollectionLine(t)) throw new UserError('Choose a collection account.');
     name = name || t.creditor_name;
   }
   if (!name) throw new UserError('Choose the collection account or enter the collector’s name.');

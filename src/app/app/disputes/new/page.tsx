@@ -7,7 +7,8 @@ import { loadServiceStatus } from '@/lib/agreements';
 import { requireStaff } from '@/lib/auth/context';
 import { asWritten, draftReason, REASON_PROMPT, reportedFor } from '@/lib/disputes/reasons';
 import { loadReportedRows } from '@/lib/disputes/service';
-import { CATEGORIES, categoryForFinding, FIELD_OPTIONS, mustNameAccount } from '@/lib/disputes/workflow';
+import { CATEGORIES, categoryForAccount, categoryForFinding, FIELD_OPTIONS, mustNameAccount } from '@/lib/disputes/workflow';
+import { accountLabel, KIND_META, labelOrder } from '@/lib/credit/account-kind';
 import { letterForCategory } from '@/lib/letters/brief';
 import type { Evidence } from '@/lib/reports/analysis';
 import { BUREAU_LABEL, BUREAUS, isUuid } from '@/lib/util';
@@ -71,8 +72,15 @@ export default async function NewDisputePage({ searchParams }: { searchParams: P
   if (sp.specialty || sp.agency) return <SpecialtySteps client={client} agencyKey={sp.agency} />;
 
   const tradelineId = sp.tradelineId ?? (finding?.tradeline_ids.find((id) => tradelines.some((t) => t.id === id)) ?? '');
-  const category = sp.category ?? (finding ? categoryForFinding(finding) : undefined);
   const tl = tradelines.find((t) => t.id === tradelineId);
+  // "Suggested from the account": the type follows the account's label (src/lib/credit/account-kind.ts). An account
+  // with nothing negative gets no suggestion, and the person chooses.
+  const tlLabel = tl ? accountLabel(tl) : null;
+  const suggested = tl && tlLabel ? categoryForAccount(tlLabel.kind, tl.item_type) : undefined;
+  const askedSuggestion = sp.category === 'suggested';
+  const category = askedSuggestion ? suggested : sp.category ?? (finding ? categoryForFinding(finding) : undefined);
+  const labelled = tradelines.map((t) => ({ t, label: accountLabel(t) }))
+    .sort((a, b) => labelOrder(a.label.kind) - labelOrder(b.label.kind) || a.t.creditor_name.localeCompare(b.t.creditor_name));
 
   // ---- Step 2: what are we disputing?
   if (!category || !CATEGORIES[category] || CATEGORIES[category].target === 'agency') {
@@ -81,11 +89,18 @@ export default async function NewDisputePage({ searchParams }: { searchParams: P
         <PageHeader title="New dispute" subtitle={`Step 2 of 3 · What is being disputed for ${client.full_name}?`} back={{ href: '/app/disputes/new', label: 'Choose client' }} />
         <form method="get" className="card card-pad mx-auto max-w-2xl space-y-5">
           <input type="hidden" name="clientId" value={client.id} />
+          {askedSuggestion && !category && (
+            <Notice tone="info" title="No type suggested">
+              {tl ? <>The report shows nothing negative for {tl.creditor_name}{tl.account_last4 ? ` ••${tl.account_last4}` : ''} ({KIND_META[tlLabel!.kind].label.toLowerCase()}), so no type of dispute is suggested. Choose one only if you have reason to believe something on it is inaccurate.</> : 'Choose an account to get a suggested type, or choose the type of dispute.'}
+            </Notice>
+          )}
           <Select label="Account or item" name="tradelineId" defaultValue={tradelineId} placeholder="No specific account (e.g. personal information)"
-            options={tradelines.map((t) => ({ value: t.id, label: `${t.creditor_name}${t.account_last4 ? ` ••${t.account_last4}` : ''} — ${BUREAU_LABEL[t.bureau]}${t.item_type === 'collection' ? ' (collection)' : ''}` }))}
-            hint={tradelines.length ? undefined : 'No approved reports yet. Upload and approve a report first, or continue without an account.'} />
-          <Select label="Type of dispute" name="category" required defaultValue={tl?.item_type === 'collection' ? 'unverifiable_collection' : ''} placeholder="Choose…"
-            options={Object.entries(CATEGORIES).filter(([, v]) => v.target !== 'agency').map(([k, v]) => ({ value: k, label: v.label }))} />
+            options={labelled.map(({ t, label }) => ({ value: t.id, label: `${t.creditor_name}${t.account_last4 ? ` ••${t.account_last4}` : ''} — ${BUREAU_LABEL[t.bureau]} · ${KIND_META[label.kind].label}` }))}
+            hint={tradelines.length ? 'Negative accounts are listed first, each with what its report says it is.' : 'No approved reports yet. Upload and approve a report first, or continue without an account.'} />
+          <Select label="Type of dispute" name="category" required defaultValue={tl ? suggested ?? '' : tradelines.length ? 'suggested' : ''} placeholder="Choose…"
+            options={[...(tradelines.length ? [{ value: 'suggested', label: 'Suggested from the account (recommended)' }] : []),
+              ...Object.entries(CATEGORIES).filter(([, v]) => v.target !== 'agency').map(([k, v]) => ({ value: k, label: v.label }))]}
+            hint={tl && suggested ? `Suggested from the account’s label: ${KIND_META[tlLabel!.kind].label.toLowerCase()}. Change it if it does not fit.` : 'A suggestion follows the account’s label. It is never “not mine” or identity theft: only the client can say that.'} />
           <div className="flex justify-end"><button className="btn-primary" type="submit">Continue</button></div>
         </form>
         <p className="mx-auto mt-4 max-w-2xl text-sm text-muted">

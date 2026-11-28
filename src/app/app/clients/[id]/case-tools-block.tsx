@@ -4,8 +4,9 @@ import { ChevronDown } from 'lucide-react';
 import { ActionForm, Check, Field, Select, SubmitButton } from '@/components/forms';
 import { Badge, Section, type Tone } from '@/components/ui';
 import type { Ctx } from '@/lib/auth/context';
+import { isCollectionLine } from '@/lib/credit/account-kind';
 import { AUDIT_NOTE_TEXT, auditAccounts, bankruptcyFallOff } from '@/lib/credit/bankruptcy-audit';
-import { loadBankruptcy, loadCaseLines, loadCollectorNotices } from '@/lib/credit/case-tools';
+import { bankruptcyRecordText, loadBankruptcy, loadBankruptcyOnReports, loadCaseLines, loadCollectorNotices, type CaseLine } from '@/lib/credit/case-tools';
 import { MEDICAL_POLICY_SOURCE, medicalBasis, medicalTests, reportSaysMedical, type MedicalTest } from '@/lib/credit/medical-screen';
 import { AFTER_PERIOD_NOTE } from '@/lib/credit/validation-clock';
 import { businessToday } from '@/lib/letters/service';
@@ -36,11 +37,23 @@ function Tool({ title, badge, tone = 'neutral', children }: { title: string; bad
  */
 export async function CaseToolsBlock({ ctx, clientId }: { ctx: Ctx; clientId: string }) {
   const today = businessToday();
-  const d = await ctx.tx(async (db) => ({ notices: await loadCollectorNotices(db, clientId, today), lines: await loadCaseLines(db, clientId), bankruptcy: await loadBankruptcy(db, clientId) }));
+  const d = await ctx.tx(async (db) => {
+    const lines = await loadCaseLines(db, clientId);
+    return { notices: await loadCollectorNotices(db, clientId, today), lines, bankruptcy: await loadBankruptcy(db, clientId), onReports: await loadBankruptcyOnReports(db, clientId, lines) };
+  });
   const canWrite = ctx.can('clients:write');
   const canDispute = ctx.can('disputes:write');
-  const collections = d.lines.filter((t) => t.item_type === 'collection');
+  // Listed under collections, or labelled one by its words or by a person (src/lib/credit/account-kind.ts).
+  const collections = d.lines.filter((t) => isCollectionLine(t));
   const label = (t: { creditor_name: string; account_last4: string | null }) => `${t.creditor_name}${t.account_last4 ? ` ••${t.account_last4}` : ''}`;
+  // One row per collection account, however many bureaus report it (same collector and account number), with no
+  // notice recorded yet for it on this report or an earlier one.
+  const exact = (k: string) => /^[^|]+\|[^|]+$/.test(k);
+  const byAccount = new Map<string, CaseLine[]>();
+  for (const t of collections) { const k = exact(t.match_key) ? t.match_key : t.id; byAccount.set(k, [...(byAccount.get(k) ?? []), t]); }
+  const noticed = (k: string, ls: CaseLine[]) => d.notices.some((n) => (n.tradelineId && ls.some((t) => t.id === n.tradelineId)) || (exact(k) && n.matchKey === k));
+  const toRecord = [...byAccount.entries()].filter(([k, ls]) => !noticed(k, ls)).map(([k, ls]) => ({ key: k, lines: ls, first: ls[0]! }));
+  const bk = d.onReports.record;
 
   const open = d.notices.filter((n) => n.period.open);
   const soonest = [...open].sort((a, b) => a.period.endsOn.localeCompare(b.period.endsOn))[0];
@@ -55,7 +68,7 @@ export async function CaseToolsBlock({ ctx, clientId }: { ctx: Ctx; clientId: st
       hint={<>What was entered or reported, and what is worth checking. Findings from these appear in the <Link className="link" href={`/app/clients/${clientId}/compare#findings`}>three-bureau comparison</Link>, where a person decides what to do.</>}>
       <ul className="divide-y divide-line/70">
         <Tool title="Collector notices (validation period)" tone={soonest ? (soonest.period.daysLeft <= 7 ? 'warn' : 'info') : 'neutral'}
-          badge={soonest ? `${soonest.period.daysLeft === 0 ? 'Last day today' : `${soonest.period.daysLeft} day${soonest.period.daysLeft === 1 ? '' : 's'} left`}` : d.notices.length ? 'Period ended' : 'None recorded'}>
+          badge={soonest ? `${soonest.period.daysLeft === 0 ? 'Last day today' : `${soonest.period.daysLeft} day${soonest.period.daysLeft === 1 ? '' : 's'} left`}` : d.notices.length ? 'Period ended' : byAccount.size ? `${byAccount.size} collection${byAccount.size === 1 ? '' : 's'} on the reports` : 'None recorded'}>
           <p className="text-muted">
             A separate clock from a credit-report dispute: this is the Fair Debt Collection Practices Act deadline for writing to the <strong className="font-medium text-ink">collector</strong>, not a bureau.
             The validation period generally ends 30 days after the client receives the collector’s notice (12 CFR 1006.34(b)(5)). The notice itself states the end date the collector uses: go by the notice if it differs.
@@ -95,15 +108,44 @@ export async function CaseToolsBlock({ ctx, clientId }: { ctx: Ctx; clientId: st
             </p>
           )}
           {d.notices.some((n) => !n.period.open) && <p className="text-[0.8125rem] text-muted">{AFTER_PERIOD_NOTE}</p>}
+          {canWrite && toRecord.length > 0 && (
+            <div className="space-y-2 border-t border-line pt-3">
+              <p className="text-[0.8125rem] text-muted">
+                {toRecord.length === 1 ? 'The collection' : `The ${toRecord.length} collections`} on the reports, already chosen. When the client has a notice from the collector, enter the date on it: only the client’s notice shows that date, so it is never filled in for them.
+              </p>
+              <ul className="divide-y divide-line/70 rounded-xl border border-line px-3.5">
+                {toRecord.map(({ key, lines, first }) => (
+                  <li key={key} className="py-3">
+                    <ActionForm action={recordCollectorNoticeAction} resetOnSuccess className="grid gap-x-3 gap-y-2 sm:grid-cols-[minmax(0,1fr)_auto_auto_auto] sm:items-end">
+                      <input type="hidden" name="clientId" value={clientId} /><input type="hidden" name="tradelineId" value={first.id} />
+                      <span className="min-w-0 self-center">
+                        <span className="block font-medium [overflow-wrap:anywhere]">{label(first)}</span>
+                        <span className="block text-[0.8125rem] text-muted">
+                          {lines.map((t) => BUREAU_LABEL[t.bureau]).join(', ')}{first.balance_cents != null ? ` · ${money(first.balance_cents)}` : ''}{first.original_creditor ? ` · original creditor ${first.original_creditor}` : ''}
+                        </span>
+                      </span>
+                      <Select label="The notice was" name="kind" defaultValue="received" options={[{ value: 'received', label: 'Received by the client' }, { value: 'sent', label: 'Sent (receipt presumed)' }]} />
+                      <Field label="Date on the notice" name="date" type="date" required max={today} />
+                      <SubmitButton variant="secondary" className="btn-sm">Record</SubmitButton>
+                    </ActionForm>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           {canWrite && (
-            <ActionForm action={recordCollectorNoticeAction} resetOnSuccess className="grid gap-3 border-t border-line pt-3 sm:grid-cols-2">
-              <input type="hidden" name="clientId" value={clientId} />
-              <Select label="Collection account" name="tradelineId" placeholder="Not on a report yet" options={collections.map((t) => ({ value: t.id, label: `${label(t)} — ${BUREAU_LABEL[t.bureau]}` }))} />
-              <Field label="Collector name" name="collectorName" maxLength={200} hint="Needed only when the account is not on a report." />
-              <Select label="The date below is when the notice was" name="kind" defaultValue="received" options={[{ value: 'received', label: 'Received by the client' }, { value: 'sent', label: 'Sent by the collector (receipt is presumed)' }]} />
-              <Field label="Notice date" name="date" type="date" required max={today} />
-              <div className="sm:col-span-2"><SubmitButton variant="secondary">Record notice</SubmitButton></div>
-            </ActionForm>
+            <details className="group/other border-t border-line pt-3">
+              <summary className="flex w-fit cursor-pointer list-none items-center gap-1 rounded-md text-[0.8125rem] font-semibold text-brand-strong [&::-webkit-details-marker]:hidden">
+                A collector that is not on a report <ChevronDown size={14} aria-hidden className="transition-transform group-open/other:rotate-180" />
+              </summary>
+              <ActionForm action={recordCollectorNoticeAction} resetOnSuccess className="mt-3 grid gap-3 sm:grid-cols-3">
+                <input type="hidden" name="clientId" value={clientId} />
+                <Field label="Collector name" name="collectorName" required maxLength={200} />
+                <Select label="The notice was" name="kind" defaultValue="received" options={[{ value: 'received', label: 'Received by the client' }, { value: 'sent', label: 'Sent by the collector (receipt is presumed)' }]} />
+                <Field label="Date on the notice" name="date" type="date" required max={today} />
+                <div className="sm:col-span-3"><SubmitButton variant="secondary">Record notice</SubmitButton></div>
+              </ActionForm>
+            </details>
           )}
         </Tool>
 
@@ -123,19 +165,28 @@ export async function CaseToolsBlock({ ctx, clientId }: { ctx: Ctx; clientId: st
                   </Check>
                   <span className="flex flex-wrap gap-1.5">
                     {t.medical_flag == null && reportSaysMedical(t) && <Badge tone="info">Report says medical</Badge>}
+                    {t.medical_flag == null && basis === 'name' && <Badge tone="info">Name suggests medical: confirm</Badge>}
                     {basis && tests.length > 0 && <Badge tone="warn">Worth checking: {tests.map((k) => TEST_LABEL[k]).join(', ')}</Badge>}
                   </span>
                 </div>
               ))}
-              <p className="hint">An account is marked automatically only when the report’s own account type, remarks or original creditor say it is medical. Most reports do not, so tick the ones the client’s records show are medical.</p>
+              <p className="hint">Ticked automatically when the report’s account type, remarks or original creditor say medical, or when the collector’s own name does (that one is a suggestion: confirm it). Untick any that are not, tick the ones the client’s records show are medical, and save.</p>
               {canWrite && <SubmitButton variant="secondary">Save medical debts</SubmitButton>}
             </ActionForm>
           </Tool>
         )}
 
-        <Tool title="Bankruptcy" tone={auditToCheck ? 'warn' : d.bankruptcy ? 'info' : 'neutral'}
-          badge={d.bankruptcy ? `Chapter ${d.bankruptcy.chapter}${d.bankruptcy.dischargedOn ? (auditToCheck ? ` · ${auditToCheck} worth checking` : ' · discharged') : ' · no discharge date'}` : 'None recorded'}>
+        <Tool title="Bankruptcy" tone={auditToCheck ? 'warn' : d.bankruptcy ? 'info' : bk || d.onReports.accounts ? 'warn' : 'neutral'}
+          badge={d.bankruptcy ? `Chapter ${d.bankruptcy.chapter}${d.bankruptcy.dischargedOn ? (auditToCheck ? ` · ${auditToCheck} worth checking` : ' · discharged') : ' · no discharge date'}` : bk ? 'On a report: not recorded' : d.onReports.accounts ? 'Mentioned on the reports' : 'None recorded'}>
           <p className="text-muted">Entered by staff from the client’s bankruptcy papers. No court record is read, and only those papers show which debts were discharged.</p>
+          {!d.bankruptcy && bk && (
+            <p>
+              Filled in below from the reports: {bankruptcyRecordText(bk)}.{bk.chapter ? '' : ' Its chapter is not 7 or 13, so choose it from the papers.'} Check it against the client’s papers, add the discharge date if there is one, and save.
+            </p>
+          )}
+          {!d.bankruptcy && !bk && d.onReports.accounts > 0 && (
+            <p>{d.onReports.accounts === 1 ? 'An account' : `${d.onReports.accounts} accounts`} on the reports {d.onReports.accounts === 1 ? 'is' : 'are'} reported as included in a bankruptcy, but no bankruptcy record is on them. If the client filed, enter it from their papers.</p>
+          )}
           {d.bankruptcy && fallOff && (
             <p>
               The bankruptcy itself may generally be reported until <span className="font-medium tabular-nums">{fmtDate(fallOff.statute)}</span>, 10 years from the filing date (15 U.S.C. § 1681c(a)(1)).
@@ -165,8 +216,8 @@ export async function CaseToolsBlock({ ctx, clientId }: { ctx: Ctx; clientId: st
           {canWrite && (
             <ActionForm action={setBankruptcyAction} className="grid gap-3 border-t border-line pt-3 sm:grid-cols-3">
               <input type="hidden" name="clientId" value={clientId} />
-              <Select label="Chapter" name="chapter" defaultValue={d.bankruptcy?.chapter ?? ''} placeholder="No bankruptcy" options={[{ value: '7', label: 'Chapter 7' }, { value: '13', label: 'Chapter 13' }]} />
-              <Field label="Filing date" name="filedOn" type="date" defaultValue={d.bankruptcy?.filedOn} max={today} />
+              <Select label="Chapter" name="chapter" defaultValue={d.bankruptcy?.chapter ?? bk?.chapter ?? ''} placeholder="No bankruptcy" options={[{ value: '7', label: 'Chapter 7' }, { value: '13', label: 'Chapter 13' }]} />
+              <Field label="Filing date" name="filedOn" type="date" defaultValue={d.bankruptcy?.filedOn ?? (bk?.filedOn && bk.filedOn <= today ? bk.filedOn : undefined)} max={today} />
               <Field label="Discharge date" name="dischargedOn" type="date" defaultValue={d.bankruptcy?.dischargedOn} max={today} hint="Leave empty if not discharged." />
               <div className="sm:col-span-3"><SubmitButton variant="secondary">Save bankruptcy</SubmitButton></div>
             </ActionForm>

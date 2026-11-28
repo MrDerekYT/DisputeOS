@@ -722,6 +722,62 @@ carried out: the page comes back with "Not decided" and the report as it now sta
 the mark. The page takes the mark before it loads the rows, and approving, reading again and removing a row all lock
 the report row first, so none of them can slip in beside another.
 
+## What each account is: good, bad, or not labelled
+
+Every account on a client's reports carries a label that says what it is: **Collection, Charge-off, Foreclosure,
+Repossession, In bankruptcy, Settled, Late now, Late payments in the history, Negative item** (all red), **Good
+standing, Nothing negative shown** (green), or **Not labelled** (grey). It is shown on the client's Reports tab
+("Accounts, good and bad": negative ones first), on the report review page, on the three-bureau comparison and in the
+account list of the new dispute form. A label is a reading of what the report says, never a judgement that the report
+is right or wrong, and it says nothing about a credit score.
+
+Where a label comes from (`src/lib/credit/account-kind.ts`, `src/lib/credit/account-labels.ts`), in this order:
+
+1. **A person.** "Change label" on the Reports tab. A person's label always wins; when the report's words say
+   something else, both are shown. It is kept for that account (same creditor and account number) on the client's
+   later reports, and clearing it clears it there too. Stored in `tradelines.kind_label` (migration 0034).
+2. **The report's own words**, read by rules for free every time a page opens (so a corrected value is labelled
+   again at once): the section the account is listed in, its status, payment status, remarks and account type, and
+   the month-by-month history ("Late 30", "Paid, Closed; was 30 days past due", "Charged Off", "PLACED FOR
+   COLLECTION", "Included in bankruptcy", COL / CO / RPO / FC codes, bare Metro 2 status codes such as 97 or 93, and
+   the older R1–R9 ratings). An account that was charged off and is now paid reads as a charge-off; one that is current
+   but was late reads as late payments in the history. "Good standing" needs the words to say so (current, paid or
+   paying as agreed, never late); only neutral words (open, closed, paid) give "Nothing negative shown".
+3. **AI, for what the words do not settle** ("Ask AI about the accounts without a label", Reports tab). 2 AI credits
+   a press (`account_label`), charged only when at least one label is kept; up to 30 accounts at a time; an account
+   AI was asked about once is not sent again. AI is shown the account's own words only: company and original
+   creditor, account type, status, payment status, history, remarks. It is never sent the client's name, an address,
+   an amount or an account number. It must copy the words that show its answer, and a suggestion is dropped when
+   those words are not in that account, when a company name is used for anything but "collection" (a plainly named
+   collector or debt buyer), or when "good" rests on anything but a status or a history. A kept suggestion is marked
+   "AI suggestion" with the words it rests on, and a person's label replaces it. With no AI provider connected the
+   button is not offered and those accounts wait for a person. Tested with a stand-in model only.
+
+What the labels fill in:
+
+- **Collector notices** (Reports tab → Collections and bankruptcy): every collection on the reports is listed with
+  its account already chosen, one row per account however many bureaus report it; only the date on the collector's
+  notice is left to enter, because only the client's notice shows it. A collector that is on no report has its own
+  small form. A collection is one listed under collections, or labelled one by its words or by a person.
+- **Medical collections**: ticked when the report's account type, remarks or original creditor say medical (or a
+  bare Metro 2 account type 90), and also, as a suggestion marked "Name suggests medical: confirm", when only the
+  collector's own name does (radiology, hospital, anesthesia and similar).
+- **Bankruptcy**: when nothing is recorded and a report lists a bankruptcy public record, the chapter (7 or 13) and the
+  filing date are filled into the form from it, with a line saying which report says so. Nothing is saved until a
+  person checks it against the papers and presses Save; the discharge date is never on a report's record.
+- **New dispute**: accounts are listed negative first with their label, and "Suggested from the account" picks the
+  type of dispute from the label (collection: validation request; late: late payment accuracy; charge-off,
+  repossession, foreclosure, settled: account or payment status; in bankruptcy: included in bankruptcy). An account
+  with nothing negative gets no suggestion. It is never "not mine" or identity theft: only the client can say that.
+
+Sources: the kinds and flags follow the classifier of the MIT-licensed Errata project (github.com/wjwhitmire/errata,
+`src/errata/model.py`, Copyright (c) 2026 Will Whitmire), and the medical words add its list (anesthesia, pathology,
+orthopedics, surgery, laboratory). The bare two-digit status codes and the account type codes 48, 0C and 90 are Metro 2
+codes, whose list is in the Apache-2.0 moov-io/metro2 library; what each code means is the Metro 2 format's own
+definition. The code is ours. The proprietary CreditMaster Pro project was read for ideas only (no code taken): it has no
+account classifier, and its report parser turns any status it does not recognise into "current", which is the mistake
+"Not labelled" exists to avoid.
+
 ## Reading reports with AI: other layouts, scans and photos
 
 Off by default, and not needed for the three bureaus' AnnualCreditReport.com reports (above). The rules-based parser

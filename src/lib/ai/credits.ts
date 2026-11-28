@@ -15,6 +15,7 @@ export const AI_COSTS = {
   guide_answer: 1,
   report_scan: 10,
   client_question: 2,
+  account_label: 2,
 } as const;
 export type AiFeature = keyof typeof AI_COSTS;
 
@@ -24,6 +25,7 @@ export const AI_FEATURE_LABEL: Record<AiFeature, string> = {
   guide_answer: 'Credit guide answer worded by AI',
   report_scan: 'Scanned credit report read by AI',
   client_question: 'Question about your records answered by AI',
+  account_label: 'Accounts labelled by AI (up to 30 accounts the rules could not label)',
 };
 
 /** Shown to staff wherever AI wording was skipped. Portal clients are never shown these. */

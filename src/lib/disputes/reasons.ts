@@ -165,6 +165,9 @@ export interface ReportedRow {
   balance_cents: number | string | null; date_opened: string | null; date_of_first_delinquency: string | null;
   /** True when the row is on the newest approved report of its bureau (the rule the comparison uses: reports/service.ts loadAnalysisInput). */
   newest: boolean;
+  /** For the account's label on the new dispute form (src/lib/credit/account-kind.ts). */
+  original_creditor?: string | null; account_type?: string | null; account_status?: string | null; payment_status?: string | null;
+  payment_history?: string | null; remarks?: string | null; kind_label?: unknown;
 }
 
 /**

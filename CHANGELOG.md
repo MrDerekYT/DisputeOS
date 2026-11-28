@@ -1,5 +1,34 @@
 # Changelog
 
+## Every account labelled good or bad; collections, medical and bankruptcy fill themselves in (unreleased)
+
+Migration `0034_account_labels.sql`: one nullable column, `tradelines.kind_label`, for a person's label or an AI
+suggestion. Additive; nothing existing changes. No new dependency.
+
+- **Every account says what it is**: Collection, Charge-off, Foreclosure, Repossession, In bankruptcy, Settled, Late
+  now, Late payments in the history, Negative item (red); Good standing, Nothing negative shown (green); or Not
+  labelled. Read from the report's own words by rules (free), with the words it rests on shown beside it. On the
+  Reports tab ("Accounts, good and bad", negative first), the report review page, the three-bureau comparison and the
+  new dispute form.
+- **A person can change any label**; it wins over the report's words (both are shown when they differ) and stays with
+  the account on later reports.
+- **AI labels what the rules cannot** (2 AI credits a press, only when it labels at least one): it sees the
+  account's own words only, must quote them, and a suggestion whose words are not in the account is dropped. Marked
+  "AI suggestion" wherever it shows.
+- **Collector notices**: every collection on the reports is listed with its account already chosen; only the date on
+  the notice is left to enter. Accounts labelled collections count too.
+- **Medical collections** are also ticked when the collector's own name says medical, as a suggestion to confirm.
+- **Bankruptcy**: a bankruptcy public record on a report fills in the chapter and filing date (saved only when a person
+  presses Save).
+- **New dispute**: accounts listed negative first with their label; "Suggested from the account" picks the type of
+  dispute from the label, and never "not mine" or identity theft.
+- The review page counts charge-offs and other negative accounts beside collections and late payments.
+- Rules adapted from the MIT-licensed Errata project's classifier, with Metro 2 codes (list from the Apache-2.0
+  moov-io/metro2 library). CreditMaster Pro (proprietary) was read for ideas only; nothing was taken from it.
+- Tests: `tests/unit/account-kind.test.ts` (wordings from the readers and the fixtures), `tests/unit/account-labels.test.ts`
+  (the checks on an AI reply), `tests/db/account-labels.test.ts` (labels kept and carried, AI paid only when kept,
+  never over a person's label, never another workspace's, the case tools).
+
 ## Ask about your clients, TransUnion reports read, long reports (unreleased)
 
 Migration `0033_assistant_questions.sql`: one new table (each person's own questions and answers, row-level security,

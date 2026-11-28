@@ -12,6 +12,8 @@ import { refreshFindingsAction, setFindingStatusAction } from '../../../reports/
 import { bulkDraftAction } from '../../../disputes/actions';
 import { FallOffCell } from '@/components/fall-off';
 import { tradelineFallOff } from '@/lib/credit/reporting-period';
+import { groupLabel } from '@/lib/credit/account-kind';
+import { KindBadge } from '@/components/kind-badge';
 
 export const metadata: Metadata = { title: 'Three-bureau comparison' };
 
@@ -102,12 +104,14 @@ export default async function ComparePage({ params, searchParams }: { params: Pr
           <div className="space-y-4">
             {groups.map((g) => {
               const diffs = new Set(diffGroup(g).map((d) => d.field as string));
+              // What the account is, from the words each bureau reports (src/lib/credit/account-kind.ts): bad when any bureau reports something negative.
+              const kind = groupLabel(BUREAUS.flatMap((b) => (g.byBureau[b] ? [g.byBureau[b]!] : []))).label;
               return (
                 <article key={g.key} className="panel overflow-hidden">
                   <header className="flex flex-wrap items-center justify-between gap-2 border-b border-line/70 px-4 py-3.5">
                     <div className="font-display text-base font-semibold">{g.creditor} <span className="font-sans font-normal text-muted">{g.byBureau[BUREAUS.find((b) => g.byBureau[b])!]?.account_last4 && `••${g.byBureau[BUREAUS.find((b) => g.byBureau[b])!]!.account_last4}`}</span></div>
-                    <div className="flex items-center gap-2">
-                      {g.itemType === 'collection' && <Badge tone="bad">Collection</Badge>}
+                    <div className="flex flex-wrap items-center gap-2">
+                      <KindBadge label={kind} />
                       {diffs.size > 0 && <Badge tone="warn">{diffs.size} difference{diffs.size > 1 ? 's' : ''}</Badge>}
                     </div>
                   </header>

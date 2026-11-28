@@ -15,8 +15,11 @@ export interface AnalysisTradeline {
   account_last4: string | null; account_status: string | null; payment_status: string | null; balance_cents: number | null;
   credit_limit_cents: number | null; date_opened: string | null; date_reported: string | null; date_of_first_delinquency: string | null;
   payment_history: string | null; user_provided: Record<string, unknown>;
-  /** The bureau's own notes on the account. Only read for a removal month the bureau itself prints (printedRemovalMonth). */
+  /** The bureau's own notes on the account. Read for a removal month the bureau itself prints (printedRemovalMonth) and for the account's label. */
   remarks?: string | null;
+  /** For the account's label only (src/lib/credit/account-kind.ts): never compared between bureaus. */
+  account_type?: string | null;
+  kind_label?: unknown;
 }
 export interface AnalysisInquiry { id: string; bureau: Bureau; name: string; inquiry_date: string | null; kind: string }
 export interface AnalysisPublicRecord { id: string; bureau: Bureau; kind: string; filed_date: string | null; status: string | null }
