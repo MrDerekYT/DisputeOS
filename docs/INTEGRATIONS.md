@@ -734,8 +734,9 @@ is right or wrong, and it says nothing about a credit score.
 Where a label comes from (`src/lib/credit/account-kind.ts`, `src/lib/credit/account-labels.ts`), in this order:
 
 1. **A person.** "Change label" on the Reports tab. A person's label always wins; when the report's words say
-   something else, both are shown. It is kept for that account (same creditor and account number) on the client's
-   later reports, and clearing it clears it there too. Stored in `tradelines.kind_label` (migration 0034).
+   something else, both are shown. It is kept for that account on the client's other reports (same creditor and
+   account number, or, for a report that prints no number, same creditor and open date), and clearing it clears it
+   there too. Stored in `tradelines.kind_label` (migration 0034).
 2. **The report's own words**, read by rules for free every time a page opens (so a corrected value is labelled
    again at once): the section the account is listed in, its status, payment status, remarks and account type, and
    the month-by-month history ("Late 30", "Paid, Closed; was 30 days past due", "Charged Off", "PLACED FOR
@@ -744,31 +745,48 @@ Where a label comes from (`src/lib/credit/account-kind.ts`, `src/lib/credit/acco
    but was late reads as late payments in the history. "Good standing" needs the words to say so (current, paid or
    paying as agreed, never late); only neutral words (open, closed, paid) give "Nothing negative shown".
 3. **AI, for what the words do not settle** ("Ask AI about the accounts without a label", Reports tab). 2 AI credits
-   a press (`account_label`), charged only when at least one label is kept; up to 30 accounts at a time; an account
-   AI was asked about once is not sent again. AI is shown the account's own words only: company and original
-   creditor, account type, status, payment status, history, remarks. It is never sent the client's name, an address,
-   an amount or an account number. It must copy the words that show its answer, and a suggestion is dropped when
-   those words are not in that account, when a company name is used for anything but "collection" (a plainly named
-   collector or debt buyer), or when "good" rests on anything but a status or a history. A kept suggestion is marked
-   "AI suggestion" with the words it rests on, and a person's label replaces it. With no AI provider connected the
-   button is not offered and those accounts wait for a person. Tested with a stand-in model only.
+   a press (`account_label`), charged only when AI has something to suggest that is kept; up to 30 account entries at
+   a time; an entry AI was asked about is not sent again (the same account on a newer report can be). AI is shown the
+   account's own words: company and original creditor, account type, status, payment status, history and remarks,
+   with amounts and long numbers replaced, remarks about who holds the account (responsibility, owner, joint
+   holders) left out and the client's own name masked. It must copy whole words of that account that show its answer:
+   a suggestion is dropped when the words are not there, are a fragment, are negated ("paid" out of "Not paid"), or
+   are not words of that kind ("Unrated" shows no charge-off); a company name can carry only "collection".
+   **A suggestion does nothing until a person confirms it** ("Confirm or change", one Save): it is shown with an "AI
+   suggestion" badge and its words, but it makes no finding, pre-chooses no collector notice and suggests no
+   dispute. **AI never makes an account green**: an answer of good standing is shown as a hint on a grey "Not
+   labelled" account for a person to confirm. With no AI provider connected the button is not offered and those
+   accounts wait for a person. Tested with a stand-in model only.
 
 What the labels fill in:
 
-- **Collector notices** (Reports tab → Collections and bankruptcy): every collection on the reports is listed with
-  its account already chosen, one row per account however many bureaus report it; only the date on the collector's
-  notice is left to enter, because only the client's notice shows it. A collector that is on no report has its own
-  small form. A collection is one listed under collections, or labelled one by its words or by a person.
+- **Collector notices** (Reports tab → Collections and bankruptcy): every collector's account on the reports is
+  listed with its account already chosen, one row per account however many bureaus report it (matched as the
+  three-bureau comparison matches them, also when a report prints no account number); only the date on the
+  collector's notice is left to enter, because only the client's notice shows it. An account a notice was recorded
+  for is not offered again, on a later report either. A collector that is on no report has its own small form. A
+  collector's account is one listed under collections, with an account type that names a collector, factoring
+  company or debt buyer (or Metro 2 type 48 or 0C), or labelled a collection by a person. A creditor's own account
+  "in collection" or "transferred to recovery" is labelled negative but is not one: there is no collector to write to,
+  and the dispute it suggests is a status dispute, not a validation request.
 - **Medical collections**: ticked when the report's account type, remarks or original creditor say medical (or a
-  bare Metro 2 account type 90), and also, as a suggestion marked "Name suggests medical: confirm", when only the
-  collector's own name does (radiology, hospital, anesthesia and similar).
+  bare Metro 2 account type 90). When only the collector's own name sounds medical (radiology, hospital, anesthesia
+  and similar) the account is marked "Name suggests medical" but not ticked, and no finding is made until staff tick
+  it.
 - **Bankruptcy**: when nothing is recorded and a report lists a bankruptcy public record, the chapter (7 or 13) and the
   filing date are filled into the form from it, with a line saying which report says so. Nothing is saved until a
   person checks it against the papers and presses Save; the discharge date is never on a report's record.
 - **New dispute**: accounts are listed negative first with their label, and "Suggested from the account" picks the
-  type of dispute from the label (collection: validation request; late: late payment accuracy; charge-off,
-  repossession, foreclosure, settled: account or payment status; in bankruptcy: included in bankruptcy). An account
-  with nothing negative gets no suggestion. It is never "not mine" or identity theft: only the client can say that.
+  type of dispute from the label the report's words or a person gave (a collector's account: validation request; late:
+  late payment accuracy; charge-off, repossession, foreclosure, settled, a creditor's own account in collection:
+  account or payment status; in bankruptcy: included in bankruptcy). An account with nothing negative, or not
+  labelled, gets no suggestion, and neither does an unconfirmed AI suggestion. It is never "not mine" or identity
+  theft: only the client can say that.
+
+Wordings the rules take care over: an amount of zero ("Amount past due: $0", "Charge-off amount: $0.00", "$0.00
+past due") is not late or charged off; "paid in full for less than the full balance" is settled; "not paid as agreed"
+and "not current" are negative; Experian's payment history summary ("30 days past due as of Mar 2024"), which its
+reader keeps as the payment status, is late payments in the history, not late now.
 
 Sources: the kinds and flags follow the classifier of the MIT-licensed Errata project (github.com/wjwhitmire/errata,
 `src/errata/model.py`, Copyright (c) 2026 Will Whitmire), and the medical words add its list (anesthesia, pathology,

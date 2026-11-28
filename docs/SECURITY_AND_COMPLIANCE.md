@@ -332,13 +332,17 @@ name or city the app does not hold and that is written another way (an address w
 in the client portal a creditor's name. Details: docs/INTEGRATIONS.md, "AI provider (Claude)".
 
 **Account labels by AI (client Reports tab): what is and is not sent.** Only when a person presses "Ask AI about the
-accounts without a label", a provider is connected and the workspace has credits (2 a press, taken only when a label
-is kept). The request holds, for at most 30 accounts the rules could not label: the company and original creditor
-names, account type, status, payment status, month-by-month history and remarks, each as the report wrote them, then
-masked for Social Security, card and phone numbers and email addresses. It never holds the client's name, address,
-date of birth, any amount or any account number. Nothing the model writes is shown as text: a reply is kept only as one
-of the fixed labels together with words that are found in that account's own fields, and is marked "AI suggestion".
-Details: docs/INTEGRATIONS.md, "What each account is".
+accounts without a label", a provider is connected and the workspace has credits (2 a press, taken only when
+something AI said is kept). The request holds, for at most 30 account entries the rules could not label: the company
+and original creditor names, account type, status, payment status, month-by-month history and remarks. Before it is
+sent, dollar amounts and numbers of five digits or more are replaced, remark lines about who holds the account
+(responsibility, owner, joint holders, co-signers, authorized users) are left out, every word of the client's own
+name is masked, and Social Security, card and phone numbers and email addresses are masked. It never holds the
+client's address, date of birth or account number. Other words in a status or remark are sent as the report wrote
+them, so a name the report prints elsewhere in a remark is not caught by the masking. Nothing the model writes is
+shown as text: a reply is kept only as one of the fixed labels with whole words found in that account's own fields,
+marked "AI suggestion", and it changes nothing (no finding, no notice, no suggested dispute) until a person confirms
+it. Details: docs/INTEGRATIONS.md, "What each account is".
 
 **"Ask about your clients" (AI assistant page): what is and is not sent to the AI provider.** A staff member types a
 question about the workspace's own clients. Unlike the other AI features, an AI answer to it is written from client

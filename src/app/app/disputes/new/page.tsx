@@ -8,7 +8,7 @@ import { requireStaff } from '@/lib/auth/context';
 import { asWritten, draftReason, REASON_PROMPT, reportedFor } from '@/lib/disputes/reasons';
 import { loadReportedRows } from '@/lib/disputes/service';
 import { CATEGORIES, categoryForAccount, categoryForFinding, FIELD_OPTIONS, mustNameAccount } from '@/lib/disputes/workflow';
-import { accountLabel, KIND_META, labelOrder } from '@/lib/credit/account-kind';
+import { accountLabel, confirmedLabel, isCollectorAccount, KIND_META, labelOrder } from '@/lib/credit/account-kind';
 import { letterForCategory } from '@/lib/letters/brief';
 import type { Evidence } from '@/lib/reports/analysis';
 import { BUREAU_LABEL, BUREAUS, isUuid } from '@/lib/util';
@@ -75,8 +75,8 @@ export default async function NewDisputePage({ searchParams }: { searchParams: P
   const tl = tradelines.find((t) => t.id === tradelineId);
   // "Suggested from the account": the type follows the account's label (src/lib/credit/account-kind.ts). An account
   // with nothing negative gets no suggestion, and the person chooses.
-  const tlLabel = tl ? accountLabel(tl) : null;
-  const suggested = tl && tlLabel ? categoryForAccount(tlLabel.kind, tl.item_type) : undefined;
+  const tlLabel = tl ? confirmedLabel(tl) : null;
+  const suggested = tl && tlLabel ? categoryForAccount(tlLabel.kind, isCollectorAccount(tl)) : undefined;
   const askedSuggestion = sp.category === 'suggested';
   const category = askedSuggestion ? suggested : sp.category ?? (finding ? categoryForFinding(finding) : undefined);
   const labelled = tradelines.map((t) => ({ t, label: accountLabel(t) }))
@@ -91,7 +91,9 @@ export default async function NewDisputePage({ searchParams }: { searchParams: P
           <input type="hidden" name="clientId" value={client.id} />
           {askedSuggestion && !category && (
             <Notice tone="info" title="No type suggested">
-              {tl ? <>The report shows nothing negative for {tl.creditor_name}{tl.account_last4 ? ` ••${tl.account_last4}` : ''} ({KIND_META[tlLabel!.kind].label.toLowerCase()}), so no type of dispute is suggested. Choose one only if you have reason to believe something on it is inaccurate.</> : 'Choose an account to get a suggested type, or choose the type of dispute.'}
+              {!tl ? 'Choose an account to get a suggested type, or choose the type of dispute.'
+                : tlLabel!.kind === 'unknown' ? <>The report’s words do not say what {tl.creditor_name}{tl.account_last4 ? ` ••${tl.account_last4}` : ''} is, so no type of dispute is suggested. Label it on the client’s Reports tab, or choose the type yourself.</>
+                  : <>The report shows nothing negative for {tl.creditor_name}{tl.account_last4 ? ` ••${tl.account_last4}` : ''} ({KIND_META[tlLabel!.kind].label.toLowerCase()}), so no type of dispute is suggested. Choose one only if you have reason to believe something on it is inaccurate.</>}
             </Notice>
           )}
           <Select label="Account or item" name="tradelineId" defaultValue={tradelineId} placeholder="No specific account (e.g. personal information)"

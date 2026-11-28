@@ -12,17 +12,26 @@ suggestion. Additive; nothing existing changes. No new dependency.
   new dispute form.
 - **A person can change any label**; it wins over the report's words (both are shown when they differ) and stays with
   the account on later reports.
-- **AI labels what the rules cannot** (2 AI credits a press, only when it labels at least one): it sees the
-  account's own words only, must quote them, and a suggestion whose words are not in the account is dropped. Marked
-  "AI suggestion" wherever it shows.
-- **Collector notices**: every collection on the reports is listed with its account already chosen; only the date on
-  the notice is left to enter. Accounts labelled collections count too.
-- **Medical collections** are also ticked when the collector's own name says medical, as a suggestion to confirm.
+- **AI suggests labels for what the rules cannot read** (2 AI credits a press, only when something is kept): it sees
+  the account's own words, must quote them, and a person confirms each suggestion before it counts.
+- **Collector notices**: every collector's account on the reports is listed with its account already chosen; only
+  the date on the notice is left to enter.
+- **Medical collections**: a collector whose own name sounds medical is marked as a suggestion to tick.
 - **Bankruptcy**: a bankruptcy public record on a report fills in the chapter and filing date (saved only when a person
   presses Save).
 - **New dispute**: accounts listed negative first with their label; "Suggested from the account" picks the type of
   dispute from the label, and never "not mine" or identity theft.
 - The review page counts charge-offs and other negative accounts beside collections and late payments.
+- After an independent review: an AI suggestion is shown but does nothing (no finding, no pre-chosen notice, no
+  suggested dispute) until a person confirms it; AI never turns an account green (good standing is a hint to
+  confirm); AI answers must quote whole, un-negated words of the account's own kind; amounts, long numbers, joint
+  holders' remarks and the client's name are kept out of what AI is sent. Collector notices and the medical screen
+  are for collectors' accounts only (a creditor's own account "in collection" or "transferred to recovery" is
+  negative but has no collector); a collector's name that sounds medical is a suggestion, not a finding. Zero
+  amounts, "less than the full balance", "not paid as agreed", "$0.00 past due" and Experian's history summary are
+  read correctly. Accounts without a number are matched across bureaus and reports by creditor and open date.
+  Labelling, notices, medical answers and the bankruptcy record are written only for the workspace the person is
+  working in, also for someone who is staff in two.
 - Rules adapted from the MIT-licensed Errata project's classifier, with Metro 2 codes (list from the Apache-2.0
   moov-io/metro2 library). CreditMaster Pro (proprietary) was read for ideas only; nothing was taken from it.
 - Tests: `tests/unit/account-kind.test.ts` (wordings from the readers and the fixtures), `tests/unit/account-labels.test.ts`

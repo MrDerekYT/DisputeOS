@@ -47,7 +47,7 @@ export async function AccountsBlock({ ctx, clientId }: { ctx: Ctx; clientId: str
 
   return (
     <Section plain id="accounts" title="Accounts, good and bad"
-      hint="Every account on the latest approved reports, labelled from the words each bureau reports. Change any label that is wrong; a label you choose is kept for this account on later reports too. A label is a reading of the report, not a judgement that it is right.">
+      hint="Every account on the latest approved reports, labelled from the words each bureau reports. Change any label that is wrong: a label you choose is kept for this account on later reports when they show its account number or open date. A label is a reading of the report, not a judgement that it is right.">
       {/* A count is in colour only when there is something to count: "0 negative" is good news, not a warning. */}
       <p className="text-sm">
         <span className={bad.length ? 'font-semibold text-bad' : 'font-semibold'}>{bad.length} negative</span>
@@ -61,7 +61,7 @@ export async function AccountsBlock({ ctx, clientId }: { ctx: Ctx; clientId: str
             <input type="hidden" name="clientId" value={clientId} />
             <SubmitButton variant="secondary" pendingText="Asking AI…">Ask AI about {askable.length === 1 ? 'the account' : `the ${askable.length} accounts`} without a label</SubmitButton>
             <p className="text-[0.8125rem] text-muted">
-              {AI_COSTS.account_label} AI credits, charged only when AI labels at least one (up to {AI_LABEL_LIMIT} at a time). AI credits left: {d.credits}. AI sees the account’s own words only, and each label it gives shows the words it rests on.
+              {AI_COSTS.account_label} AI credits, charged only when AI has something to suggest (up to {AI_LABEL_LIMIT} at a time). AI credits left: {d.credits}. It sees the account’s own words only, without amounts or names. Each suggestion shows the words it rests on and does nothing until you confirm it.
             </p>
           </ActionForm>
         ) : (
@@ -91,6 +91,10 @@ export async function AccountsBlock({ ctx, clientId }: { ctx: Ctx; clientId: str
 function AccountRow({ r, clientId, canWrite }: { r: Row; clientId: string; canWrite: boolean }) {
   const staff = r.lines.map((t) => storedLabel(t.kind_label)).find((s) => s?.by === 'staff');
   const tags = [...new Set(r.each.flatMap((e) => e.label.tags))];
+  // An AI suggestion (or an AI hint of good standing) is offered as the choice, so one Save confirms it.
+  const suggested = r.label.by === 'ai' ? r.label.kind : r.label.aiHint?.kind;
+  const preset = staff?.kind ?? (suggested && (STAFF_KINDS as readonly string[]).includes(suggested) ? suggested : '');
+  const ask = r.label.by === 'ai' || r.label.aiHint ? 'Confirm or change' : r.label.kind === 'unknown' ? 'Label it' : 'Change label';
   return (
     <li className="py-3">
       <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-1.5">
@@ -107,12 +111,12 @@ function AccountRow({ r, clientId, canWrite }: { r: Row; clientId: string; canWr
       {canWrite && (
         <details className="group/change mt-1.5">
           <summary className="flex w-fit cursor-pointer list-none items-center gap-1 rounded-md text-[0.8125rem] font-semibold text-brand-strong [&::-webkit-details-marker]:hidden">
-            {r.label.kind === 'unknown' ? 'Label it' : 'Change label'} <ChevronDown size={14} aria-hidden className="transition-transform group-open/change:rotate-180" />
+            {ask} <ChevronDown size={14} aria-hidden className="transition-transform group-open/change:rotate-180" />
           </summary>
           <ActionForm action={setAccountKindAction} className="mt-2 flex flex-wrap items-end gap-2">
             <input type="hidden" name="clientId" value={clientId} />
             {r.lines.map((t) => <input key={t.id} type="hidden" name="ids" value={t.id} />)}
-            <Select label="This account is" name="kind" defaultValue={staff?.kind ?? ''} placeholder="As the report’s words say" options={STAFF_OPTIONS} className="min-w-[14rem]" />
+            <Select label="This account is" name="kind" defaultValue={preset} placeholder="As the report’s words say" options={STAFF_OPTIONS} className="min-w-[14rem]" />
             <SubmitButton variant="secondary" className="btn-sm">Save label</SubmitButton>
           </ActionForm>
         </details>

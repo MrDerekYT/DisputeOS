@@ -5,11 +5,12 @@ import type { SessionInfo } from '@/lib/auth/service';
 import { accountLabel } from '@/lib/credit/account-kind';
 import { AI_LABEL_LIMIT, labelAccountsWithAi, setAccountKind, type LActor } from '@/lib/credit/account-labels';
 import { loadBankruptcyOnReports, loadCaseLines, loadCollectorNotices, recordCollectorNotice, setMedicalFlags } from '@/lib/credit/case-tools';
+import { loadAnalysisInput as loadInput } from '@/lib/reports/service';
 import { can, type Permission, type Role } from '@/lib/rbac';
 import { decideReport, loadAnalysisInput, storeParsedReport } from '@/lib/reports/service';
 import type { ParsedPublicRecord, ParsedReport, ParsedTradeline } from '@/lib/reports/types';
 import type { Bureau } from '@/lib/util';
-import { addClient, asUser, closePool, makeOrg, withSystem, type TestOrg } from './helpers';
+import { addClient, addMember, asUser, closePool, makeOrg, withSystem, type TestOrg } from './helpers';
 
 /**
  * What each account is (src/lib/credit/account-kind.ts) and what is kept on file about it (src/lib/credit/account-labels.ts):
@@ -83,8 +84,9 @@ beforeAll(async () => {
     bare('MIDLAND CREDIT MANAGEMENT', '1111'), // nothing but the company's name
     bare('ODD WORDING BANK', '2222', { remarks: 'Rating: Unrated' }), // words the rules do not read
     line('GOOD STANDING CU', '3333'),
-    line('LISTED AS ONE', '4444', { payment_status: 'Collection' }), // a collection by its own words, not by its section
+    line('LISTED AS ONE', '4444', { payment_status: 'Collection' }), // a creditor's own account in collection: no collector
     bare('NOBODY ASKED', '5555'),
+    line('VALLEY RADIOLOGY', '7070', { item_type: 'collection', account_type: 'Collection', account_status: null, payment_status: null, balance_cents: 30000, date_of_first_delinquency: '2026-06-01' }),
   ], [{ bureau: null, kind: 'Chapter 7 Bankruptcy', court: 'US Bankruptcy Court', amount_cents: null, filed_date: '2019-03-02', status: 'Discharged' }]));
   await approve(ownerB, other, 'experian', parsed('2026-09-01', [bare('MIDLAND CREDIT MANAGEMENT', '1111')]));
 });
@@ -204,18 +206,32 @@ describe('AI suggestions', () => {
 });
 
 describe('case tools that fill themselves in', () => {
-  it('a collection by its own words, or by its label, takes a collector notice and a medical answer', async () => {
-    const byWords = await lineOf(report, '4444');
-    await asUser(owner.userId, (db) => recordCollectorNotice(db, owner, { clientId: client, tradelineId: byWords, kind: 'received', date: '2026-10-01' }));
-    const byAi = await lineOf(report, '1111'); // labelled a collection by AI above
-    await asUser(owner.userId, (db) => setMedicalFlags(db, owner, client, [byAi], [byAi]));
+  it('a collector’s account takes a notice; a creditor’s own account in collection, or an AI suggestion, does not until a person says so', async () => {
+    // Listed under collections: a collector's account.
+    const collector = await lineOf(report, '7070');
+    await asUser(owner.userId, (db) => recordCollectorNotice(db, owner, { clientId: client, tradelineId: collector, kind: 'received', date: '2026-10-01' }));
     const notices = await asUser(owner.userId, (db) => loadCollectorNotices(db, client, '2026-10-05'));
-    expect(notices[0]).toMatchObject({ tradelineId: byWords, collectorName: 'LISTED AS ONE', isCollection: true, matchKey: expect.stringContaining('|4444') });
-    // A card in good standing is not a collection.
-    await expect(asUser(owner.userId, async (db) => recordCollectorNotice(db, owner, { clientId: client, tradelineId: await lineOf(report, '3333'), kind: 'received', date: '2026-10-01' })))
+    expect(notices[0]).toMatchObject({ tradelineId: collector, collectorName: 'VALLEY RADIOLOGY', isCollection: true, account: { creditor: 'VALLEY RADIOLOGY', last4: '7070' } });
+    // In collection, but the creditor's own account: there is no collector to write to.
+    await expect(asUser(owner.userId, async (db) => recordCollectorNotice(db, owner, { clientId: client, tradelineId: await lineOf(report, '4444'), kind: 'received', date: '2026-10-01' })))
       .rejects.toThrow('Choose a collection account.');
+    // MIDLAND carries an AI suggestion of "collection" from the test above: shown, but nothing is done with it...
+    const byAi = await lineOf(report, '1111');
+    await expect(asUser(owner.userId, (db) => recordCollectorNotice(db, owner, { clientId: client, tradelineId: byAi, kind: 'received', date: '2026-10-01' }))).rejects.toThrow('Choose a collection account.');
+    await expect(asUser(owner.userId, (db) => setMedicalFlags(db, owner, client, [byAi], [byAi]))).rejects.toThrow('That account does not belong to this client.');
+    // ...until a person confirms it.
+    await asUser(owner.userId, (db) => setAccountKind(db, owner, client, [byAi], 'collection'));
+    await asUser(owner.userId, (db) => recordCollectorNotice(db, owner, { clientId: client, tradelineId: byAi, kind: 'received', date: '2026-10-02' }));
+    await asUser(owner.userId, (db) => setMedicalFlags(db, owner, client, [byAi], []));
+    // A card in good standing is not a collection.
     await expect(asUser(owner.userId, async (db) => setMedicalFlags(db, owner, client, [await lineOf(report, '3333')], [])))
       .rejects.toThrow('That account does not belong to this client.');
+  });
+
+  it('a collector’s name that sounds medical makes no finding by itself', async () => {
+    // VALLEY RADIOLOGY: a collection under $500, and only its name says medical.
+    const findings = await withSystem((db) => db.rows<{ dedupe_key: string }>("select dedupe_key from public.findings where client_id = $1 and category = 'medical_collection'", [client]));
+    expect(findings).toEqual([]);
   });
 
   it('reads a bankruptcy off the reports for the form, and saves nothing', async () => {
@@ -224,5 +240,43 @@ describe('case tools that fill themselves in', () => {
     expect(await withSystem(async (db) => (await db.row<{ c: string | null }>('select bankruptcy_chapter as c from public.clients where id = $1', [client]))!.c)).toBeNull();
     // Another workspace sees nothing of it.
     expect((await asUser(ownerB.userId, (db) => loadBankruptcyOnReports(db, client))).record).toBeNull();
+  });
+});
+
+describe('the same account on reports that print no account number', () => {
+  it('a person’s label is carried by creditor and open date, and a notice is found again on the newer report', async () => {
+    const c = await addClient(A.orgId, 'No Numbers Example');
+    const noNum = (o: Partial<ParsedTradeline> = {}) => bare('SAMPLE RECOVERY LLC', null as unknown as string, { item_type: 'collection', account_type: 'Collection', date_opened: '2023-02-01', original_creditor: 'ACME BANK', ...o });
+    const first = await approve(owner, c, 'transunion', parsed('2026-08-01', [noNum()]));
+    const firstLine = await withSystem(async (db) => (await db.row<{ id: string }>('select id from public.tradelines where report_id = $1', [first]))!.id);
+    await asUser(owner.userId, (db) => setAccountKind(db, owner, c, [firstLine], 'collection'));
+    await asUser(owner.userId, (db) => recordCollectorNotice(db, owner, { clientId: c, tradelineId: firstLine, kind: 'received', date: '2026-08-05' }));
+    // The next TransUnion report: a new row for the same account, still with no number.
+    const second = await approve(owner, c, 'transunion', parsed('2026-10-01', [noNum({ balance_cents: 51000 })]));
+    const input = await asUser(owner.userId, (db) => loadInput(db, c));
+    expect(input.tradelines.map((t) => accountLabel(t))).toMatchObject([{ kind: 'collection', by: 'staff', carried: true }]);
+    const lines = await asUser(owner.userId, (db) => loadCaseLines(db, c));
+    const notices = await asUser(owner.userId, (db) => loadCollectorNotices(db, c, '2026-10-05'));
+    const { noticeIsFor } = await import('@/lib/credit/case-tools');
+    const secondLine = await withSystem(async (db) => (await db.row<{ id: string }>('select id from public.tradelines where report_id = $1', [second]))!.id);
+    expect(lines.map((t) => t.id)).toEqual([secondLine]); // the newer report's row, a different row from the one the notice was recorded on
+    expect(noticeIsFor(notices[0]!, lines)).toBe(true);
+  });
+});
+
+describe('someone who is staff in two workspaces', () => {
+  it('cannot label, record a notice on or mark medical another workspace’s client from the one they work in', async () => {
+    const both = await addMember(A.orgId, 'manager', 'both');
+    await withSystem((db) => db.run("insert into public.memberships (org_id, user_id, role) values ($1, $2, 'manager')", [B.orgId, both.id]));
+    const inA: LActor = { orgId: A.orgId, userId: both.id, role: 'manager' };
+    const theirs = await withSystem(async (db) => (await db.row<{ id: string }>("select id from public.tradelines where client_id = $1 and account_last4 = '1111'", [other]))!.id);
+    // Row-level security lets them see B's account...
+    expect(await asUser(both.id, (db) => db.row('select 1 as ok from public.tradelines where id = $1', [theirs]))).toEqual({ ok: 1 });
+    // ...but nothing is written to it from workspace A.
+    await expect(asUser(both.id, (db) => setAccountKind(db, inA, other, [theirs], 'collection'))).rejects.toThrow('That account does not belong to this client.');
+    await expect(asUser(both.id, (db) => recordCollectorNotice(db, inA, { clientId: other, collectorName: 'MIDLAND', kind: 'received', date: '2026-10-01' }))).rejects.toThrow('Client not found.');
+    await expect(asUser(both.id, (db) => setMedicalFlags(db, inA, other, [theirs], []))).rejects.toThrow('Client not found.');
+    expect(await stored(theirs)).toBeNull();
+    expect(await withSystem(async (db) => (await db.row<{ n: number }>('select count(*)::int as n from public.collector_notices where client_id = $1', [other]))!.n)).toBe(0);
   });
 });

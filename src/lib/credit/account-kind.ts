@@ -76,17 +76,31 @@ const BANKRUPTCY = /bankrupt|\bchapter\s*(?:7|11|12|13)\b|\bBKL\b|wage[\s_-]+ear
 const FORECLOSURE = /foreclos|deed[\s_-]+in[\s_-]+lieu/i;
 const REPOSSESSION = /repossess|\brepo\b|voluntar(?:y|ily)[\s_-]+surrender/i;
 const CHARGE_OFF = /charged?[\s_-]*off|profit[\s_]+(?:and|&)[\s_]+loss|written[\s_-]+off|write[\s_-]*off|bad[\s_]+debt|unpaid[\s_]+balance[\s_]+reported[\s_]+as[\s_]+a[\s_]+loss/i;
-const COLLECTION = /collection|factoring|debt[\s_]+(?:buyer|purchaser)|transferr?ed[\s_]+to[\s_]+(?:recovery|collections?|(?:an?[\s_]+)?attorney)/i;
-const SETTLED = /\bsettle(?:d|ment)\b/i;
-const NEGATIVE = /derog|\badverse\b|insurance[\s_]+claim|claim[\s_]+filed|government[\s_]+claim|seriously[\s_]+past/i;
+const COLLECTION = /collection|factoring|debt[\s_]+(?:buyer|purchaser)/i;
+/** Placed with a collector or a debt buyer, as an account type says it (TransUnion's "COLLECTION AGENCY/ATTORNEY", "FACTORING COMPANY ACCOUNT"). */
+const COLLECTOR_TYPE = /collection|factoring|debt[\s_]+(?:buyer|purchaser)/i;
+/** Settled, including the Metro 2 wording "Account (legally) paid in full for less than the full balance". */
+const SETTLED = /\bsettle(?:d|ment)\b|less[\s_]+than[\s_]+(?:the[\s_]+)?full[\s_]+balance/i;
+/**
+ * Negative information of no other kind. "Transferred to recovery" (or to an attorney) is negative, but the account is
+ * still the creditor's: it is not a collector's account (src/lib/reports/analysis.ts NOT_SETTLED says the same).
+ */
+const NEGATIVE = /derog|\badverse\b|insurance[\s_]+claim|claim[\s_]+filed|government[\s_]+claim|seriously[\s_]+past|not[\s_]+(?:paid|paying|pays)[\s_]+as[\s_]+agreed|\bnot[\s_]+current\b|transferr?ed[\s_]+to[\s_]+(?:recovery|(?:an?[\s_]+)?attorney)/i;
 /** TransUnion prints its estimate of the month an item will be removed only on accounts with negative information. */
 const REMOVAL_MONTH = /Estimated month and year (?:that )?this item will be removed/i;
-const GOOD = /pays?[\s_]+as[\s_]+agreed|paid[\s_]+(?:or[\s_]+paying[\s_]+)?as[\s_]+agreed|paying[\s_]+as[\s_]+agreed|never[\s_]+late|\bcurrent\b|\bon[\s_]+time\b|in[\s_]+good[\s_]+standing/i;
+const GOOD = /pays?[\s_]+as[\s_]+agreed|paid[\s_]+(?:or[\s_]+paying[\s_]+)?as[\s_]+agreed|paying[\s_]+as[\s_]+agreed|never[\s_]+late|never[\s_]+delinquen\w*|\bcurrent\b|\bon[\s_]+time\b|in[\s_]+good[\s_]+standing/i;
 const NEUTRAL = /\bopen(?:ed)?\b|\bclosed\b|\bpaid\b|transferr?ed|refinanc|\binactive\b|\bactive\b|\bsold\b/i;
 const NOT_PAID = /\b(?:not|un)[\s_-]?paid\b/i;
 
 /** Words that say the opposite of late, removed before looking for lateness. */
-const NOT_LATE = /never[\s_]+late|not[\s_]+late|no[\s_]+late[\s_]+payments?|pays?[\s_]+as[\s_]+agreed|paid[\s_]+(?:or[\s_]+paying[\s_]+)?as[\s_]+agreed|paying[\s_]+as[\s_]+agreed|current[\s_]+account|\$0(?:\.00)?[\s_]+past[\s_]+due|\b0[\s_]+days?[\s_]+past[\s_]+due/gi;
+const NOT_LATE = /never[\s_]+late|not[\s_]+late|no[\s_]+late[\s_]+payments?|(?:never|not|no)[\s_]+delinquen\w*|pays?[\s_]+as[\s_]+agreed|paid[\s_]+(?:or[\s_]+paying[\s_]+)?as[\s_]+agreed|paying[\s_]+as[\s_]+agreed|current[\s_]+account|\$0(?:\.00)?[\s_]+past[\s_]+due|\b0[\s_]+days?[\s_]+past[\s_]+due/gi;
+/**
+ * An amount of nothing is not a late payment or a charge-off: "Amount past due: $0", "Charge-off amount: $0.00",
+ * "Past due: $0" (readers keep such lines as the bureau printed them). Taken out of every field before anything is read.
+ */
+const ZERO_AMOUNT = /(?:charge[\s_-]*off[\s_]+amount|amount[\s_]+past[\s_]+due|past[\s_]+due(?:[\s_]+amount)?)[\s_]*:?[\s_]*\$?\s?0(?:\.0{1,2})?(?![\d.,])/gi;
+/** Experian's payment history summary ("30 days past due as of Mar 2024"): the latest late month, not the status today. */
+const HISTORY_GUIDE = /^(?:\d+[\s_]+days[\s_]+past[\s_]+due|past[\s_]+due)\b[^;]*\bas[\s_]+of\b/i;
 const DATES = /\b\d{1,2}\/\d{1,2}\/\d{2,4}\b|\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}\/\d{4}\b/g;
 const MONEY = /\$\s?[\d,]+(?:\.\d{2})?/g;
 /** In a status, days late are written as numbers ("Late 30", "30 - 59 Days Past Due"). */
@@ -115,6 +129,13 @@ const MOP: Record<string, AccountKind> = { '1': 'good', '2': 'late', '3': 'late'
 
 const clean = (s: string | null | undefined) => (s ?? '').replace(/\s+/g, ' ').trim();
 
+const TEXT_FIELDS = ['account_status', 'payment_status', 'remarks', 'account_type', 'payment_history'] as const;
+function withoutZeroAmounts(t: KindInput): KindInput {
+  const out: KindInput = { ...t };
+  for (const f of TEXT_FIELDS) { const v = t[f]; if (v) out[f] = v.replace(ZERO_AMOUNT, ' ').replace(/(?:\s*·\s*)+$/, '').trim() || null; }
+  return out;
+}
+
 const short = (s: string) => (s.length > 120 ? `${s.slice(0, 117)}…` : s);
 /** The piece of a long field (remarks, a history) that holds a match: one remark out of several, at most 120 characters. */
 function piece(text: string, re: RegExp): string {
@@ -135,7 +156,7 @@ function findIn(t: KindInput, fields: LabelField[], re: RegExp): { field: LabelF
 /** Splits a status into what it says the account is now and what it says it was ("Paid, Closed; was 30 days past due"). */
 function nowAndBefore(s: string): { now: string; before: string } {
   let now = '', before = '';
-  for (const seg of s.split(/[;.]|,\s+(?=(?:was|previously|formerly)\b)/i)) {
+  for (const seg of s.split(/;|\.(?=\s|$)|,\s+(?=(?:was|previously|formerly)\b)/i)) {
     const m = PAST_CLAUSE.exec(seg);
     if (m) { now += ` ${seg.slice(0, m.index)}`; before += ` ${seg.slice(m.index)}`; } else now += ` ${seg}`;
   }
@@ -148,7 +169,8 @@ const scrub = (s: string) => s.replace(NOT_LATE, ' ').replace(MONEY, ' ').replac
  * was charged off and is now paid reads as a charge-off, and one that is current but was late reads as late payments
  * in the history.
  */
-export function readKind(t: KindInput): KindReading {
+export function readKind(input: KindInput): KindReading {
+  const t = withoutZeroAmounts(input);
   // A status given as a bare code: Metro 2 ("97") or a manner-of-payment rating ("R9").
   for (const f of STATUS) {
     const v = clean(t[f]);
@@ -193,6 +215,8 @@ export function readKind(t: KindInput): KindReading {
   for (const f of STATUS) {
     const v = clean(t[f]);
     if (!v) continue;
+    // Experian keeps its history summary as the payment status when the status itself says nothing about lateness.
+    if (f === 'payment_status' && HISTORY_GUIDE.test(v) && !LATE_STATUS.test(scrub(clean(t.account_status)))) return { kind: 'was_late', field: f, words: short(v) };
     const { now, before } = nowAndBefore(v);
     if (LATE_STATUS.test(scrub(now))) return { kind: 'late', field: f, words: short(v) };
     if (LATE_STATUS.test(scrub(before))) return { kind: 'was_late', field: f, words: short(v) };
@@ -244,21 +268,25 @@ export function accountTags(t: KindInput): AccountTag[] {
   if (SUPPORT.test(names)) out.push('child_support');
   if (AUTHORIZED.test(`${t.account_type ?? ''} ${t.remarks ?? ''}`)) out.push('authorized_user');
   if (DISPUTED.test(words)) out.push('disputed');
-  if (TRANSFERRED.test(words) && !COLLECTION.test(words)) out.push('transferred');
+  if (TRANSFERRED.test(words) && !COLLECTION.test(words) && !/transferr?ed[\s_]+to[\s_]+(?:recovery|(?:an?[\s_]+)?attorney)/i.test(words)) out.push('transferred');
   return out;
 }
 
 // ------------------------------------------------------------------------------------------------- the label shown
 
-/** A label stored on an account (tradelines.kind_label): a person's choice, or an AI suggestion. */
-export interface StoredLabel { kind: AccountKind; by: 'staff' | 'ai'; words?: string | null; field?: LabelField | null; at?: string; carried?: boolean }
+/**
+ * A label stored on an account (tradelines.kind_label): a person's choice, or an AI suggestion. An AI answer of good
+ * standing is never a label: it is kept as kind "unknown" with `hint`, shown as a suggestion for a person to confirm.
+ */
+export interface StoredLabel { kind: AccountKind; by: 'staff' | 'ai'; words?: string | null; field?: LabelField | null; at?: string; carried?: boolean; hint?: AccountKind | null }
 
 export function storedLabel(v: unknown): StoredLabel | null {
   if (!v || typeof v !== 'object') return null;
   const o = v as Record<string, unknown>;
   if (!(ACCOUNT_KINDS as readonly string[]).includes(o.kind as string) || (o.by !== 'staff' && o.by !== 'ai')) return null;
   return { kind: o.kind as AccountKind, by: o.by, words: typeof o.words === 'string' ? o.words : null, field: typeof o.field === 'string' ? o.field as LabelField : null,
-    at: typeof o.at === 'string' ? o.at : undefined, carried: o.carried === true };
+    at: typeof o.at === 'string' ? o.at : undefined, carried: o.carried === true,
+    hint: (ACCOUNT_KINDS as readonly string[]).includes(o.hint as string) ? o.hint as AccountKind : null };
 }
 
 export interface AccountLabel extends KindReading {
@@ -270,6 +298,8 @@ export interface AccountLabel extends KindReading {
   carried?: boolean;
   /** AI was asked about this account and could not tell either. */
   aiTried?: boolean;
+  /** AI read good standing (or nothing negative) in these words: shown for a person to confirm, never applied. */
+  aiHint?: { kind: AccountKind; words: string | null };
 }
 
 export type LabelInput = KindInput & { kind_label?: unknown };
@@ -283,11 +313,65 @@ export function accountLabel(t: LabelInput): AccountLabel {
   }
   if (rules.kind !== 'unknown') return { ...rules, by: 'rules', tags };
   if (s?.by === 'ai' && s.kind !== 'unknown') return { kind: s.kind, field: s.field ?? null, words: s.words ?? null, by: 'ai', tags };
-  return { ...rules, by: 'rules', tags, aiTried: s?.by === 'ai' };
+  return { ...rules, by: 'rules', tags, aiTried: s?.by === 'ai', ...(s?.by === 'ai' && s.hint ? { aiHint: { kind: s.hint, words: s.words ?? null } } : {}) };
 }
 
-/** Listed under collections, or labelled a collection by the report's words, a person or an AI suggestion. */
-export const isCollectionLine = (t: LabelInput): boolean => t.item_type === 'collection' || accountLabel(t).kind === 'collection';
+/**
+ * The label things are done with: a person's, else the report's words. An AI suggestion is shown (accountLabel) but
+ * starts nothing (no finding, no pre-chosen notice, no suggested dispute) until a person confirms it.
+ */
+export function confirmedLabel(t: LabelInput): AccountLabel {
+  const l = accountLabel(t);
+  return l.by === 'ai' ? { ...readKind(t), by: 'rules', tags: l.tags } : l;
+}
+
+/**
+ * A collector's (or debt buyer's) account, which is what the collector-notice and medical-collection tools are for:
+ * listed under collections, an account type that names a collector, factoring company or debt buyer (or the Metro 2
+ * types 48 and 0C), or labelled a collection by a person. A creditor's own account that is "in collection" or
+ * "transferred to recovery" is negative, but it is not one: the creditor is not a debt collector.
+ */
+export function isCollectorAccount(t: LabelInput): boolean {
+  const s = storedLabel(t.kind_label);
+  if (s?.by === 'staff' && s.kind === 'collection') return true;
+  const type = clean(t.account_type);
+  return t.item_type === 'collection' || COLLECTOR_TYPE.test(type) || METRO2_COLLECTION_TYPES.has(type.toUpperCase());
+}
+
+/**
+ * Whether words an AI quoted can support the kind it gave (./account-labels.ts checks first that they are whole words of
+ * that field, not negated). A company name can show only a collection. Late needs words of lateness, or late codes in
+ * a history. Good standing (kept only as a hint) needs a status or a history whose words say nothing negative. A
+ * negative kind cannot rest on words that say the opposite ("never late", "paid as agreed").
+ */
+export function wordsSupport(kind: AccountKind, words: string, field: LabelField): boolean {
+  if (field === 'creditor_name' || field === 'original_creditor') return kind === 'collection';
+  const bad = KIND_META[kind].tone === 'bad';
+  const saysGood = GOOD.test(words) || words.replace(NOT_LATE, '') !== words;
+  if (bad && saysGood) return false;
+  if (kind === 'late' || kind === 'was_late') {
+    return LATE_WORDS.test(scrub(words)) || (field === 'payment_history' && historyShowsLate(words)) || ((field === 'account_status' || field === 'payment_status') && LATE_STATUS.test(scrub(words)));
+  }
+  if (kind === 'good' || kind === 'no_negative') {
+    if (field !== 'account_status' && field !== 'payment_status' && field !== 'payment_history') return false;
+    const negative = [BANKRUPTCY, FORECLOSURE, REPOSSESSION, CHARGE_OFF, COLLECTION, SETTLED, NEGATIVE, NOT_PAID].some((re) => re.test(words)) || LATE_STATUS.test(scrub(words));
+    return !negative;
+  }
+  // Each negative kind needs words of its own family, written any way (an abbreviation, a typo the rules miss): "CHRG
+  // OFF" can show a charge-off, "Unrated" can show nothing.
+  return bad && (AI_VOCAB[kind]?.test(words) ?? false);
+}
+
+/** The words each negative kind can rest on in an AI answer: looser than the rules, never empty. */
+const AI_VOCAB: Partial<Record<AccountKind, RegExp>> = {
+  collection: /coll?ect|recover|factor|debt|agency|assign/i,
+  charge_off: /charg|chrg|write|writ|written|loss|bad[\s_]+debt|\bc\/?o\b/i,
+  foreclosure: /forecl|deed/i,
+  repossession: /repo|reposs|surrender/i,
+  bankruptcy: /bankr|chapter|\bbk|discharg|petition/i,
+  settled: /settl|less[\s_]+than|compromis|partial/i,
+  negative: /derog|advers|claim|delinq|default|bad|loss|unpaid|not[\s_]+paid|recovery|attorney|judg|lien|serious/i,
+};
 
 /**
  * One account as several bureaus report it. The account is bad when any bureau reports something negative (that entry
@@ -310,7 +394,8 @@ export const labelOrder = (k: AccountKind): number => (isBadKind(k) ? KIND_META[
 export function labelBasis(l: AccountLabel): string {
   if (l.by === 'staff') return `Labelled by staff${l.carried ? ' on an earlier report of this account' : ''}${l.reported ? `. The report says ${KIND_META[l.reported.kind].label.toLowerCase()}${l.reported.words ? ` (“${l.reported.words}”)` : ''}` : ''}.`;
   const where = l.field === 'section' ? 'Listed under collections' : l.field ? `${LABEL_FIELD_NAME[l.field]}${l.words ? `: “${l.words}”` : ''}` : null;
-  if (l.by === 'ai') return `AI suggestion${l.field === 'creditor_name' || l.field === 'original_creditor' ? ', from the company name' : ''}${where ? `. ${where}` : ''}. Check it.`;
+  if (l.by === 'ai') return `AI suggestion${l.field === 'creditor_name' || l.field === 'original_creditor' ? ', from the company name' : ''}${where ? `. ${where}` : ''}. Nothing is done with it until a person confirms it.`;
+  if (l.kind === 'unknown' && l.aiHint) return `AI reads ${KIND_META[l.aiHint.kind].label.toLowerCase()}${l.aiHint.words ? ` in “${l.aiHint.words}”` : ''}. Only the report’s own words or a person mark an account good: confirm it if the report says so.`;
   if (l.kind === 'unknown') return l.aiTried ? 'AI could not tell either. Choose a label.' : 'The report’s words do not say. Choose a label.';
   return `${where ?? 'From the report'}.`;
 }

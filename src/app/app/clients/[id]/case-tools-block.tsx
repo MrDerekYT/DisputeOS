@@ -4,9 +4,10 @@ import { ChevronDown } from 'lucide-react';
 import { ActionForm, Check, Field, Select, SubmitButton } from '@/components/forms';
 import { Badge, Section, type Tone } from '@/components/ui';
 import type { Ctx } from '@/lib/auth/context';
-import { isCollectionLine } from '@/lib/credit/account-kind';
+import { isCollectorAccount } from '@/lib/credit/account-kind';
 import { AUDIT_NOTE_TEXT, auditAccounts, bankruptcyFallOff } from '@/lib/credit/bankruptcy-audit';
-import { bankruptcyRecordText, loadBankruptcy, loadBankruptcyOnReports, loadCaseLines, loadCollectorNotices, type CaseLine } from '@/lib/credit/case-tools';
+import { bankruptcyRecordText, loadBankruptcy, loadBankruptcyOnReports, loadCaseLines, loadCollectorNotices, noticeIsFor, type CaseLine } from '@/lib/credit/case-tools';
+import { groupAccounts, type AnalysisTradeline } from '@/lib/reports/analysis';
 import { MEDICAL_POLICY_SOURCE, medicalBasis, medicalTests, reportSaysMedical, type MedicalTest } from '@/lib/credit/medical-screen';
 import { AFTER_PERIOD_NOTE } from '@/lib/credit/validation-clock';
 import { businessToday } from '@/lib/letters/service';
@@ -43,22 +44,24 @@ export async function CaseToolsBlock({ ctx, clientId }: { ctx: Ctx; clientId: st
   });
   const canWrite = ctx.can('clients:write');
   const canDispute = ctx.can('disputes:write');
-  // Listed under collections, or labelled one by its words or by a person (src/lib/credit/account-kind.ts).
-  const collections = d.lines.filter((t) => isCollectionLine(t));
+  // A collector's account: listed under collections, or labelled one by a person (src/lib/credit/account-kind.ts). A
+  // creditor's own account "in collection" is negative but has no collector, so it has no validation period here.
+  const collections = d.lines.filter((t) => isCollectorAccount(t));
   const label = (t: { creditor_name: string; account_last4: string | null }) => `${t.creditor_name}${t.account_last4 ? ` ••${t.account_last4}` : ''}`;
-  // One row per collection account, however many bureaus report it (same collector and account number), with no
-  // notice recorded yet for it on this report or an earlier one.
-  const exact = (k: string) => /^[^|]+\|[^|]+$/.test(k);
-  const byAccount = new Map<string, CaseLine[]>();
-  for (const t of collections) { const k = exact(t.match_key) ? t.match_key : t.id; byAccount.set(k, [...(byAccount.get(k) ?? []), t]); }
-  const noticed = (k: string, ls: CaseLine[]) => d.notices.some((n) => (n.tradelineId && ls.some((t) => t.id === n.tradelineId)) || (exact(k) && n.matchKey === k));
-  const toRecord = [...byAccount.entries()].filter(([k, ls]) => !noticed(k, ls)).map(([k, ls]) => ({ key: k, lines: ls, first: ls[0]! }));
+  // One row per collection account however many bureaus report it, matched as the three-bureau comparison matches them
+  // (number, or open date, original creditor and amounts when a report prints no number), leaving out the accounts a
+  // notice was already recorded for, on this report or an earlier one.
+  const byId = new Map(collections.map((t) => [t.id, t]));
+  const accounts = groupAccounts(collections.map((t) => ({ ...t, date_reported: null, user_provided: {} }) as AnalysisTradeline & CaseLine))
+    .map((g) => Object.values(g.byBureau).map((t) => byId.get(t!.id)!).filter(Boolean));
+  const toRecord = accounts.filter((ls) => !d.notices.some((n) => noticeIsFor(n, ls))).map((ls) => ({ key: ls.map((t) => t.id).join('|'), lines: ls, first: ls[0]! }));
   const bk = d.onReports.record;
 
   const open = d.notices.filter((n) => n.period.open);
   const soonest = [...open].sort((a, b) => a.period.endsOn.localeCompare(b.period.endsOn))[0];
   const medical = collections.map((t) => ({ t, basis: medicalBasis(t), tests: medicalTests(t, today) }));
-  const medicalToCheck = medical.filter((m) => m.basis && m.tests.length).length;
+  // A name alone is a suggestion: it is not counted, not ticked, and makes no finding until staff tick it.
+  const medicalToCheck = medical.filter((m) => (m.basis === 'staff' || m.basis === 'report') && m.tests.length).length;
   const audit = d.bankruptcy ? auditAccounts(d.bankruptcy, d.lines) : [];
   const auditToCheck = audit.filter((r) => r.notes.length).length;
   const fallOff = d.bankruptcy ? bankruptcyFallOff(d.bankruptcy) : null;
@@ -68,7 +71,7 @@ export async function CaseToolsBlock({ ctx, clientId }: { ctx: Ctx; clientId: st
       hint={<>What was entered or reported, and what is worth checking. Findings from these appear in the <Link className="link" href={`/app/clients/${clientId}/compare#findings`}>three-bureau comparison</Link>, where a person decides what to do.</>}>
       <ul className="divide-y divide-line/70">
         <Tool title="Collector notices (validation period)" tone={soonest ? (soonest.period.daysLeft <= 7 ? 'warn' : 'info') : 'neutral'}
-          badge={soonest ? `${soonest.period.daysLeft === 0 ? 'Last day today' : `${soonest.period.daysLeft} day${soonest.period.daysLeft === 1 ? '' : 's'} left`}` : d.notices.length ? 'Period ended' : byAccount.size ? `${byAccount.size} collection${byAccount.size === 1 ? '' : 's'} on the reports` : 'None recorded'}>
+          badge={soonest ? `${soonest.period.daysLeft === 0 ? 'Last day today' : `${soonest.period.daysLeft} day${soonest.period.daysLeft === 1 ? '' : 's'} left`}` : d.notices.length ? 'Period ended' : accounts.length ? `${accounts.length} collection${accounts.length === 1 ? '' : 's'} on the reports` : 'None recorded'}>
           <p className="text-muted">
             A separate clock from a credit-report dispute: this is the Fair Debt Collection Practices Act deadline for writing to the <strong className="font-medium text-ink">collector</strong>, not a bureau.
             The validation period generally ends 30 days after the client receives the collector’s notice (12 CFR 1006.34(b)(5)). The notice itself states the end date the collector uses: go by the notice if it differs.
@@ -160,17 +163,17 @@ export async function CaseToolsBlock({ ctx, clientId }: { ctx: Ctx; clientId: st
               {medical.map(({ t, basis, tests }) => (
                 <div key={t.id} className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
                   <input type="hidden" name="listed" value={t.id} />
-                  <Check name="medical" value={t.id} defaultChecked={!!basis}>
+                  <Check name="medical" value={t.id} defaultChecked={basis === 'staff' || basis === 'report'}>
                     <span className="font-medium">{label(t)}</span> <span className="text-muted">· {BUREAU_LABEL[t.bureau]}{t.balance_cents != null ? ` · ${money(t.balance_cents)}` : ''} · this is a medical debt</span>
                   </Check>
                   <span className="flex flex-wrap gap-1.5">
                     {t.medical_flag == null && reportSaysMedical(t) && <Badge tone="info">Report says medical</Badge>}
-                    {t.medical_flag == null && basis === 'name' && <Badge tone="info">Name suggests medical: confirm</Badge>}
-                    {basis && tests.length > 0 && <Badge tone="warn">Worth checking: {tests.map((k) => TEST_LABEL[k]).join(', ')}</Badge>}
+                    {t.medical_flag == null && basis === 'name' && <Badge tone="info">Name suggests medical: tick it if it is</Badge>}
+                    {(basis === 'staff' || basis === 'report') && tests.length > 0 && <Badge tone="warn">Worth checking: {tests.map((k) => TEST_LABEL[k]).join(', ')}</Badge>}
                   </span>
                 </div>
               ))}
-              <p className="hint">Ticked automatically when the report’s account type, remarks or original creditor say medical, or when the collector’s own name does (that one is a suggestion: confirm it). Untick any that are not, tick the ones the client’s records show are medical, and save.</p>
+              <p className="hint">Ticked automatically when the report’s account type, remarks or original creditor say medical. When only the collector’s name suggests it, the account is marked but left for you to tick. Untick any that are not medical, tick the ones the client’s records show are, and save.</p>
               {canWrite && <SubmitButton variant="secondary">Save medical debts</SubmitButton>}
             </ActionForm>
           </Tool>

@@ -19,7 +19,7 @@
  */
 import type { Evidence } from '../reports/analysis';
 import { BUREAU_LABEL, money, type Bureau } from '../util';
-import { isCollectionLine, MEDICAL_WORDS } from './account-kind';
+import { isCollectorAccount, MEDICAL_WORDS } from './account-kind';
 import { addYearsIso } from './reporting-period';
 
 export const MEDICAL_CATEGORY = 'medical_collection';
@@ -32,7 +32,7 @@ export interface MedicalLine {
   balance_cents: number | null; date_of_first_delinquency: string | null; match_key: string;
   /** Staff's own answer to "is this a medical debt?" (true / false), or null when nobody has said. */
   medical_flag: boolean | null;
-  /** For telling a collection from another account (./account-kind.ts isCollectionLine). */
+  /** For telling a collector's account from another (./account-kind.ts isCollectorAccount). */
   payment_history?: string | null;
   kind_label?: unknown;
 }
@@ -41,10 +41,13 @@ export interface MedicalLine {
 export const reportSaysMedical = (t: Pick<MedicalLine, 'account_type' | 'remarks' | 'original_creditor'>): boolean =>
   MEDICAL_WORDS.test(`${t.account_type ?? ''} ${t.remarks ?? ''} ${t.original_creditor ?? ''}`) || (t.account_type ?? '').trim() === '90'; // Metro 2 account type 90: medical debt
 
-/** True when only the collector's own name says so ("VALLEY RADIOLOGY", "MEDICAL DATA SYSTEMS"): a suggestion for staff to confirm. */
+/**
+ * True when only the collector's own name says so ("VALLEY RADIOLOGY", "MEDICAL DATA SYSTEMS"). That is a guess, so it
+ * is shown as a suggestion and starts nothing: no finding is made from it until staff tick the account.
+ */
 export const nameSaysMedical = (t: Pick<MedicalLine, 'creditor_name'>): boolean => MEDICAL_WORDS.test(t.creditor_name);
 
-/** Staff's answer wins; otherwise what the report says; otherwise what the collector's name suggests. */
+/** Staff's answer wins; otherwise what the report says; otherwise what the collector's name suggests (a suggestion only). */
 export function medicalBasis(t: MedicalLine): 'staff' | 'report' | 'name' | null {
   if (t.medical_flag === true) return 'staff';
   if (t.medical_flag === false) return null;
@@ -53,9 +56,8 @@ export function medicalBasis(t: MedicalLine): 'staff' | 'report' | 'name' | null
 }
 
 const BASIS_TEXT = {
-  staff: () => 'Staff marked this collection as a medical debt',
-  report: () => 'The report describes this collection as medical',
-  name: (t: MedicalLine) => `The collector’s name (“${t.creditor_name}”) suggests a medical debt; the report itself does not say so`,
+  staff: 'Staff marked this collection as a medical debt',
+  report: 'The report describes this collection as medical',
 } as const;
 
 export type MedicalTest = 'paid' | 'under_500' | 'under_one_year';
@@ -87,9 +89,10 @@ const TEST_TEXT: Record<MedicalTest, (t: MedicalLine) => string> = {
 export function medicalScreen(lines: MedicalLine[], today: string): MedicalFinding[] {
   const out: MedicalFinding[] = [];
   for (const t of lines) {
-    if (!isCollectionLine(t)) continue;
+    if (!isCollectorAccount(t)) continue;
     const basis = medicalBasis(t);
-    if (!basis) continue;
+    // A name alone is a guess: it is shown on the page for staff to confirm, and nothing is concluded from it here.
+    if (!basis || basis === 'name') continue;
     const tests = medicalTests(t, today);
     if (!tests.length) continue;
     const name = `${t.creditor_name}${t.account_last4 ? ` (ending ${t.account_last4})` : ''}`;
@@ -100,15 +103,14 @@ export function medicalScreen(lines: MedicalLine[], today: string): MedicalFindi
       dedupe_key: `medical:${t.bureau}:${/^[^|]+\|[^|]+$/.test(t.match_key) ? t.match_key : t.id}`,
       category: MEDICAL_CATEGORY, severity: 'review', basis: 'potential_discrepancy',
       title: `${name} on ${bureau}: medical collection worth checking against bureau policy`.slice(0, 200),
-      explanation: `${BASIS_TEXT[basis](t)}, and ${tests.map((k) => TEST_TEXT[k](t)).join(', and ')}. `
+      explanation: `${BASIS_TEXT[basis]}, and ${tests.map((k) => TEST_TEXT[k](t)).join(', and ')}. `
         + 'The three nationwide bureaus have said they generally do not report medical collections that are paid, that had an initial reported balance under $500, or that are less than one year old '
         + `(${MEDICAL_POLICY_SOURCE}). This is the bureaus’ own policy, not a law: a federal rule on medical debt reporting was vacated by a court on July 11, 2025 and is not in effect. `
         + 'Check that the debt is medical, and check the dates and amounts against the client’s records (the policy looks at the initial balance, which may differ from the balance shown). '
         + 'If they hold, the bureau can be asked to review the item. This is a reason to look, not a conclusion that anything is reported wrongly.',
       evidence: [
         basis === 'staff' ? { field: 'Medical debt', value: 'Marked by staff', source: 'record', tradeline_id: t.id }
-          : basis === 'name' ? rep('Collector’s name', t.creditor_name.slice(0, 200))
-            : rep('Described as medical', [t.account_type, t.remarks, t.original_creditor].filter(Boolean).join(' · ').slice(0, 200)),
+          : rep('Described as medical', [t.account_type, t.remarks, t.original_creditor].filter(Boolean).join(' · ').slice(0, 200)),
         ...(t.balance_cents != null ? [rep('Balance', money(t.balance_cents))] : []),
         ...(t.account_status || t.payment_status ? [rep('Status', [t.account_status, t.payment_status].filter(Boolean).join(' / '))] : []),
         ...(t.date_of_first_delinquency ? [rep('Date of first delinquency', t.date_of_first_delinquency)] : []),

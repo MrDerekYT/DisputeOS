@@ -39,8 +39,8 @@ export async function labelAccountsAction(_: ActionState, fd: FormData): Promise
     if (r.ai.status === 'no_provider') return { error: 'AI is not connected, so nothing was asked. Choose these labels yourself.' };
     if (r.ai.status === 'no_credits') return { error: 'No AI credits left, so nothing was asked. Choose these labels yourself.' };
     if (!r.asked) return { ok: 'Every account already has a label.' };
-    if (!r.labelled) return { ok: `AI could not tell for ${r.asked === 1 ? 'this account' : `any of the ${r.asked} accounts`}. Choose ${r.asked === 1 ? 'its label' : 'their labels'} yourself. ${notChargedNote(r.ai)}` };
-    const rest = r.asked - r.labelled;
-    return { ok: `AI labelled ${r.labelled} of ${r.asked} (${r.ai.cost} AI credits). Each shows the words it rests on: check them.${rest ? ` For ${rest} it could not tell; choose ${rest === 1 ? 'that label' : 'those'} yourself.` : ''}` };
+    if (!r.labelled && !r.hinted) return { ok: `AI could not tell for ${r.asked === 1 ? 'this account' : `any of the ${r.asked} account entries`}. Choose ${r.asked === 1 ? 'its label' : 'their labels'} yourself. ${notChargedNote(r.ai)}` };
+    const said = [r.labelled ? `${r.labelled} negative` : '', r.hinted ? `${r.hinted} possibly in good standing` : ''].filter(Boolean).join(' and ');
+    return { ok: `AI suggested ${said} (${r.ai.cost} AI credits). Each shows the words it rests on and does nothing until you confirm it under “Confirm or change”.${r.unknown ? ` For ${r.unknown} it could not tell; choose ${r.unknown === 1 ? 'that label' : 'those'} yourself.` : ''}` };
   });
 }

@@ -16,7 +16,7 @@ import { ocrEnabled } from '@/lib/reports/ocr';
 import { PRODUCT } from '@/lib/product';
 import { FallOffNote } from '@/components/fall-off';
 import { publicRecordFallOff, tradelineFallOff } from '@/lib/credit/reporting-period';
-import { accountLabel, isBadKind, isCollectionLine, labelBasis, labelOrder } from '@/lib/credit/account-kind';
+import { accountLabel, confirmedLabel, isBadKind, isCollectorAccount, labelBasis, labelOrder } from '@/lib/credit/account-kind';
 import { kindLabelSql } from '@/lib/credit/kind-label-sql';
 import { KindBadge } from '@/components/kind-badge';
 
@@ -63,12 +63,14 @@ export default async function ReportReview({ params, searchParams }: { params: P
   const { r, identity, inquiries, records, mark } = data;
   // Every account carries what its words say it is (src/lib/credit/account-kind.ts). Negative ones first, collections
   // at the very top: they are what the client hired us for.
+  // Shown: the label with any AI suggestion. Counted: what the report's words or a person say (confirmedLabel).
   const labels = new Map(data.tradelines.map((t) => [t.id, accountLabel(t)]));
-  const kindOf = (t: TL) => labels.get(t.id)!.kind;
-  const tradelines = [...data.tradelines].sort((a, b) => (isCollectionLine(b) ? 1 : 0) - (isCollectionLine(a) ? 1 : 0) || labelOrder(kindOf(a)) - labelOrder(kindOf(b)) || a.creditor_name.localeCompare(b.creditor_name));
-  const collections = tradelines.filter((t) => isCollectionLine(t));
-  const lates = tradelines.filter((t) => !isCollectionLine(t) && (kindOf(t) === 'late' || kindOf(t) === 'was_late'));
-  const otherBad = tradelines.filter((t) => !isCollectionLine(t) && isBadKind(kindOf(t)) && kindOf(t) !== 'late' && kindOf(t) !== 'was_late');
+  const kindOf = (t: TL) => confirmedLabel(t).kind;
+  const isColl = (t: TL) => isCollectorAccount(t) || kindOf(t) === 'collection';
+  const tradelines = [...data.tradelines].sort((a, b) => (isColl(b) ? 1 : 0) - (isColl(a) ? 1 : 0) || labelOrder(labels.get(a.id)!.kind) - labelOrder(labels.get(b.id)!.kind) || a.creditor_name.localeCompare(b.creditor_name));
+  const collections = tradelines.filter(isColl);
+  const lates = tradelines.filter((t) => !isColl(t) && (kindOf(t) === 'late' || kindOf(t) === 'was_late'));
+  const otherBad = tradelines.filter((t) => !isColl(t) && isBadKind(kindOf(t)) && kindOf(t) !== 'late' && kindOf(t) !== 'was_late');
   const owedInCollections = collections.reduce((sum, t) => sum + (t.balance_cents ?? 0), 0);
   const pending = r.status === 'pending_review';
   const needsConfirm = tradelines.filter((t) => lowConfidenceFields(t).length > 0).length;
@@ -134,7 +136,7 @@ export default async function ReportReview({ params, searchParams }: { params: P
             {tradelines.map((t) => {
               const low = lowConfidenceFields(t);
               const kl = labels.get(t.id)!;
-              const neg = isCollectionLine(t) || isBadKind(kl.kind);
+              const neg = isColl(t) || isBadKind(kl.kind);
               const statuses = [t.item_type === 'collection' ? 'Collection' : 'Account', t.item_type === 'collection' ? t.account_status?.replace(/^collection(?: account)?[:.]?\s*/i, '') || null : t.account_status, t.payment_status, t.original_creditor ? `original creditor ${t.original_creditor}` : null].filter((v, i, all) => !!v && all.findIndex((o) => o?.toLowerCase() === v.toLowerCase()) === i).join(' · ');
               return (
                 <li key={t.id} className={neg ? 'border-l-4 border-bad bg-bad-soft/25 px-5 py-4 sm:px-6' : 'px-5 py-4 sm:px-6'}>

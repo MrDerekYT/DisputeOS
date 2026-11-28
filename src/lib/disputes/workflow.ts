@@ -72,12 +72,14 @@ export const FINDING_TO_CATEGORY: Record<string, string> = {
 };
 
 /**
- * The type of dispute the new dispute form suggests for an account, from its label (src/lib/credit/account-kind.ts).
- * Only accounts that carry something negative get one, and it is a starting point a person changes freely. It is never
- * "not mine" or identity theft: only the client can say that.
+ * The type of dispute the new dispute form suggests for an account, from its confirmed label (the report's words or a
+ * person's: src/lib/credit/account-kind.ts confirmedLabel; an AI suggestion suggests nothing). Only an account that
+ * carries something negative gets one, and it is a starting point a person changes freely. A validation request is
+ * for a collector's account only (`collector`): a creditor's own account in collection gets a status dispute. It is
+ * never "not mine" or identity theft: only the client can say that.
  */
-export function categoryForAccount(kind: AccountKind, itemType: string): string | undefined {
-  if (itemType === 'collection' || kind === 'collection') return 'unverifiable_collection';
+export function categoryForAccount(kind: AccountKind, collector: boolean): string | undefined {
+  if (kind === 'collection') return collector ? 'unverifiable_collection' : 'incorrect_status';
   if (kind === 'bankruptcy') return 'bankruptcy_included';
   if (kind === 'late' || kind === 'was_late') return 'incorrect_payment_history';
   if (kind === 'charge_off' || kind === 'foreclosure' || kind === 'repossession' || kind === 'settled' || kind === 'negative') return 'incorrect_status';

@@ -80,7 +80,7 @@ describe('medical collection screen', () => {
     const card = await tl(report, '3333');
     await expect(asUser(owner.userId, (db) => setMedicalFlags(db, owner, client, [card], [card]))).rejects.toThrow(/does not belong/);
     const med = await tl(report, '1111');
-    await expect(asUser(ownerB.userId, (db) => setMedicalFlags(db, ownerB, client, [med], []))).rejects.toThrow(/does not belong/); // row-level security hides the row
+    await expect(asUser(ownerB.userId, (db) => setMedicalFlags(db, ownerB, client, [med], []))).rejects.toThrow(/Client not found/); // not a client of their organisation
     expect(await keys(client)).toEqual(['medical:experian:medcollect|1111']);
   });
 
@@ -163,7 +163,7 @@ describe('collector notices', () => {
     expect((await asUser(portalUser, (db) => loadCollectorNotices(db, client, '2026-11-19'))).map((n) => n.id)).toEqual([notice]);
     expect(await asUser(ownerB.userId, (db) => loadCollectorNotices(db, client, '2026-11-19'))).toEqual([]);
     await expect(asUser(ownerB.userId, (db) => recordCollectorNotice(db, ownerB, { clientId: client, collectorName: 'X Collections', kind: 'received', date: '2026-11-02' }))).rejects.toThrow(/Client not found/);
-    await expect(asUser(ownerB.userId, (db) => removeCollectorNotice(db, ownerB, client, notice))).rejects.toThrow(/Notice not found/);
+    await expect(asUser(ownerB.userId, (db) => removeCollectorNotice(db, ownerB, client, notice))).rejects.toThrow(/Client not found/); // not a client of their organisation
     await expect(asUser(portalUser, (db) => db.run('delete from public.collector_notices where id = $1', [notice]))).resolves.toBe(0); // a client cannot delete it
   });
 
