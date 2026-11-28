@@ -48,10 +48,11 @@ export async function AccountsBlock({ ctx, clientId }: { ctx: Ctx; clientId: str
   return (
     <Section plain id="accounts" title="Accounts, good and bad"
       hint="Every account on the latest approved reports, labelled from the words each bureau reports. Change any label that is wrong; a label you choose is kept for this account on later reports too. A label is a reading of the report, not a judgement that it is right.">
+      {/* A count is in colour only when there is something to count: "0 negative" is good news, not a warning. */}
       <p className="text-sm">
-        <span className="font-semibold text-bad">{bad.length} negative</span>
+        <span className={bad.length ? 'font-semibold text-bad' : 'font-semibold'}>{bad.length} negative</span>
         {open.length > 0 && <> · <span className="font-semibold">{open.length} not labelled</span></>}
-        {' · '}<span className="font-semibold text-ok">{good.length} with nothing negative</span>
+        {' · '}<span className={good.length ? 'font-semibold text-ok' : 'font-semibold'}>{good.length} with nothing negative</span>
       </p>
 
       {askable.length > 0 && canWrite && (
